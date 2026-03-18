@@ -1,0 +1,53 @@
+theme = "frappe"
+ui_fps = 60
+spectrum_hz = 60
+mpris_poll_ms = 100
+visualize = "bars"
+transparent_background = true
+album_border = false
+kitty_graphics = false
+kitty_cover_scale_percent = 100
+super_smooth_bar = false
+bars_gap = false
+bar_number = "auto"
+bar_channels = "mono"
+bar_channel_reverse = false
+
+lyrics_cover_fetch = false
+lyrics_cover_download = false
+audio_fingerprint = false
+acoustid_api_key = ""
+resume_last_position = false
+default-opening-folder = ""
+# Custom title block for login header. Supports escaped newlines like "Line1\nLine2".
+default_opening_title = ""
+language = "zh"
+page_lyrics = false
+audio_quality = "exhigh"
+show_hints = true
+
+[cache]
+# 缓存根目录 (默认使用系统标准路径)
+# path = "缓存目录"
+
+# 自动清理策略：size (按容量) | age (按时间) | both (同时满足)
+clean_strategy = "both"
+
+# 缓存最大容量 (单位: MB)，超过后按 LRU 删除旧文件
+max_size_mb = 500
+
+# 缓存有效期 (单位: 天)，超过该时间的缓存文件将被清理
+max_age_days = 7
+
+# 启动时是否执行检查
+clean_on_startup = true
+
+keybind_search_box = "Ctrl+S"
+keybind_fullscreen = "Ctrl+F"
+keybind_settings = "T"
+keybind_sidebar = "P"
+keybind_quit = "Q"
+keybind_prev = "Alt+Left"
+keybind_next = "Alt+Right"
+keybind_toggle_play_pause = "Alt+Space"
+keybind_toggle_mode = "Alt+M"

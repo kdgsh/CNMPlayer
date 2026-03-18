@@ -1,0 +1,4668 @@
+mod api;
+mod player;
+
+use crate::data::config::Config;
+use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
+use crate::data::session;
+use crate::data::theme_loader::ThemeLoader;
+use crate::render::cover_renderer::render_cover_ascii;
+use crate::tmplayer::app::state::LyricLine;
+use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
+use crate::ui::theme::Theme;
+use anyhow::{anyhow, Result};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ncm_api::ApiResponse;
+use serde_json::Value;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use unicode_width::UnicodeWidthChar;
+
+use api::ApiState;
+use player::{AudioPlayer, AudioPlayerState};
+
+const MAX_INPUT_LEN: usize = 64;
+const SEARCH_RESULT_PAGE_SIZE: usize = 30;
+const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
+const SETTINGS_ROOT_ITEMS: usize = 8;
+const SETTINGS_PLAYBACK_ITEMS: usize = 8;
+const SETTINGS_KEYBIND_ITEMS: usize = 9;
+const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
+const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
+const STARTUP_LOADING_FILL_SECS: f32 = 0.62;
+const STARTUP_LOADING_BOUNCE_PERIOD_SECS: f32 = 0.56;
+const STARTUP_LOADING_BOUNCE_GROUP: u32 = 3;
+const STARTUP_LOADING_MAX_RETREAT_CHARS: u16 = 12;
+const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
+
+const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
+const DEFAULT_KEYBIND_FULLSCREEN: &str = "Ctrl+F";
+const DEFAULT_KEYBIND_SETTINGS: &str = "T";
+const DEFAULT_KEYBIND_SIDEBAR: &str = "P";
+const DEFAULT_KEYBIND_QUIT: &str = "Q";
+const DEFAULT_KEYBIND_PREV: &str = "Alt+Left";
+const DEFAULT_KEYBIND_NEXT: &str = "Alt+Right";
+const DEFAULT_KEYBIND_TOGGLE_PLAY_PAUSE: &str = "Alt+Space";
+const DEFAULT_KEYBIND_TOGGLE_MODE: &str = "Alt+M";
+
+#[derive(Debug, Clone, Copy)]
+enum KeybindAction {
+    SearchBox,
+    Fullscreen,
+    Settings,
+    Sidebar,
+    Quit,
+    Prev,
+    Next,
+    TogglePlayPause,
+    ToggleMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Login,
+    Loading,
+    Home,
+    Playlist,
+    Author,
+    Search,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    Settings,
+    SettingsPlayback,
+    SettingsKeybinds,
+    SettingsAbout,
+    SearchBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginMethod {
+    Qr,
+    Username,
+    Phone,
+}
+
+pub struct LoginState {
+    pub method: LoginMethod,
+    pub focus_index: usize,
+    pub username: String,
+    pub password: String,
+    pub phone: String,
+    pub captcha: String,
+    pub qr_key: String,
+    pub qr_url: String,
+    pub status_line: String,
+}
+
+impl Default for LoginState {
+    fn default() -> Self {
+        Self {
+            method: LoginMethod::Qr,
+            focus_index: 0,
+            username: String::new(),
+            password: String::new(),
+            phone: String::new(),
+            captcha: String::new(),
+            qr_key: String::new(),
+            qr_url: String::new(),
+            status_line: "按 F1 刷新二维码后扫码登录".to_string(),
+        }
+    }
+}
+
+impl LoginState {
+    pub fn set_method(&mut self, method: LoginMethod) {
+        if self.method != method {
+            self.method = method;
+            self.focus_index = 0;
+        }
+    }
+
+    pub fn field_count(&self) -> usize {
+        match self.method {
+            LoginMethod::Qr => 2,
+            LoginMethod::Username => 3,
+            LoginMethod::Phone => 4,
+        }
+    }
+
+    pub fn next_focus(&mut self) {
+        let total = self.field_count();
+        if total == 0 {
+            return;
+        }
+        self.focus_index = (self.focus_index + 1) % total;
+    }
+
+    pub fn prev_focus(&mut self) {
+        let total = self.field_count();
+        if total == 0 {
+            return;
+        }
+        self.focus_index = if self.focus_index == 0 {
+            total - 1
+        } else {
+            self.focus_index - 1
+        };
+    }
+
+    fn is_input_focused(&self) -> bool {
+        match self.method {
+            LoginMethod::Qr => false,
+            LoginMethod::Username => self.focus_index <= 1,
+            LoginMethod::Phone => self.focus_index <= 1,
+        }
+    }
+
+    fn active_input_mut(&mut self) -> Option<&mut String> {
+        match self.method {
+            LoginMethod::Qr => None,
+            LoginMethod::Username => match self.focus_index {
+                0 => Some(&mut self.username),
+                1 => Some(&mut self.password),
+                _ => None,
+            },
+            LoginMethod::Phone => match self.focus_index {
+                0 => Some(&mut self.phone),
+                1 => Some(&mut self.captcha),
+                _ => None,
+            },
+        }
+    }
+
+    pub fn push_char(&mut self, ch: char) {
+        if ch.is_control() || !self.is_input_focused() {
+            return;
+        }
+        if let Some(value) = self.active_input_mut() {
+            if value.chars().count() < MAX_INPUT_LEN {
+                value.push(ch);
+            }
+        }
+    }
+
+    pub fn pop_char(&mut self) {
+        if !self.is_input_focused() {
+            return;
+        }
+        if let Some(value) = self.active_input_mut() {
+            value.pop();
+        }
+    }
+}
+
+pub struct HomeTile {
+    pub id: Option<String>,
+    pub title: String,
+    pub subtitle: String,
+    pub cover_url: Option<String>,
+    pub cover_bytes: Option<Vec<u8>>,
+    cover_ascii: String,
+    cover_ascii_size: (u16, u16),
+}
+
+impl HomeTile {
+    fn placeholder_daily() -> Self {
+        Self {
+            id: None,
+            title: "每日推荐".to_string(),
+            subtitle: "Daily Mix".to_string(),
+            cover_url: None,
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+        }
+    }
+
+    fn from_recommendation(
+        id: Option<String>,
+        title: String,
+        subtitle: String,
+        cover_url: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            subtitle,
+            cover_url,
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+        }
+    }
+
+    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
+        if width == 0 || height == 0 {
+            return String::new();
+        }
+
+        if self.cover_ascii_size != (width, height) {
+            self.cover_ascii = self
+                .cover_bytes
+                .as_deref()
+                .and_then(|bytes| render_cover_ascii(bytes, width, height))
+                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
+            self.cover_ascii_size = (width, height);
+        }
+
+        self.cover_ascii.clone()
+    }
+}
+
+pub struct HomeState {
+    pub focused_idx: usize,
+    pub columns: usize,
+    pub tiles: Vec<HomeTile>,
+    pub status_line: String,
+}
+
+impl Default for HomeState {
+    fn default() -> Self {
+        Self {
+            focused_idx: 0,
+            columns: 1,
+            tiles: vec![HomeTile::placeholder_daily()],
+            status_line: "方向键/Tab 切换，Enter 进入".to_string(),
+        }
+    }
+}
+
+impl HomeState {
+    pub fn set_columns(&mut self, columns: usize) {
+        self.columns = columns.max(1);
+        if self.tiles.is_empty() {
+            self.focused_idx = 0;
+        } else {
+            self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
+        }
+    }
+
+    pub fn set_tiles(&mut self, mut tiles: Vec<HomeTile>) {
+        if tiles.is_empty() {
+            tiles.push(HomeTile::placeholder_daily());
+        }
+        self.tiles = tiles;
+        self.focused_idx = 0;
+    }
+
+    pub fn focus_next(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        self.focused_idx = (self.focused_idx + 1) % self.tiles.len();
+    }
+
+    pub fn focus_prev(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        self.focused_idx = if self.focused_idx == 0 {
+            self.tiles.len() - 1
+        } else {
+            self.focused_idx - 1
+        };
+    }
+
+    pub fn focus_left(&mut self) {
+        self.focus_prev();
+    }
+
+    pub fn focus_right(&mut self) {
+        self.focus_next();
+    }
+
+    pub fn focus_up(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        let step = self.columns.max(1);
+        if self.focused_idx >= step {
+            self.focused_idx -= step;
+        }
+    }
+
+    pub fn focus_down(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        let step = self.columns.max(1);
+        let target = self.focused_idx + step;
+        if target < self.tiles.len() {
+            self.focused_idx = target;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaylistTrack {
+    pub kind: PlaylistTrackKind,
+    pub id: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub cover_url: Option<String>,
+    pub duration_ms: i64,
+    pub duration: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaylistTrackKind {
+    Song,
+    Album,
+    Ep,
+    Single,
+}
+
+pub struct SearchItem {
+    pub left_label: String,
+    pub right_label: String,
+    pub type_tag: Option<String>,
+    pub song_id: Option<String>,
+    pub album_id: Option<String>,
+    pub playlist_id: Option<String>,
+    pub artist_id: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub cover_url: Option<String>,
+    pub duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchFilter {
+    Single,
+    Album,
+    Author,
+    Playlist,
+}
+
+impl SearchFilter {
+    fn search_type(self) -> i32 {
+        match self {
+            Self::Single => 1,
+            Self::Album => 10,
+            Self::Author => 100,
+            Self::Playlist => 1000,
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Single => "单曲",
+            Self::Album => "专辑",
+            Self::Author => "作者",
+            Self::Playlist => "歌单",
+        }
+    }
+}
+
+pub struct SearchState {
+    pub query: String,
+    pub focused_idx: usize,
+    pub results: Vec<SearchItem>,
+    pub status_line: String,
+    pub filter: SearchFilter,
+    pub next_offset: usize,
+    pub has_more: bool,
+}
+
+impl Default for SearchState {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            focused_idx: 0,
+            results: Vec::new(),
+            status_line: "输入关键词后按 Enter 搜索".to_string(),
+            filter: SearchFilter::Single,
+            next_offset: 0,
+            has_more: false,
+        }
+    }
+}
+
+impl SearchState {
+    pub fn focus_next(&mut self) {
+        if self.results.is_empty() {
+            return;
+        }
+        self.focused_idx = (self.focused_idx + 1) % self.results.len();
+    }
+
+    pub fn focus_prev(&mut self) {
+        if self.results.is_empty() {
+            return;
+        }
+        self.focused_idx = if self.focused_idx == 0 {
+            self.results.len() - 1
+        } else {
+            self.focused_idx - 1
+        };
+    }
+
+    pub fn set_results(&mut self, results: Vec<SearchItem>) {
+        self.results = results;
+        self.focused_idx = 0;
+        self.next_offset = self.results.len();
+        self.has_more = self.results.len() >= SEARCH_RESULT_PAGE_SIZE;
+    }
+
+    pub fn append_results(&mut self, mut results: Vec<SearchItem>) -> usize {
+        let added = results.len();
+        self.results.append(&mut results);
+        self.next_offset = self.results.len();
+        self.has_more = added >= SEARCH_RESULT_PAGE_SIZE;
+        added
+    }
+}
+
+pub struct PlaylistState {
+    pub id: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub description: String,
+    pub cover_url: Option<String>,
+    pub cover_bytes: Option<Vec<u8>>,
+    cover_ascii: String,
+    cover_ascii_size: (u16, u16),
+    pub focused_idx: usize,
+    pub tracks: Vec<PlaylistTrack>,
+}
+
+impl Default for PlaylistState {
+    fn default() -> Self {
+        Self {
+            id: None,
+            title: "歌单详情".to_string(),
+            artist: "网易云音乐".to_string(),
+            description: "从主页进入歌单后加载真实数据。".to_string(),
+            cover_url: None,
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+            focused_idx: 0,
+            tracks: Vec::new(),
+        }
+    }
+}
+
+impl PlaylistState {
+    pub fn focus_next(&mut self) {
+        if self.tracks.is_empty() {
+            return;
+        }
+        self.focused_idx = (self.focused_idx + 1) % self.tracks.len();
+    }
+
+    pub fn focus_prev(&mut self) {
+        if self.tracks.is_empty() {
+            return;
+        }
+        self.focused_idx = if self.focused_idx == 0 {
+            self.tracks.len() - 1
+        } else {
+            self.focused_idx - 1
+        };
+    }
+
+    pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
+        self.cover_bytes = bytes;
+        self.cover_ascii.clear();
+        self.cover_ascii_size = (0, 0);
+    }
+
+    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
+        if width == 0 || height == 0 {
+            return String::new();
+        }
+
+        if self.cover_ascii_size != (width, height) {
+            self.cover_ascii = self
+                .cover_bytes
+                .as_deref()
+                .and_then(|bytes| render_cover_ascii(bytes, width, height))
+                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
+            self.cover_ascii_size = (width, height);
+        }
+
+        self.cover_ascii.clone()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorTileKind {
+    HotSong,
+    Album,
+    Ep,
+    Single,
+}
+
+pub struct AuthorTile {
+    pub kind: AuthorTileKind,
+    pub title: String,
+    pub subtitle: String,
+    pub song_id: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub cover_url: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub cover_bytes: Option<Vec<u8>>,
+    cover_ascii: String,
+    cover_ascii_size: (u16, u16),
+}
+
+impl AuthorTile {
+    fn placeholder() -> Self {
+        Self {
+            kind: AuthorTileKind::Album,
+            title: "暂无内容".to_string(),
+            subtitle: "No content".to_string(),
+            song_id: None,
+            artist: None,
+            album: None,
+            cover_url: None,
+            duration_ms: None,
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+        }
+    }
+
+    fn from_hot_song(track: &PlaylistTrack) -> Self {
+        Self {
+            kind: AuthorTileKind::HotSong,
+            title: track.title.clone(),
+            subtitle: format!("热门歌曲 · {}", track.duration),
+            song_id: track.id.clone(),
+            artist: Some(track.artist.clone()),
+            album: Some(track.album.clone()),
+            cover_url: track.cover_url.clone(),
+            duration_ms: Some(track.duration_ms),
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+        }
+    }
+
+    fn from_album(
+        title: String,
+        subtitle: String,
+        cover_url: Option<String>,
+        kind: AuthorTileKind,
+    ) -> Self {
+        Self {
+            kind,
+            title,
+            subtitle,
+            song_id: None,
+            artist: None,
+            album: None,
+            cover_url,
+            duration_ms: None,
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+        }
+    }
+
+    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
+        if width == 0 || height == 0 {
+            return String::new();
+        }
+
+        if self.cover_ascii_size != (width, height) {
+            self.cover_ascii = self
+                .cover_bytes
+                .as_deref()
+                .and_then(|bytes| render_cover_ascii(bytes, width, height))
+                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
+            self.cover_ascii_size = (width, height);
+        }
+
+        self.cover_ascii.clone()
+    }
+}
+
+pub struct AuthorState {
+    pub id: Option<String>,
+    pub title: String,
+    pub artist: String,
+    pub description: String,
+    pub cover_url: Option<String>,
+    pub cover_bytes: Option<Vec<u8>>,
+    cover_ascii: String,
+    cover_ascii_size: (u16, u16),
+    pub focused_idx: usize,
+    pub columns: usize,
+    pub tiles: Vec<AuthorTile>,
+    pub hot_songs: Vec<PlaylistTrack>,
+    pub albums: Vec<PlaylistTrack>,
+    pub eps: Vec<PlaylistTrack>,
+    pub singles: Vec<PlaylistTrack>,
+}
+
+impl Default for AuthorState {
+    fn default() -> Self {
+        Self {
+            id: None,
+            title: "作者页".to_string(),
+            artist: "网易云音乐".to_string(),
+            description: "从搜索结果进入作者页后加载真实数据。".to_string(),
+            cover_url: None,
+            cover_bytes: None,
+            cover_ascii: String::new(),
+            cover_ascii_size: (0, 0),
+            focused_idx: 0,
+            columns: 1,
+            tiles: vec![AuthorTile::placeholder()],
+            hot_songs: Vec::new(),
+            albums: Vec::new(),
+            eps: Vec::new(),
+            singles: Vec::new(),
+        }
+    }
+}
+
+impl AuthorState {
+    pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
+        self.cover_bytes = bytes;
+        self.cover_ascii.clear();
+        self.cover_ascii_size = (0, 0);
+    }
+
+    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
+        if width == 0 || height == 0 {
+            return String::new();
+        }
+
+        if self.cover_ascii_size != (width, height) {
+            self.cover_ascii = self
+                .cover_bytes
+                .as_deref()
+                .and_then(|bytes| render_cover_ascii(bytes, width, height))
+                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
+            self.cover_ascii_size = (width, height);
+        }
+
+        self.cover_ascii.clone()
+    }
+
+    pub fn set_tiles(&mut self, mut tiles: Vec<AuthorTile>) {
+        if tiles.is_empty() {
+            tiles.push(AuthorTile::placeholder());
+        }
+        self.tiles = tiles;
+        self.focused_idx = 0;
+    }
+
+    pub fn set_columns(&mut self, columns: usize) {
+        self.columns = columns.max(1);
+        if self.tiles.is_empty() {
+            self.focused_idx = 0;
+        } else {
+            self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        self.focused_idx = (self.focused_idx + 1) % self.tiles.len();
+    }
+
+    pub fn focus_prev(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        self.focused_idx = if self.focused_idx == 0 {
+            self.tiles.len() - 1
+        } else {
+            self.focused_idx - 1
+        };
+    }
+
+    pub fn focus_left(&mut self) {
+        self.focus_prev();
+    }
+
+    pub fn focus_right(&mut self) {
+        self.focus_next();
+    }
+
+    pub fn focus_up(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        let step = self.columns.max(1);
+        if self.focused_idx >= step {
+            self.focused_idx -= step;
+        }
+    }
+
+    pub fn focus_down(&mut self) {
+        if self.tiles.is_empty() {
+            return;
+        }
+        let step = self.columns.max(1);
+        let target = self.focused_idx + step;
+        if target < self.tiles.len() {
+            self.focused_idx = target;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackRepeatMode {
+    Sequence,
+    Shuffle,
+    LoopAll,
+    LoopOne,
+}
+
+impl PlaybackRepeatMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Sequence => Self::Shuffle,
+            Self::Shuffle => Self::LoopAll,
+            Self::LoopAll => Self::LoopOne,
+            Self::LoopOne => Self::Sequence,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackRuntimeState {
+    Playing,
+    Paused,
+    Stopped,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaybackTrack {
+    pub song_id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub duration_ms: i64,
+    pub cover_url: Option<String>,
+    pub cover: Option<Vec<u8>>,
+    pub lyrics: Option<Vec<LyricLine>>,
+}
+
+impl PlaybackTrack {
+    fn from_playlist_track(track: &PlaylistTrack) -> Option<Self> {
+        if track.kind != PlaylistTrackKind::Song {
+            return None;
+        }
+
+        let song_id = track.id.as_ref()?.trim().to_string();
+        if song_id.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            song_id,
+            title: track.title.clone(),
+            artist: track.artist.clone(),
+            album: track.album.clone(),
+            duration_ms: track.duration_ms,
+            cover_url: track.cover_url.clone(),
+            cover: None,
+            lyrics: None,
+        })
+    }
+
+    fn from_search_item(item: &SearchItem) -> Option<Self> {
+        let song_id = item.song_id.as_ref()?.trim().to_string();
+        if song_id.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            song_id,
+            title: item.title.clone().unwrap_or_else(|| item.left_label.clone()),
+            artist: item
+                .artist
+                .clone()
+                .unwrap_or_else(|| "Unknown Artist".to_string()),
+            album: item
+                .album
+                .clone()
+                .unwrap_or_else(|| "Unknown Album".to_string()),
+            duration_ms: item.duration_ms.unwrap_or_default(),
+            cover_url: item.cover_url.clone(),
+            cover: None,
+            lyrics: None,
+        })
+    }
+
+    fn from_author_tile(item: &AuthorTile) -> Option<Self> {
+        let song_id = item.song_id.as_ref()?.trim().to_string();
+        if song_id.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            song_id,
+            title: item.title.clone(),
+            artist: item
+                .artist
+                .clone()
+                .unwrap_or_else(|| "Unknown Artist".to_string()),
+            album: item
+                .album
+                .clone()
+                .unwrap_or_else(|| "Unknown Album".to_string()),
+            duration_ms: item.duration_ms.unwrap_or_default(),
+            cover_url: item.cover_url.clone(),
+            cover: None,
+            lyrics: None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HitRect {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl HitRect {
+    pub fn contains(self, col: u16, row: u16) -> bool {
+        self.width > 0
+            && self.height > 0
+            && col >= self.x
+            && col < self.x.saturating_add(self.width)
+            && row >= self.y
+            && row < self.y.saturating_add(self.height)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlayerBarHitTargets {
+    pub prev: Option<HitRect>,
+    pub play_pause: Option<HitRect>,
+    pub next: Option<HitRect>,
+    pub progress: Option<HitRect>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FullscreenPlaybackSnapshot {
+    pub queue: Vec<PlaybackTrack>,
+    pub current_index: Option<usize>,
+    pub now_playing: Option<PlaybackTrack>,
+    pub state: PlaybackRuntimeState,
+    pub repeat_mode: PlaybackRepeatMode,
+    pub position: Duration,
+}
+
+pub struct App {
+    pub config: Config,
+    pub theme: Theme,
+    pub page: Page,
+    pub overlay: Option<Overlay>,
+    pub login: LoginState,
+    pub home: HomeState,
+    pub playlist: PlaylistState,
+    pub author: AuthorState,
+    pub search: SearchState,
+    pub now_playing: Option<PlaybackTrack>,
+    pub playback_queue: Vec<PlaybackTrack>,
+    pub playback_index: Option<usize>,
+    pub playback_repeat_mode: PlaybackRepeatMode,
+    pub playback_state: PlaybackRuntimeState,
+    pub startup_loading_progress: f32,
+    pub player_bar_hits: PlayerBarHitTargets,
+    pub home_tile_hits: Vec<(HitRect, usize)>,
+    pub playlist_track_hits: Vec<(HitRect, usize)>,
+    pub author_tile_hits: Vec<(HitRect, usize)>,
+    pub search_item_hits: Vec<(HitRect, usize)>,
+    pub search_box_input: String,
+    pub search_box_cursor: usize,
+    pub search_box_view_start: usize,
+    pub search_box_hit: Option<HitRect>,
+    pub search_box_anim_height: u16,
+    pub settings_selected: usize,
+    pub settings_playback_selected: usize,
+    pub settings_keybind_selected: usize,
+    pub settings_keybind_rebinding: Option<usize>,
+    pub session_cookie: Option<String>,
+    pub should_quit: bool,
+    pub launch_fullscreen_requested: bool,
+    pub vip_audio_unlocked: bool,
+    search_return_page: Page,
+    playlist_return_page: Page,
+    qr_last_poll_at: Option<Instant>,
+    startup_loading_started_at: Option<Instant>,
+    startup_loading_complete_requested: bool,
+    last_content_click: Option<(Instant, Page, usize)>,
+    main_cava: Option<CavaRunner>,
+    main_cava_bars: [f32; 20],
+    main_cava_last_tick: Instant,
+    api: ApiState,
+    audio_player: AudioPlayer,
+}
+
+impl App {
+    pub fn new(config: Config, theme: Theme) -> Result<Self> {
+        let saved_cookie = session::load_cookie().ok().flatten();
+        let audio_player = AudioPlayer::new(&config);
+
+        let mut app = Self {
+            config,
+            theme,
+            page: Page::Login,
+            overlay: None,
+            login: LoginState::default(),
+            home: HomeState::default(),
+            playlist: PlaylistState::default(),
+            author: AuthorState::default(),
+            search: SearchState::default(),
+            now_playing: None,
+            playback_queue: Vec::new(),
+            playback_index: None,
+            playback_repeat_mode: PlaybackRepeatMode::Sequence,
+            playback_state: PlaybackRuntimeState::Stopped,
+            startup_loading_progress: 0.0,
+            player_bar_hits: PlayerBarHitTargets::default(),
+            home_tile_hits: Vec::new(),
+            playlist_track_hits: Vec::new(),
+            author_tile_hits: Vec::new(),
+            search_item_hits: Vec::new(),
+            search_box_input: String::new(),
+            search_box_cursor: 0,
+            search_box_view_start: 0,
+            search_box_hit: None,
+            search_box_anim_height: 0,
+            settings_selected: 0,
+            settings_playback_selected: 0,
+            settings_keybind_selected: 0,
+            settings_keybind_rebinding: None,
+            session_cookie: None,
+            should_quit: false,
+            launch_fullscreen_requested: false,
+            vip_audio_unlocked: false,
+            search_return_page: Page::Home,
+            playlist_return_page: Page::Home,
+            qr_last_poll_at: None,
+            startup_loading_started_at: None,
+            startup_loading_complete_requested: false,
+            last_content_click: None,
+            main_cava: None,
+            main_cava_bars: [0.0; 20],
+            main_cava_last_tick: Instant::now(),
+            api: ApiState::new(saved_cookie.clone())?,
+            audio_player,
+        };
+
+        app.ensure_main_cava();
+
+        if let Some(cookie) = saved_cookie {
+            match app.api.validate_cookie(&cookie) {
+                Ok(true) => {
+                    app.session_cookie = app.api.session_cookie().map(|value| value.to_string());
+                    app.refresh_vip_audio_access();
+                    app.home.status_line = "已恢复上次登录，正在加载推荐歌单".to_string();
+                    app.begin_startup_loading();
+                    if let Err(err) = app.load_home_recommendations() {
+                        app.home.status_line = format!("已恢复登录，但推荐加载失败: {}", err);
+                    }
+                    app.finish_startup_loading();
+                    return Ok(app);
+                }
+                Ok(false) => {
+                    let _ = session::clear_cookie();
+                }
+                Err(_) => {}
+            }
+        }
+
+        app.refresh_qr_login();
+        Ok(app)
+    }
+
+    pub fn tick(&mut self) {
+        self.tick_audio();
+        self.tick_main_cava();
+        self.tick_search_box_animation();
+        self.tick_startup_loading();
+
+        if self.page == Page::Login && self.login.method == LoginMethod::Qr {
+            if self.login.qr_key.trim().is_empty() {
+                return;
+            }
+
+            let now = Instant::now();
+            if let Some(last) = self.qr_last_poll_at {
+                if now.duration_since(last) < Duration::from_millis(1400) {
+                    return;
+                }
+            }
+
+            self.qr_last_poll_at = Some(now);
+            self.check_qr_status_and_login();
+        }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        {
+            self.should_quit = true;
+            return;
+        }
+
+        if self.page != Page::Login
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('k') | KeyCode::Char('K'))
+            && !matches!(self.overlay, Some(Overlay::SettingsKeybinds))
+        {
+            self.open_keybind_settings();
+            return;
+        }
+
+        if let Some(overlay) = self.overlay {
+            self.handle_overlay_key(overlay, key);
+            return;
+        }
+
+        if self.page == Page::Loading {
+            return;
+        }
+
+        if self.page != Page::Login && self.try_handle_configured_hotkey(key) {
+            return;
+        }
+
+        match self.page {
+            Page::Login => self.handle_login_key(key),
+            Page::Loading => {},
+            Page::Home => self.handle_home_key(key),
+            Page::Playlist => self.handle_playlist_key(key),
+            Page::Author => self.handle_author_key(key),
+            Page::Search => self.handle_search_key(key),
+        }
+    }
+
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        if self.page == Page::Login || self.page == Page::Loading {
+            return;
+        }
+
+        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            return;
+        }
+
+        let col = mouse.column;
+        let row = mouse.row;
+
+        if matches!(self.overlay, Some(Overlay::SearchBox)) {
+            self.handle_search_box_click(col, row);
+            return;
+        }
+
+        if self.overlay.is_some() {
+            return;
+        }
+
+        if self.handle_content_click(col, row) {
+            return;
+        }
+
+        if let Some(rect) = self.player_bar_hits.prev {
+            if rect.contains(col, row) {
+                self.play_previous_hotkey();
+                return;
+            }
+        }
+        if let Some(rect) = self.player_bar_hits.play_pause {
+            if rect.contains(col, row) {
+                self.toggle_play_pause_hotkey();
+                return;
+            }
+        }
+        if let Some(rect) = self.player_bar_hits.next {
+            if rect.contains(col, row) {
+                self.play_next_hotkey();
+                return;
+            }
+        }
+        if let Some(rect) = self.player_bar_hits.progress {
+            if rect.contains(col, row) {
+                let relative_x = col.saturating_sub(rect.x) as f32;
+                let ratio = if rect.width <= 1 {
+                    0.0
+                } else {
+                    (relative_x / (rect.width - 1) as f32).clamp(0.0, 1.0)
+                };
+                self.seek_to_ratio(ratio);
+            }
+        }
+    }
+
+    pub fn clear_player_bar_hits(&mut self) {
+        self.player_bar_hits = PlayerBarHitTargets::default();
+    }
+
+    pub fn set_player_bar_hits(&mut self, hits: PlayerBarHitTargets) {
+        self.player_bar_hits = hits;
+    }
+
+    pub fn clear_content_hits(&mut self) {
+        self.home_tile_hits.clear();
+        self.playlist_track_hits.clear();
+        self.author_tile_hits.clear();
+        self.search_item_hits.clear();
+    }
+
+    pub fn push_home_tile_hit(&mut self, rect: HitRect, index: usize) {
+        self.home_tile_hits.push((rect, index));
+    }
+
+    pub fn push_playlist_track_hit(&mut self, rect: HitRect, index: usize) {
+        self.playlist_track_hits.push((rect, index));
+    }
+
+    pub fn push_author_tile_hit(&mut self, rect: HitRect, index: usize) {
+        self.author_tile_hits.push((rect, index));
+    }
+
+    pub fn push_search_item_hit(&mut self, rect: HitRect, index: usize) {
+        self.search_item_hits.push((rect, index));
+    }
+
+    pub fn playback_position(&self) -> Duration {
+        self.audio_player.position()
+    }
+
+    pub fn playback_duration(&self) -> Duration {
+        if let Some(duration) = self.audio_player.duration() {
+            return duration;
+        }
+
+        if let Some(track) = self.now_playing.as_ref() {
+            return Duration::from_millis(track.duration_ms.max(0) as u64);
+        }
+
+        Duration::from_secs(0)
+    }
+
+    pub fn now_playing_artist_text(&self) -> String {
+        self.now_playing
+            .as_ref()
+            .map(|track| track.artist.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn main_spectrum_braille(&self) -> String {
+        let mut out = String::with_capacity(10);
+        for i in 0..10 {
+            let left = self.main_cava_bars[i * 2].clamp(0.0, 1.0);
+            let right = self.main_cava_bars[i * 2 + 1].clamp(0.0, 1.0);
+            let left_h = (left * 4.0).round() as u8;
+            let right_h = (right * 4.0).round() as u8;
+            out.push(braille_from_two_bars(left_h.min(4), right_h.min(4)));
+        }
+        out
+    }
+
+    fn ensure_main_cava(&mut self) {
+        if self.main_cava.is_some() {
+            return;
+        }
+
+        let cfg = CavaConfig {
+            framerate_hz: self.config.spectrum_hz.max(20),
+            bars: self.main_cava_bars.len(),
+            channels: CavaChannels::Mono,
+            reverse: false,
+        };
+
+        self.main_cava = CavaRunner::start(cfg).ok();
+    }
+
+    fn tick_main_cava(&mut self) {
+        let now = Instant::now();
+        let interval = Duration::from_millis((1000 / self.config.spectrum_hz.max(1)) as u64);
+        if now.duration_since(self.main_cava_last_tick) < interval {
+            return;
+        }
+        self.main_cava_last_tick = now;
+
+        if self.main_cava.is_none() {
+            self.ensure_main_cava();
+        }
+
+        let Some(cava) = self.main_cava.as_ref() else {
+            self.main_cava_bars.fill(0.0);
+            return;
+        };
+
+        let bars = cava.latest_bars();
+        self.main_cava_bars.fill(0.0);
+        for (idx, value) in bars.iter().copied().take(self.main_cava_bars.len()).enumerate() {
+            self.main_cava_bars[idx] = value.clamp(0.0, 1.0);
+        }
+    }
+
+    fn seek_to_ratio(&mut self, ratio: f32) {
+        if self.now_playing.is_none() {
+            return;
+        }
+
+        let fallback_total = self
+            .now_playing
+            .as_ref()
+            .map(|track| Duration::from_millis(track.duration_ms.max(0) as u64));
+        let _ = self.audio_player.seek_to_ratio(ratio, fallback_total);
+        self.playback_state = map_audio_state(self.audio_player.state());
+    }
+
+    pub fn fullscreen_tick_playback(&mut self) {
+        self.tick_audio();
+    }
+
+    pub fn fullscreen_playback_snapshot(&self) -> FullscreenPlaybackSnapshot {
+        FullscreenPlaybackSnapshot {
+            queue: self.playback_queue.clone(),
+            current_index: self.playback_index,
+            now_playing: self.now_playing.clone(),
+            state: self.playback_state,
+            repeat_mode: self.playback_repeat_mode,
+            position: self.audio_player.position(),
+        }
+    }
+
+    pub fn fullscreen_toggle_play_pause(&mut self) {
+        self.toggle_play_pause_hotkey();
+    }
+
+    pub fn fullscreen_play_previous(&mut self) {
+        self.play_previous_hotkey();
+    }
+
+    pub fn fullscreen_play_next(&mut self) {
+        self.play_next_hotkey();
+    }
+
+    pub fn fullscreen_play_queue_index(&mut self, index: usize) {
+        if index < self.playback_queue.len() {
+            self.play_queue_index(index, false);
+        }
+    }
+
+    pub fn fullscreen_seek_to_ratio(&mut self, ratio: f32) {
+        self.seek_to_ratio(ratio);
+    }
+
+    fn handle_overlay_key(&mut self, overlay: Overlay, key: KeyEvent) {
+        match overlay {
+            Overlay::Settings => self.handle_settings_root_key(key),
+            Overlay::SettingsPlayback => self.handle_settings_playback_key(key),
+            Overlay::SettingsKeybinds => self.handle_settings_keybinds_key(key),
+            Overlay::SettingsAbout => self.handle_settings_about_key(key),
+            Overlay::SearchBox => self.handle_search_box_key(key),
+        }
+    }
+
+    fn try_handle_configured_hotkey(&mut self, key: KeyEvent) -> bool {
+        let Some(action) = self.keybind_action_from_event(key) else {
+            return false;
+        };
+        self.trigger_keybind_action(action);
+        true
+    }
+
+    fn trigger_keybind_action(&mut self, action: KeybindAction) {
+        match action {
+            KeybindAction::SearchBox => self.open_search_box(),
+            KeybindAction::Fullscreen => {
+                self.launch_fullscreen_requested = true;
+            }
+            KeybindAction::Settings => self.open_settings(),
+            KeybindAction::Sidebar => {}
+            KeybindAction::Quit => {
+                self.should_quit = true;
+            }
+            KeybindAction::Prev => self.play_previous_hotkey(),
+            KeybindAction::Next => self.play_next_hotkey(),
+            KeybindAction::TogglePlayPause => self.toggle_play_pause_hotkey(),
+            KeybindAction::ToggleMode => self.cycle_repeat_mode_hotkey(),
+        }
+    }
+
+    fn cycle_sidebar_page(&mut self) {
+        self.page = match self.page {
+            Page::Home => Page::Playlist,
+            Page::Playlist => Page::Search,
+            Page::Search => Page::Home,
+            Page::Author => Page::Home,
+            other => other,
+        };
+    }
+
+    fn keybind_action_from_event(&self, key: KeyEvent) -> Option<KeybindAction> {
+        let actions = [
+            KeybindAction::SearchBox,
+            KeybindAction::Fullscreen,
+            KeybindAction::Settings,
+            KeybindAction::Sidebar,
+            KeybindAction::Quit,
+            KeybindAction::Prev,
+            KeybindAction::Next,
+            KeybindAction::TogglePlayPause,
+            KeybindAction::ToggleMode,
+        ];
+
+        for action in actions {
+            if keybind_matches(self.keybind_value_for_action(action), key) {
+                return Some(action);
+            }
+        }
+
+        None
+    }
+
+    fn keybind_value_for_action(&self, action: KeybindAction) -> &str {
+        match action {
+            KeybindAction::SearchBox => &self.config.keybind_search_box,
+            KeybindAction::Fullscreen => &self.config.keybind_fullscreen,
+            KeybindAction::Settings => &self.config.keybind_settings,
+            KeybindAction::Sidebar => &self.config.keybind_sidebar,
+            KeybindAction::Quit => &self.config.keybind_quit,
+            KeybindAction::Prev => &self.config.keybind_prev,
+            KeybindAction::Next => &self.config.keybind_next,
+            KeybindAction::TogglePlayPause => &self.config.keybind_toggle_play_pause,
+            KeybindAction::ToggleMode => &self.config.keybind_toggle_mode,
+        }
+    }
+
+    fn keybind_value_mut_for_index(&mut self, index: usize) -> Option<&mut String> {
+        match index {
+            0 => Some(&mut self.config.keybind_search_box),
+            1 => Some(&mut self.config.keybind_fullscreen),
+            2 => Some(&mut self.config.keybind_settings),
+            3 => Some(&mut self.config.keybind_sidebar),
+            4 => Some(&mut self.config.keybind_quit),
+            5 => Some(&mut self.config.keybind_prev),
+            6 => Some(&mut self.config.keybind_next),
+            7 => Some(&mut self.config.keybind_toggle_play_pause),
+            8 => Some(&mut self.config.keybind_toggle_mode),
+            _ => None,
+        }
+    }
+
+    fn keybind_value_for_index(&self, index: usize) -> Option<&str> {
+        match index {
+            0 => Some(self.config.keybind_search_box.as_str()),
+            1 => Some(self.config.keybind_fullscreen.as_str()),
+            2 => Some(self.config.keybind_settings.as_str()),
+            3 => Some(self.config.keybind_sidebar.as_str()),
+            4 => Some(self.config.keybind_quit.as_str()),
+            5 => Some(self.config.keybind_prev.as_str()),
+            6 => Some(self.config.keybind_next.as_str()),
+            7 => Some(self.config.keybind_toggle_play_pause.as_str()),
+            8 => Some(self.config.keybind_toggle_mode.as_str()),
+            _ => None,
+        }
+    }
+
+    fn find_keybind_conflict(&self, current_index: usize, binding: &str) -> Option<usize> {
+        let normalized = normalize_keybind_text(binding)?;
+        for other_index in 0..SETTINGS_KEYBIND_ITEMS {
+            if other_index == current_index {
+                continue;
+            }
+            let Some(other_binding) = self.keybind_value_for_index(other_index) else {
+                continue;
+            };
+            let Some(other_normalized) = normalize_keybind_text(other_binding) else {
+                continue;
+            };
+            if other_normalized.eq_ignore_ascii_case(normalized.as_str()) {
+                return Some(other_index);
+            }
+        }
+        None
+    }
+
+    fn keybind_name_for_index(&self, index: usize) -> &'static str {
+        match index {
+            0 => self.lang_text("搜索框", "Search Box"),
+            1 => self.lang_text("全屏播放页", "Fullscreen"),
+            2 => self.lang_text("设置弹窗", "Settings Modal"),
+            3 => self.lang_text("播放页侧边栏", "Playback Sidebar"),
+            4 => self.lang_text("退出应用", "Quit"),
+            5 => self.lang_text("上一首", "Previous"),
+            6 => self.lang_text("下一首", "Next"),
+            7 => self.lang_text("播放/暂停", "Play/Pause"),
+            8 => self.lang_text("模式切换", "Switch Mode"),
+            _ => self.lang_text("未知", "Unknown"),
+        }
+    }
+
+    fn reset_keybinds_to_default(&mut self) {
+        self.config.keybind_search_box = DEFAULT_KEYBIND_SEARCH_BOX.to_string();
+        self.config.keybind_fullscreen = DEFAULT_KEYBIND_FULLSCREEN.to_string();
+        self.config.keybind_settings = DEFAULT_KEYBIND_SETTINGS.to_string();
+        self.config.keybind_sidebar = DEFAULT_KEYBIND_SIDEBAR.to_string();
+        self.config.keybind_quit = DEFAULT_KEYBIND_QUIT.to_string();
+        self.config.keybind_prev = DEFAULT_KEYBIND_PREV.to_string();
+        self.config.keybind_next = DEFAULT_KEYBIND_NEXT.to_string();
+        self.config.keybind_toggle_play_pause = DEFAULT_KEYBIND_TOGGLE_PLAY_PAUSE.to_string();
+        self.config.keybind_toggle_mode = DEFAULT_KEYBIND_TOGGLE_MODE.to_string();
+    }
+
+    pub fn keybind_label_for_index(&self, index: usize) -> String {
+        let value = self.keybind_value_for_action(match index {
+            0 => KeybindAction::SearchBox,
+            1 => KeybindAction::Fullscreen,
+            2 => KeybindAction::Settings,
+            3 => KeybindAction::Sidebar,
+            4 => KeybindAction::Quit,
+            5 => KeybindAction::Prev,
+            6 => KeybindAction::Next,
+            7 => KeybindAction::TogglePlayPause,
+            8 => KeybindAction::ToggleMode,
+            _ => KeybindAction::SearchBox,
+        });
+        format!("{}: {}", self.keybind_name_for_index(index), value)
+    }
+
+    fn toggle_play_pause_hotkey(&mut self) {
+        if self.now_playing.is_none() {
+            self.set_runtime_status(self.lang_text(
+                "当前没有可控制的播放",
+                "No controllable playback right now",
+            ));
+            return;
+        }
+
+        if self.playback_state == PlaybackRuntimeState::Stopped {
+            if let Some(index) = self.playback_index {
+                self.play_queue_index(index, false);
+                return;
+            }
+        }
+
+        self.audio_player.toggle_play_pause();
+        self.playback_state = map_audio_state(self.audio_player.state());
+    }
+
+    fn play_previous_hotkey(&mut self) {
+        if self.playback_queue.is_empty() {
+            self.set_runtime_status(self.lang_text("当前播放队列为空", "Playback queue is empty"));
+            return;
+        }
+
+        let current = self.playback_index.unwrap_or(0).min(self.playback_queue.len() - 1);
+        let target = match self.playback_repeat_mode {
+            PlaybackRepeatMode::Sequence => current.checked_sub(1),
+            PlaybackRepeatMode::LoopAll => Some((current + self.playback_queue.len() - 1) % self.playback_queue.len()),
+            PlaybackRepeatMode::LoopOne => Some(current),
+            PlaybackRepeatMode::Shuffle => Some(pick_shuffle_index(self.playback_queue.len(), current)),
+        };
+
+        if let Some(index) = target {
+            self.play_queue_index(index, true);
+        }
+    }
+
+    fn play_next_hotkey(&mut self) {
+        if self.playback_queue.is_empty() {
+            self.set_runtime_status(self.lang_text("当前播放队列为空", "Playback queue is empty"));
+            return;
+        }
+
+        let current = self.playback_index.unwrap_or(0).min(self.playback_queue.len() - 1);
+        let target = match self.playback_repeat_mode {
+            PlaybackRepeatMode::Sequence => {
+                if current + 1 < self.playback_queue.len() {
+                    Some(current + 1)
+                } else {
+                    None
+                }
+            }
+            PlaybackRepeatMode::LoopAll => Some((current + 1) % self.playback_queue.len()),
+            PlaybackRepeatMode::LoopOne => Some(current),
+            PlaybackRepeatMode::Shuffle => Some(pick_shuffle_index(self.playback_queue.len(), current)),
+        };
+
+        if let Some(index) = target {
+            self.play_queue_index(index, true);
+        }
+    }
+
+    fn cycle_repeat_mode_hotkey(&mut self) {
+        self.playback_repeat_mode = self.playback_repeat_mode.next();
+        self.set_runtime_status(format!(
+            "{}: {}",
+            self.lang_text("播放模式", "Play Mode"),
+            match self.playback_repeat_mode {
+                PlaybackRepeatMode::Sequence => self.lang_text("顺序播放", "Sequence"),
+                PlaybackRepeatMode::Shuffle => self.lang_text("随机播放", "Shuffle"),
+                PlaybackRepeatMode::LoopAll => self.lang_text("列表循环", "Loop All"),
+                PlaybackRepeatMode::LoopOne => self.lang_text("单曲循环", "Loop One"),
+            }
+        ));
+    }
+
+    fn tick_audio(&mut self) {
+        let runtime = map_audio_state(self.audio_player.state());
+
+        if self.playback_state == PlaybackRuntimeState::Playing
+            && runtime == PlaybackRuntimeState::Stopped
+        {
+            self.play_next_after_finish();
+            return;
+        }
+
+        self.playback_state = runtime;
+    }
+
+    fn play_next_after_finish(&mut self) {
+        if self.playback_queue.is_empty() {
+            self.playback_state = PlaybackRuntimeState::Stopped;
+            return;
+        }
+
+        let current = self
+            .playback_index
+            .unwrap_or(0)
+            .min(self.playback_queue.len() - 1);
+
+        let target = match self.playback_repeat_mode {
+            PlaybackRepeatMode::Sequence => {
+                if current + 1 < self.playback_queue.len() {
+                    Some(current + 1)
+                } else {
+                    None
+                }
+            }
+            PlaybackRepeatMode::LoopAll => Some((current + 1) % self.playback_queue.len()),
+            PlaybackRepeatMode::LoopOne => Some(current),
+            PlaybackRepeatMode::Shuffle => Some(pick_shuffle_index(self.playback_queue.len(), current)),
+        };
+
+        if let Some(index) = target {
+            self.play_queue_index(index, false);
+        } else {
+            self.playback_state = PlaybackRuntimeState::Stopped;
+            self.set_runtime_status(self.lang_text("播放结束", "Playback finished"));
+        }
+    }
+
+    fn play_queue_index(&mut self, index: usize, announce: bool) {
+        let Some(track) = self.playback_queue.get(index).cloned() else {
+            return;
+        };
+
+        match self.audio_player.play_song(
+            &mut self.api,
+            &track.song_id,
+            self.config.audio_quality.as_api_level(),
+        ) {
+            Ok(()) => {
+                let mut enriched = track.clone();
+                self.enrich_track_metadata(&mut enriched);
+                self.now_playing = Some(enriched.clone());
+                self.playback_index = Some(index);
+                self.playback_state = PlaybackRuntimeState::Playing;
+                if announce {
+                    self.set_runtime_status(format!(
+                        "{}: {} - {}",
+                        self.lang_text("正在播放", "Now Playing"),
+                        enriched.title,
+                        enriched.artist
+                    ));
+                }
+            }
+            Err(err) => {
+                self.playback_state = PlaybackRuntimeState::Stopped;
+                self.set_runtime_status(format!("{}: {}", self.lang_text("播放失败", "Playback failed"), err));
+            }
+        }
+    }
+
+    fn enrich_track_metadata(&mut self, track: &mut PlaybackTrack) {
+        if track.cover.is_none() {
+            if let Some(url) = track.cover_url.as_deref() {
+                if let Ok(bytes) = self.api.fetch_cover_bytes(url) {
+                    if !bytes.is_empty() {
+                        track.cover = Some(bytes);
+                    }
+                }
+            }
+        }
+
+        if track.cover.is_none() {
+            if let Ok(detail) = self.api.song_detail(&track.song_id) {
+                if let Some(song) = detail
+                    .body
+                    .get("songs")
+                    .and_then(|value| value.as_array())
+                    .and_then(|items| items.first())
+                {
+                    if let Some(cover_url) = song.pointer("/al/picUrl").and_then(|value| value.as_str()) {
+                        if let Ok(bytes) = self.api.fetch_cover_bytes(cover_url) {
+                            if !bytes.is_empty() {
+                                track.cover = Some(bytes);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if track.lyrics.is_none() {
+            if let Ok(lyric) = self.api.lyric(&track.song_id) {
+                if let Some(raw_lrc) = lyric.body.pointer("/lrc/lyric").and_then(|value| value.as_str()) {
+                    track.lyrics = crate::tmplayer::playback::metadata::parse_lrc(raw_lrc)
+                        .or_else(|| crate::tmplayer::playback::metadata::parse_plain_lyrics(raw_lrc));
+                }
+            }
+        }
+    }
+
+    fn replace_queue_and_play(&mut self, queue: Vec<PlaybackTrack>, index: usize) {
+        if queue.is_empty() {
+            self.set_runtime_status(self.lang_text(
+                "当前页面没有可播放歌曲",
+                "No playable songs on this page",
+            ));
+            return;
+        }
+
+        self.playback_queue = queue;
+        let target = index.min(self.playback_queue.len() - 1);
+        self.play_queue_index(target, true);
+    }
+
+    fn build_queue_from_playlist(&self) -> (Vec<PlaybackTrack>, usize) {
+        let focused = self.playlist.focused_idx;
+        let mut queue = Vec::new();
+        let mut mapped_focus = None;
+
+        for (idx, track) in self.playlist.tracks.iter().enumerate() {
+            if let Some(item) = PlaybackTrack::from_playlist_track(track) {
+                if idx == focused {
+                    mapped_focus = Some(queue.len());
+                }
+                queue.push(item);
+            }
+        }
+
+        let target = mapped_focus.unwrap_or(0);
+        (queue, target)
+    }
+
+    fn build_queue_from_search(&self) -> (Vec<PlaybackTrack>, usize) {
+        let focused = self.search.focused_idx;
+        let mut queue = Vec::new();
+        let mut mapped_focus = None;
+
+        for (idx, item) in self.search.results.iter().enumerate() {
+            if let Some(track) = PlaybackTrack::from_search_item(item) {
+                if idx == focused {
+                    mapped_focus = Some(queue.len());
+                }
+                queue.push(track);
+            }
+        }
+
+        let target = mapped_focus.unwrap_or(0);
+        (queue, target)
+    }
+
+    fn build_queue_from_author(&self) -> (Vec<PlaybackTrack>, usize) {
+        let focused = self.author.focused_idx;
+        let mut queue = Vec::new();
+        let mut mapped_focus = None;
+
+        for (idx, item) in self.author.tiles.iter().enumerate() {
+            if let Some(track) = PlaybackTrack::from_author_tile(item) {
+                if idx == focused {
+                    mapped_focus = Some(queue.len());
+                }
+                queue.push(track);
+            }
+        }
+
+        let target = mapped_focus.unwrap_or(0);
+        (queue, target)
+    }
+
+    fn play_focused_playlist_track(&mut self) {
+        let Some(track) = self.playlist.tracks.get(self.playlist.focused_idx) else {
+            return;
+        };
+
+        match track.kind {
+            PlaylistTrackKind::Song => {
+                let (queue, target) = self.build_queue_from_playlist();
+                self.replace_queue_and_play(queue, target);
+            }
+            PlaylistTrackKind::Album | PlaylistTrackKind::Ep | PlaylistTrackKind::Single => {
+                self.open_focused_playlist_album();
+            }
+        }
+    }
+
+    fn play_focused_search_track(&mut self) {
+        if self.search.filter != SearchFilter::Single {
+            self.set_runtime_status(self.lang_text(
+                "仅“单曲”搜索结果支持直接播放",
+                "Only 'Single' search results support direct playback",
+            ));
+            return;
+        }
+
+        let (queue, target) = self.build_queue_from_search();
+        self.replace_queue_and_play(queue, target);
+    }
+
+    fn play_focused_author_tile(&mut self) {
+        let Some(item) = self.author.tiles.get(self.author.focused_idx) else {
+            return;
+        };
+
+        let (section_title, tracks, section_cover) = match item.kind {
+            AuthorTileKind::HotSong => (
+                self.lang_text("热门歌曲", "Hot Songs").to_string(),
+                self.author.hot_songs.clone(),
+                self.author
+                    .hot_songs
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| self.author.cover_url.clone()),
+            ),
+            AuthorTileKind::Album => (
+                self.lang_text("专辑", "Albums").to_string(),
+                self.author.albums.clone(),
+                self.author
+                    .albums
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| self.author.cover_url.clone()),
+            ),
+            AuthorTileKind::Ep => (
+                "EP".to_string(),
+                self.author.eps.clone(),
+                self.author
+                    .eps
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| self.author.cover_url.clone()),
+            ),
+            AuthorTileKind::Single => (
+                "Single".to_string(),
+                self.author.singles.clone(),
+                self.author
+                    .singles
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| self.author.cover_url.clone()),
+            ),
+        };
+
+        if tracks.is_empty() {
+            self.set_runtime_status(self.lang_text(
+                "当前分类暂无可用内容",
+                "This section has no available items",
+            ));
+            return;
+        }
+
+        self.playlist_return_page = Page::Author;
+        self.playlist.id = self
+            .author
+            .id
+            .as_ref()
+            .map(|id| format!("artist:{}:{}", id, section_title));
+        self.playlist.title = format!("{} · {}", self.author.title, section_title);
+        self.playlist.artist = self.author.title.clone();
+        self.playlist.description = self.lang_text(
+            "按 Enter 进入专辑或播放歌曲，Esc 返回作者页",
+            "Press Enter to open album or play song, Esc to return",
+        )
+        .to_string();
+        self.playlist.cover_url = section_cover.clone();
+        self.playlist.tracks = tracks;
+        self.playlist.focused_idx = 0;
+
+        let cover_bytes = if let Some(url) = section_cover {
+            self.api
+                .fetch_cover_bytes(&url)
+                .ok()
+                .filter(|bytes| !bytes.is_empty())
+        } else {
+            None
+        };
+        self.playlist.set_cover_bytes(cover_bytes);
+        self.page = Page::Playlist;
+    }
+
+    fn open_focused_playlist_album(&mut self) {
+        let (album_id, title, fallback_cover_url) = {
+            let Some(track) = self.playlist.tracks.get(self.playlist.focused_idx) else {
+                return;
+            };
+
+            let Some(album_id) = track.id.clone() else {
+                self.set_runtime_status(self.lang_text(
+                    "当前条目缺少专辑 ID，无法打开",
+                    "The current item has no album ID",
+                ));
+                return;
+            };
+
+            (album_id, track.title.clone(), track.cover_url.clone())
+        };
+
+        match self.load_album_detail(&album_id) {
+            Ok(()) => {
+                if self.playlist.cover_bytes.is_none() {
+                    if let Some(url) = fallback_cover_url.as_deref() {
+                        let bytes = self
+                            .api
+                            .fetch_cover_bytes(url)
+                            .ok()
+                            .filter(|content| !content.is_empty());
+                        if bytes.is_some() {
+                            self.playlist.cover_url = fallback_cover_url;
+                            self.playlist.set_cover_bytes(bytes);
+                        }
+                    }
+                }
+                self.set_runtime_status(format!(
+                    "{} {}",
+                    self.lang_text("已打开专辑", "Opened album"),
+                    title
+                ));
+            }
+            Err(err) => {
+                self.set_runtime_status(format!(
+                    "{}: {}",
+                    self.lang_text("打开专辑失败", "Failed to open album"),
+                    err
+                ));
+            }
+        }
+    }
+
+    fn open_focused_search_author(&mut self) {
+        if self.search.filter != SearchFilter::Author {
+            return;
+        }
+
+        let (artist_id, title, fallback_cover_url) = {
+            let Some(item) = self.search.results.get(self.search.focused_idx) else {
+                return;
+            };
+
+            let Some(artist_id) = item.artist_id.clone() else {
+                self.search.status_line = self
+                    .lang_text(
+                        "当前结果缺少作者 ID，无法打开作者页",
+                        "The current result has no author ID",
+                    )
+                    .to_string();
+                return;
+            };
+
+            (artist_id, item.left_label.clone(), item.cover_url.clone())
+        };
+
+        self.search.status_line = format!("正在加载作者 {}", title);
+
+        match self.load_author_detail(&artist_id) {
+            Ok(()) => {
+                if self.author.cover_bytes.is_none() {
+                    if let Some(url) = fallback_cover_url.as_deref() {
+                        let bytes = self
+                            .api
+                            .fetch_cover_bytes(url)
+                            .ok()
+                            .filter(|content| !content.is_empty());
+                        if bytes.is_some() {
+                            self.author.cover_url = fallback_cover_url;
+                            self.author.set_cover_bytes(bytes);
+                        }
+                    }
+                }
+                self.page = Page::Author;
+                self.search.status_line = format!("已打开作者 {}", self.author.title);
+            }
+            Err(err) => {
+                self.search.status_line = format!("打开作者页失败: {}", err);
+            }
+        }
+    }
+
+    fn open_focused_search_album(&mut self) {
+        if self.search.filter != SearchFilter::Album {
+            return;
+        }
+
+        let (album_id, title, fallback_cover_url) = {
+            let Some(item) = self.search.results.get(self.search.focused_idx) else {
+                return;
+            };
+
+            let Some(album_id) = item.album_id.clone() else {
+                self.search.status_line = self
+                    .lang_text(
+                        "当前结果缺少专辑 ID，无法打开专辑页",
+                        "The current result has no album ID",
+                    )
+                    .to_string();
+                return;
+            };
+
+            (
+                album_id,
+                item.title
+                    .clone()
+                    .unwrap_or_else(|| item.left_label.clone()),
+                item.cover_url.clone(),
+            )
+        };
+
+        self.search.status_line = format!(
+            "{} {}",
+            self.lang_text("正在加载专辑", "Loading album"),
+            title
+        );
+
+        match self.load_album_detail(&album_id) {
+            Ok(()) => {
+                if self.playlist.cover_bytes.is_none() {
+                    if let Some(url) = fallback_cover_url.as_deref() {
+                        let bytes = self
+                            .api
+                            .fetch_cover_bytes(url)
+                            .ok()
+                            .filter(|content| !content.is_empty());
+                        if bytes.is_some() {
+                            self.playlist.cover_url = fallback_cover_url;
+                            self.playlist.set_cover_bytes(bytes);
+                        }
+                    }
+                }
+                self.playlist_return_page = Page::Search;
+                self.page = Page::Playlist;
+                self.search.status_line = format!(
+                    "{} {}",
+                    self.lang_text("已打开专辑", "Opened album"),
+                    title
+                );
+            }
+            Err(err) => {
+                self.search.status_line = format!(
+                    "{}: {}",
+                    self.lang_text("打开专辑失败", "Failed to open album"),
+                    err
+                );
+            }
+        }
+    }
+
+    fn open_focused_search_playlist(&mut self) {
+        if self.search.filter != SearchFilter::Playlist {
+            return;
+        }
+
+        let (playlist_id, title, fallback_cover_url) = {
+            let Some(item) = self.search.results.get(self.search.focused_idx) else {
+                return;
+            };
+
+            let Some(playlist_id) = item.playlist_id.clone() else {
+                self.search.status_line = self
+                    .lang_text(
+                        "当前结果缺少歌单 ID，无法打开歌单页",
+                        "The current result has no playlist ID",
+                    )
+                    .to_string();
+                return;
+            };
+
+            (playlist_id, item.left_label.clone(), item.cover_url.clone())
+        };
+
+        self.search.status_line = format!(
+            "{} {}",
+            self.lang_text("正在加载歌单", "Loading playlist"),
+            title
+        );
+
+        match self.load_playlist_detail(&playlist_id) {
+            Ok(()) => {
+                if self.playlist.cover_bytes.is_none() {
+                    if let Some(url) = fallback_cover_url.as_deref() {
+                        let bytes = self
+                            .api
+                            .fetch_cover_bytes(url)
+                            .ok()
+                            .filter(|content| !content.is_empty());
+                        if bytes.is_some() {
+                            self.playlist.cover_url = fallback_cover_url;
+                            self.playlist.set_cover_bytes(bytes);
+                        }
+                    }
+                }
+                self.playlist_return_page = Page::Search;
+                self.page = Page::Playlist;
+                self.search.status_line = format!(
+                    "{} {}",
+                    self.lang_text("已打开歌单", "Opened playlist"),
+                    title
+                );
+            }
+            Err(err) => {
+                self.search.status_line = format!(
+                    "{}: {}",
+                    self.lang_text("打开歌单失败", "Failed to open playlist"),
+                    err
+                );
+            }
+        }
+    }
+
+    fn activate_focused_search_result(&mut self) {
+        match self.search.filter {
+            SearchFilter::Single => self.play_focused_search_track(),
+            SearchFilter::Album => self.open_focused_search_album(),
+            SearchFilter::Author => self.open_focused_search_author(),
+            SearchFilter::Playlist => self.open_focused_search_playlist(),
+        }
+    }
+
+    pub fn is_now_playing_song(&self, song_id: Option<&str>) -> bool {
+        match (self.now_playing.as_ref(), song_id) {
+            (Some(now), Some(song_id)) => now.song_id == song_id,
+            _ => false,
+        }
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_selected = 0;
+        self.settings_keybind_rebinding = None;
+        self.overlay = Some(Overlay::Settings);
+    }
+
+    fn open_keybind_settings(&mut self) {
+        self.settings_keybind_selected = 0;
+        self.settings_keybind_rebinding = None;
+        self.overlay = Some(Overlay::SettingsKeybinds);
+    }
+
+    fn handle_search_box_key(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+        {
+            self.close_overlay();
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => self.close_overlay(),
+            KeyCode::Enter => self.execute_search_from_box(),
+            KeyCode::Backspace => {
+                if self.search_box_cursor > 0 {
+                    self.search_box_cursor =
+                        remove_char_before(&mut self.search_box_input, self.search_box_cursor);
+                }
+            }
+            KeyCode::Delete => {
+                remove_char_at(&mut self.search_box_input, self.search_box_cursor);
+            }
+            KeyCode::Left => {
+                if self.search_box_cursor > 0 {
+                    self.search_box_cursor -= 1;
+                }
+            }
+            KeyCode::Right => {
+                let len = char_count(&self.search_box_input);
+                if self.search_box_cursor < len {
+                    self.search_box_cursor += 1;
+                }
+            }
+            KeyCode::Home => {
+                self.search_box_cursor = 0;
+            }
+            KeyCode::End => {
+                self.search_box_cursor = char_count(&self.search_box_input);
+            }
+            KeyCode::Char(ch) => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    if char_count(&self.search_box_input) < MAX_INPUT_LEN {
+                        insert_char_at(&mut self.search_box_input, self.search_box_cursor, ch);
+                        self.search_box_cursor += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self.search_box_cursor = self.search_box_cursor.min(char_count(&self.search_box_input));
+    }
+
+    fn handle_search_box_click(&mut self, col: u16, row: u16) {
+        let Ok((term_w, term_h)) = crossterm::terminal::size() else {
+            return;
+        };
+        if term_w < 20 || term_h < 2 {
+            return;
+        }
+
+        let visible_h = self
+            .search_box_anim_height
+            .min(crate::ui::search_box::TARGET_HEIGHT)
+            .min(term_h);
+        if visible_h < crate::ui::search_box::TARGET_HEIGHT {
+            return;
+        }
+
+        let width = (term_w / 2).max(24).min(term_w.saturating_sub(2));
+        let area_x = term_w.saturating_sub(width) / 2;
+        let area_y = 0_u16;
+        let area = HitRect {
+            x: area_x,
+            y: area_y,
+            width,
+            height: visible_h,
+        };
+
+        if !area.contains(col, row) {
+            return;
+        }
+
+        let inner_x = area.x.saturating_add(1);
+        let inner_y = area.y.saturating_add(1);
+        let inner_w = area.width.saturating_sub(2);
+        if inner_w == 0 || row != inner_y {
+            return;
+        }
+
+        if col <= inner_x {
+            self.search_box_cursor = 0;
+            return;
+        }
+
+        let max_col = inner_x.saturating_add(inner_w).saturating_sub(1);
+        if col >= max_col {
+            self.search_box_cursor = char_count(&self.search_box_input);
+            return;
+        }
+
+        let rel = col.saturating_sub(inner_x);
+        self.search_box_cursor = char_index_for_display_column(&self.search_box_input, rel);
+    }
+
+    fn handle_settings_root_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.close_overlay(),
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.close_overlay();
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                if self.settings_selected == 0 {
+                    self.settings_selected = SETTINGS_ROOT_ITEMS - 1;
+                } else {
+                    self.settings_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.settings_selected = (self.settings_selected + 1) % SETTINGS_ROOT_ITEMS;
+            }
+            KeyCode::Left => self.apply_settings_root_delta(-1),
+            KeyCode::Right => self.apply_settings_root_delta(1),
+            KeyCode::Enter => match self.settings_selected {
+                0..=2 => self.apply_settings_root_delta(1),
+                3 => {
+                    self.settings_playback_selected = 0;
+                    self.overlay = Some(Overlay::SettingsPlayback);
+                }
+                4 => {
+                    self.open_keybind_settings();
+                }
+                5 => self.apply_settings_root_delta(1),
+                6 => self.logout_to_login(),
+                7 => {
+                    self.overlay = Some(Overlay::SettingsAbout);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn handle_settings_playback_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => self.overlay = Some(Overlay::Settings),
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.close_overlay();
+                }
+            }
+            KeyCode::Left => {
+                self.apply_settings_playback_delta(-1);
+            }
+            KeyCode::Right | KeyCode::Enter => {
+                self.apply_settings_playback_delta(1);
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                if self.settings_playback_selected == 0 {
+                    self.settings_playback_selected = SETTINGS_PLAYBACK_ITEMS - 1;
+                } else {
+                    self.settings_playback_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.settings_playback_selected =
+                    (self.settings_playback_selected + 1) % SETTINGS_PLAYBACK_ITEMS;
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_settings_keybinds_key(&mut self, key: KeyEvent) {
+        if let Some(index) = self.settings_keybind_rebinding {
+            match key.code {
+                KeyCode::Esc => {
+                    self.settings_keybind_rebinding = None;
+                    self.set_runtime_status(self.lang_text("已取消快捷键重绑", "Cancelled keybind rebinding"));
+                }
+                _ => {
+                    let Some(binding) = key_event_to_keybind_text(key) else {
+                        self.set_runtime_status(self.lang_text(
+                            "该按键暂不支持绑定，请重试",
+                            "This key is not supported for binding, please retry",
+                        ));
+                        return;
+                    };
+
+                    if binding == RESERVED_RESET_KEYBIND {
+                        self.set_runtime_status(self.lang_text(
+                            "Ctrl+Alt+R 为保留快捷键，不能重新绑定",
+                            "Ctrl+Alt+R is reserved and cannot be rebound",
+                        ));
+                        return;
+                    }
+
+                    if let Some(conflict_index) = self.find_keybind_conflict(index, &binding) {
+                        self.set_runtime_status(format!(
+                            "{}: [{}] {} [{}]，{}",
+                            self.lang_text("快捷键冲突", "Keybind conflict"),
+                            binding,
+                            self.lang_text("已用于", "is already used by"),
+                            self.keybind_name_for_index(conflict_index),
+                            self.lang_text("请使用其他按键", "please choose another key")
+                        ));
+                        return;
+                    }
+
+                    if let Some(slot) = self.keybind_value_mut_for_index(index) {
+                        *slot = binding.clone();
+                        let _ = self.config.save();
+                        self.set_runtime_status(format!(
+                            "{} [{}] {} {}",
+                            self.lang_text("已将", "Bound"),
+                            self.keybind_name_for_index(index),
+                            self.lang_text("绑定为", "to"),
+                            binding
+                        ));
+                    }
+                    self.settings_keybind_rebinding = None;
+                }
+            }
+            return;
+        }
+
+        if is_reserved_reset_combo(key) {
+            self.reset_keybinds_to_default();
+            let _ = self.config.save();
+            self.set_runtime_status(self.lang_text("已恢复默认快捷键", "Restored default keybinds"));
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.settings_keybind_rebinding = None;
+                self.overlay = Some(Overlay::Settings);
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.settings_keybind_rebinding = None;
+                    self.close_overlay();
+                }
+            }
+            KeyCode::Left => {
+                self.settings_keybind_rebinding = None;
+                self.overlay = Some(Overlay::Settings);
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                if self.settings_keybind_selected == 0 {
+                    self.settings_keybind_selected = SETTINGS_KEYBIND_ITEMS - 1;
+                } else {
+                    self.settings_keybind_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.settings_keybind_selected =
+                    (self.settings_keybind_selected + 1) % SETTINGS_KEYBIND_ITEMS;
+            }
+            KeyCode::Enter => {
+                let idx = self.settings_keybind_selected;
+                self.settings_keybind_rebinding = Some(idx);
+                self.set_runtime_status(format!(
+                    "{} [{}]，{}",
+                    self.lang_text("正在重绑", "Rebinding"),
+                    self.keybind_name_for_index(idx),
+                    self.lang_text("请按新快捷键（Esc 取消）", "press a new shortcut (Esc to cancel)")
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_settings_about_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Left | KeyCode::Enter => {
+                self.overlay = Some(Overlay::Settings);
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.close_overlay();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_settings_root_delta(&mut self, delta: i32) {
+        match self.settings_selected {
+            0 => {
+                let themes = ["system", "latte", "frappe", "macchiato", "mocha"];
+                let current = themes
+                    .iter()
+                    .position(|name| name.eq_ignore_ascii_case(self.config.theme.as_str()))
+                    .unwrap_or(0) as i32;
+                let next = (current + delta).rem_euclid(themes.len() as i32) as usize;
+                let next_name = themes[next];
+                if let Ok(theme) = ThemeLoader::load(next_name) {
+                    self.theme = theme;
+                    self.config.theme = next_name.to_string();
+                    let _ = self.config.save();
+                }
+            }
+            1 => {
+                if delta != 0 {
+                    self.config.transparent_background = !self.config.transparent_background;
+                    let _ = self.config.save();
+                }
+            }
+            2 => {
+                if delta != 0 {
+                    self.config.language = match self.config.language {
+                        Language::Zh => Language::En,
+                        Language::En => Language::Zh,
+                    };
+                    let _ = self.config.save();
+                }
+            }
+            5 => {
+                if delta != 0 {
+                    self.config.show_hints = !self.config.show_hints;
+                    let _ = self.config.save();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_settings_playback_delta(&mut self, delta: i32) {
+        if delta == 0 {
+            return;
+        }
+
+        match self.settings_playback_selected {
+            0 => {
+                self.config.visualize = match self.config.visualize {
+                    VisualizeMode::Bars => VisualizeMode::Oscilloscope,
+                    VisualizeMode::Oscilloscope => VisualizeMode::Bars,
+                };
+                let _ = self.config.save();
+            }
+            1 => {
+                self.config.super_smooth_bar = !self.config.super_smooth_bar;
+                let _ = self.config.save();
+            }
+            2 => {
+                self.config.bars_gap = !self.config.bars_gap;
+                let _ = self.config.save();
+            }
+            3 => {
+                self.config.bar_number = cycle_bar_number(self.config.bar_number, delta);
+                let _ = self.config.save();
+            }
+            4 => {
+                self.config.bar_channels = match self.config.bar_channels {
+                    BarChannels::Mono => BarChannels::Stereo,
+                    BarChannels::Stereo => BarChannels::Mono,
+                };
+                let _ = self.config.save();
+            }
+            5 => {
+                self.config.kitty_graphics = !self.config.kitty_graphics;
+                let _ = self.config.save();
+            }
+            6 => {
+                self.config.page_lyrics = !self.config.page_lyrics;
+                let _ = self.config.save();
+            }
+            7 => {
+                let next = self
+                    .config
+                    .audio_quality
+                    .cycle(delta, self.vip_audio_unlocked);
+                self.set_audio_quality(next);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_search_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Left => {
+                self.page = self.search_return_page;
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                if self.search.results.is_empty() {
+                    return;
+                }
+
+                if self.search.focused_idx + 1 < self.search.results.len() {
+                    self.search.focus_next();
+
+                    if self.search.focused_idx + 1 == self.search.results.len() {
+                        match self.load_more_search_results() {
+                            Ok(_) => {}
+                            Err(err) => {
+                                self.search.status_line = format!("加载更多失败: {}", err);
+                            }
+                        }
+                    }
+
+                    return;
+                }
+
+                let before = self.search.results.len();
+                match self.load_more_search_results() {
+                    Ok(added) if added > 0 => {
+                        self.search.focused_idx = before;
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        self.search.status_line = format!("加载更多失败: {}", err);
+                    }
+                }
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                if self.search.focused_idx > 0 {
+                    self.search.focus_prev();
+                }
+            }
+            KeyCode::Enter => self.activate_focused_search_result(),
+            _ => {}
+        }
+    }
+
+    fn handle_login_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::F(1) => {
+                self.login.set_method(LoginMethod::Qr);
+                self.refresh_qr_login();
+            }
+            KeyCode::F(2) => self.login.set_method(LoginMethod::Username),
+            KeyCode::F(3) => self.login.set_method(LoginMethod::Phone),
+            KeyCode::Tab | KeyCode::Down => self.login.next_focus(),
+            KeyCode::BackTab | KeyCode::Up => self.login.prev_focus(),
+            KeyCode::Enter => self.submit_login_action(),
+            KeyCode::Backspace => self.login.pop_char(),
+            KeyCode::Char(ch) => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.login.push_char(ch);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_home_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Tab => self.home.focus_next(),
+            KeyCode::BackTab => self.home.focus_prev(),
+            KeyCode::Left => self.home.focus_left(),
+            KeyCode::Right => self.home.focus_right(),
+            KeyCode::Up => self.home.focus_up(),
+            KeyCode::Down => self.home.focus_down(),
+            KeyCode::Enter => self.enter_home_tile(),
+            _ => {}
+        }
+    }
+
+    fn handle_playlist_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up | KeyCode::BackTab => self.playlist.focus_prev(),
+            KeyCode::Down | KeyCode::Tab => self.playlist.focus_next(),
+            KeyCode::Enter => self.play_focused_playlist_track(),
+            KeyCode::Esc | KeyCode::Left => {
+                self.page = match self.playlist_return_page {
+                    Page::Author => Page::Author,
+                    Page::Search => Page::Search,
+                    _ => Page::Home,
+                };
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_author_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Tab => self.author.focus_next(),
+            KeyCode::BackTab => self.author.focus_prev(),
+            KeyCode::Left => self.author.focus_left(),
+            KeyCode::Right => self.author.focus_right(),
+            KeyCode::Up => self.author.focus_up(),
+            KeyCode::Down => self.author.focus_down(),
+            KeyCode::Enter => self.play_focused_author_tile(),
+            KeyCode::Esc => {
+                self.page = Page::Search;
+            }
+            _ => {}
+        }
+    }
+
+    fn tick_search_box_animation(&mut self) {
+        if matches!(self.overlay, Some(Overlay::SearchBox)) {
+            self.search_box_anim_height = (self.search_box_anim_height + 1).min(SEARCH_BOX_TARGET_HEIGHT);
+        } else {
+            self.search_box_anim_height = 0;
+        }
+    }
+
+    fn begin_startup_loading(&mut self) {
+        self.page = Page::Loading;
+        self.overlay = None;
+        self.startup_loading_progress = 0.0;
+        self.startup_loading_started_at = Some(Instant::now());
+        self.startup_loading_complete_requested = false;
+    }
+
+    fn finish_startup_loading(&mut self) {
+        self.startup_loading_complete_requested = true;
+    }
+
+    fn tick_startup_loading(&mut self) {
+        if self.page != Page::Loading {
+            return;
+        }
+
+        let Some(started_at) = self.startup_loading_started_at else {
+            self.startup_loading_started_at = Some(Instant::now());
+            return;
+        };
+
+        let elapsed = started_at.elapsed().as_secs_f32();
+        self.startup_loading_progress = startup_loading_progress_at(
+            elapsed,
+            80,
+            self.startup_loading_complete_requested,
+        );
+
+        if self.startup_loading_complete_requested && elapsed >= STARTUP_LOADING_MIN_VISIBLE_SECS {
+            self.page = Page::Home;
+            self.startup_loading_progress = 0.0;
+            self.startup_loading_started_at = None;
+            self.startup_loading_complete_requested = false;
+            return;
+        }
+    }
+
+    pub fn startup_loading_progress_for_width(&self, bar_width: u16) -> f32 {
+        if self.page != Page::Loading {
+            return 0.0;
+        }
+
+        let Some(started_at) = self.startup_loading_started_at else {
+            return 0.0;
+        };
+
+        startup_loading_progress_at(
+            started_at.elapsed().as_secs_f32(),
+            bar_width.max(1),
+            self.startup_loading_complete_requested,
+        )
+    }
+
+    fn is_double_content_click(&mut self, page: Page, index: usize) -> bool {
+        let now = Instant::now();
+        let is_double = self
+            .last_content_click
+            .map(|(at, p, i)| {
+                p == page
+                    && i == index
+                    && now.duration_since(at) <= Duration::from_millis(CONTENT_DOUBLE_CLICK_MS)
+            })
+            .unwrap_or(false);
+        self.last_content_click = Some((now, page, index));
+        is_double
+    }
+
+    fn handle_content_click(&mut self, col: u16, row: u16) -> bool {
+        match self.page {
+            Page::Home => {
+                let hit = self
+                    .home_tile_hits
+                    .iter()
+                    .find(|(rect, _)| rect.contains(col, row))
+                    .map(|(_, idx)| *idx);
+                if let Some(idx) = hit {
+                    if idx < self.home.tiles.len() {
+                        self.home.focused_idx = idx;
+                        self.enter_home_tile();
+                        self.last_content_click = None;
+                        return true;
+                    }
+                }
+            }
+            Page::Playlist => {
+                let hit = self
+                    .playlist_track_hits
+                    .iter()
+                    .find(|(rect, _)| rect.contains(col, row))
+                    .map(|(_, idx)| *idx);
+                if let Some(idx) = hit {
+                    if idx < self.playlist.tracks.len() {
+                        self.playlist.focused_idx = idx;
+                        if self.is_double_content_click(Page::Playlist, idx) {
+                            self.play_focused_playlist_track();
+                        }
+                        return true;
+                    }
+                }
+            }
+            Page::Author => {
+                let hit = self
+                    .author_tile_hits
+                    .iter()
+                    .find(|(rect, _)| rect.contains(col, row))
+                    .map(|(_, idx)| *idx);
+                if let Some(idx) = hit {
+                    if idx < self.author.tiles.len() {
+                        self.author.focused_idx = idx;
+                        if self.is_double_content_click(Page::Author, idx) {
+                            self.play_focused_author_tile();
+                        }
+                        return true;
+                    }
+                }
+            }
+            Page::Search => {
+                let hit = self
+                    .search_item_hits
+                    .iter()
+                    .find(|(rect, _)| rect.contains(col, row))
+                    .map(|(_, idx)| *idx);
+                if let Some(idx) = hit {
+                    if idx < self.search.results.len() {
+                        self.search.focused_idx = idx;
+                        if self.is_double_content_click(Page::Search, idx) {
+                            self.activate_focused_search_result();
+                        }
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        false
+    }
+
+    fn open_search_box(&mut self) {
+        if self.page != Page::Search {
+            self.search_return_page = Page::Home;
+        }
+        self.search_box_input = self.search.query.clone();
+        self.search_box_cursor = char_count(&self.search_box_input);
+        self.search_box_anim_height = 0;
+        self.overlay = Some(Overlay::SearchBox);
+    }
+
+    fn close_overlay(&mut self) {
+        self.overlay = None;
+        self.search_box_anim_height = 0;
+    }
+
+    fn execute_search_from_box(&mut self) {
+        let raw_query = self.search_box_input.trim().to_string();
+        let (keywords, _) = parse_search_input(&raw_query);
+        if keywords.is_empty() {
+            self.search.status_line = self
+                .lang_text("请输入搜索关键词", "Please enter search keywords")
+                .to_string();
+            return;
+        }
+
+        self.search.query = raw_query;
+        if let Err(err) = self.execute_search() {
+            self.search.status_line = format!("搜索失败: {}", err);
+            self.search.set_results(Vec::new());
+        }
+        self.page = Page::Search;
+        self.close_overlay();
+    }
+
+    pub fn consume_fullscreen_launch_request(&mut self) -> bool {
+        std::mem::take(&mut self.launch_fullscreen_requested)
+    }
+
+    pub fn open_settings_from_fullscreen(&mut self) {
+        if self.page != Page::Login {
+            self.open_settings();
+        }
+    }
+
+    pub fn fullscreen_config_snapshot(&self) -> crate::tmplayer::HostConfigSync {
+        crate::tmplayer::HostConfigSync {
+            theme: self.config.theme.clone(),
+            transparent_background: self.config.transparent_background,
+            language: self.config.language,
+            audio_quality: self.config.audio_quality,
+            vip_audio_unlocked: self.vip_audio_unlocked,
+            show_hints: self.config.show_hints,
+            visualize: self.config.visualize,
+            super_smooth_bar: self.config.super_smooth_bar,
+            bars_gap: self.config.bars_gap,
+            bar_number: self.config.bar_number,
+            bar_channels: self.config.bar_channels,
+            bar_channel_reverse: self.config.bar_channel_reverse,
+            kitty_graphics: self.config.kitty_graphics,
+        }
+    }
+
+    pub fn fullscreen_apply_config_sync(&mut self, sync: crate::tmplayer::HostConfigSync) {
+        let mut changed = false;
+
+        if self.config.theme != sync.theme {
+            if let Ok(theme) = ThemeLoader::load(&sync.theme) {
+                self.theme = theme;
+                self.config.theme = sync.theme;
+                changed = true;
+            }
+        }
+
+        if self.config.transparent_background != sync.transparent_background {
+            self.config.transparent_background = sync.transparent_background;
+            changed = true;
+        }
+
+        if self.config.language != sync.language {
+            self.config.language = sync.language;
+            changed = true;
+        }
+
+        if self.vip_audio_unlocked != sync.vip_audio_unlocked {
+            self.vip_audio_unlocked = sync.vip_audio_unlocked;
+            changed = true;
+        }
+
+        let clamped_quality = sync.audio_quality.clamp_for_vip(self.vip_audio_unlocked);
+        if self.config.audio_quality != clamped_quality {
+            self.config.audio_quality = clamped_quality;
+            changed = true;
+        }
+
+        if self.config.show_hints != sync.show_hints {
+            self.config.show_hints = sync.show_hints;
+            changed = true;
+        }
+
+        if self.config.visualize != sync.visualize {
+            self.config.visualize = sync.visualize;
+            changed = true;
+        }
+
+        if self.config.super_smooth_bar != sync.super_smooth_bar {
+            self.config.super_smooth_bar = sync.super_smooth_bar;
+            changed = true;
+        }
+
+        if self.config.bars_gap != sync.bars_gap {
+            self.config.bars_gap = sync.bars_gap;
+            changed = true;
+        }
+
+        if self.config.bar_number != sync.bar_number {
+            self.config.bar_number = sync.bar_number;
+            changed = true;
+        }
+
+        if self.config.bar_channels != sync.bar_channels {
+            self.config.bar_channels = sync.bar_channels;
+            changed = true;
+        }
+
+        if self.config.bar_channel_reverse != sync.bar_channel_reverse {
+            self.config.bar_channel_reverse = sync.bar_channel_reverse;
+            changed = true;
+        }
+
+        if self.config.kitty_graphics != sync.kitty_graphics {
+            self.config.kitty_graphics = sync.kitty_graphics;
+            changed = true;
+        }
+
+        if changed {
+            let _ = self.config.save();
+        }
+    }
+
+    pub fn build_fullscreen_bootstrap(&mut self) -> crate::tmplayer::FullscreenBootstrap {
+        let mut bootstrap = crate::tmplayer::FullscreenBootstrap::default();
+
+        if self.now_playing.is_none() {
+            return bootstrap;
+        }
+
+        // Prefer persistent now-playing queue so fullscreen follows actual playback state.
+        if !self.playback_queue.is_empty() {
+            bootstrap.playlist = self
+                .playback_queue
+                .iter()
+                .map(|track| crate::tmplayer::FullscreenPlaylistItemSeed {
+                    id: Some(track.song_id.clone()),
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.clone(),
+                    duration: Duration::from_millis(track.duration_ms.max(0) as u64),
+                })
+                .collect();
+            if !bootstrap.playlist.is_empty() {
+                bootstrap.current_index = self
+                    .playback_index
+                    .map(|index| index.min(bootstrap.playlist.len() - 1));
+            }
+        }
+
+        // Keep fullscreen in true idle state when nothing is actually playing.
+        if bootstrap.playlist.is_empty() {
+            if let Some(track) = self.now_playing.as_ref() {
+                bootstrap.playlist.push(crate::tmplayer::FullscreenPlaylistItemSeed {
+                    id: Some(track.song_id.clone()),
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.clone(),
+                    duration: Duration::from_millis(track.duration_ms.max(0) as u64),
+                });
+                bootstrap.current_index = Some(0);
+            }
+        }
+
+        if !bootstrap.playlist.is_empty() {
+            let mut active_idx = bootstrap
+                .current_index
+                .unwrap_or(0)
+                .min(bootstrap.playlist.len() - 1);
+
+            if let Some(now) = self.now_playing.as_ref() {
+                if let Some(found) = bootstrap.playlist.iter().position(|item| {
+                    item.id
+                        .as_deref()
+                        .map(|id| id == now.song_id.as_str())
+                        .unwrap_or(false)
+                }) {
+                    active_idx = found;
+                }
+            }
+            bootstrap.current_index = Some(active_idx);
+
+            let active = bootstrap.playlist[active_idx].clone();
+            let mut seed = crate::tmplayer::FullscreenTrackSeed {
+                playlist_index: Some(active_idx),
+                title: active.title,
+                artist: active.artist,
+                album: active.album,
+                duration: active.duration,
+                cover: None,
+                lyrics: None,
+            };
+
+            if let Some(now) = self.now_playing.as_ref() {
+                seed.title = now.title.clone();
+                seed.artist = now.artist.clone();
+                seed.album = now.album.clone();
+                seed.duration = Duration::from_millis(now.duration_ms.max(0) as u64);
+                seed.cover = now.cover.clone();
+                seed.lyrics = now.lyrics.clone();
+            }
+
+            let song_id = self
+                .now_playing
+                .as_ref()
+                .map(|track| track.song_id.clone())
+                .or_else(|| bootstrap.playlist[active_idx].id.clone());
+
+            if let Some(song_id) = song_id {
+                if let Ok(detail) = self.api.song_detail(&song_id) {
+                    if let Some(song) = detail
+                        .body
+                        .get("songs")
+                        .and_then(|value| value.as_array())
+                        .and_then(|items| items.first())
+                    {
+                        if let Some(name) = song.get("name").and_then(|value| value.as_str()) {
+                            seed.title = name.to_string();
+                        }
+                        if let Some(artist) = parse_artists(song) {
+                            seed.artist = artist;
+                        }
+                        if let Some(album) = song.pointer("/al/name").and_then(|value| value.as_str()) {
+                            seed.album = album.to_string();
+                        }
+                        if let Some(duration_ms) = song.get("dt").and_then(|value| value.as_i64()) {
+                            seed.duration = Duration::from_millis(duration_ms.max(0) as u64);
+                        }
+
+                        if seed.cover.is_none() {
+                            if let Some(cover_url) = song.pointer("/al/picUrl").and_then(|value| value.as_str()) {
+                                if let Ok(bytes) = self.api.fetch_cover_bytes(cover_url) {
+                                    if !bytes.is_empty() {
+                                        seed.cover = Some(bytes);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if seed.cover.is_none() {
+                    if let Some(cover_url) = self
+                        .now_playing
+                        .as_ref()
+                        .and_then(|track| track.cover_url.as_deref())
+                    {
+                        if let Ok(bytes) = self.api.fetch_cover_bytes(cover_url) {
+                            if !bytes.is_empty() {
+                                seed.cover = Some(bytes);
+                            }
+                        }
+                    }
+                }
+
+                if seed.lyrics.is_none() {
+                    if let Ok(lyric) = self.api.lyric(&song_id) {
+                        if let Some(raw_lrc) = lyric.body.pointer("/lrc/lyric").and_then(|value| value.as_str()) {
+                            seed.lyrics = crate::tmplayer::playback::metadata::parse_lrc(raw_lrc)
+                                .or_else(|| crate::tmplayer::playback::metadata::parse_plain_lyrics(raw_lrc));
+                        }
+                    }
+                }
+            }
+
+            if bootstrap.playlist_cover.is_none() {
+                bootstrap.playlist_cover = seed.cover.clone();
+            }
+            bootstrap.current_track = Some(seed);
+        }
+
+        bootstrap
+    }
+
+    pub fn set_runtime_status(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        self.home.status_line = text.clone();
+        self.search.status_line = text;
+    }
+
+    fn lang_text<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
+        match self.config.language {
+            Language::Zh => zh,
+            Language::En => en,
+        }
+    }
+
+    fn refresh_vip_audio_access(&mut self) {
+        let mut unlocked = false;
+
+        if let Ok(response) = self.api.vip_info_v2() {
+            unlocked = response_indicates_vip(&response);
+        }
+
+        if !unlocked {
+            if let Ok(response) = self.api.vip_info() {
+                unlocked = response_indicates_vip(&response);
+            }
+        }
+
+        self.vip_audio_unlocked = unlocked;
+        self.set_audio_quality(self.config.audio_quality);
+    }
+
+    fn set_audio_quality(&mut self, quality: AudioQuality) {
+        let clamped = quality.clamp_for_vip(self.vip_audio_unlocked);
+        if self.config.audio_quality != clamped {
+            self.config.audio_quality = clamped;
+            let _ = self.config.save();
+        }
+    }
+
+    pub fn current_page_lyric_lines(&self) -> (String, String) {
+        let Some(track) = self.now_playing.as_ref() else {
+            return (String::new(), String::new());
+        };
+        let Some(lines) = track.lyrics.as_ref() else {
+            return (String::new(), String::new());
+        };
+        if lines.is_empty() {
+            return (String::new(), String::new());
+        }
+
+        let pos_ms = self.playback_position().as_millis() as u64;
+        let mut idx = 0usize;
+        for (line_idx, line) in lines.iter().enumerate() {
+            if line.start_ms <= pos_ms {
+                idx = line_idx;
+            } else {
+                break;
+            }
+        }
+
+        let current = lines.get(idx).map(|line| line.text.clone()).unwrap_or_default();
+        let next = lines
+            .get(idx + 1)
+            .map(|line| line.text.clone())
+            .unwrap_or_default();
+        (current, next)
+    }
+
+    fn logout_to_login(&mut self) {
+        self.close_overlay();
+        self.page = Page::Login;
+        self.search_return_page = Page::Home;
+        self.search_box_input.clear();
+        self.settings_selected = 0;
+        self.settings_playback_selected = 0;
+        self.settings_keybind_selected = 0;
+        self.settings_keybind_rebinding = None;
+        self.session_cookie = None;
+        self.api.clear_cookie();
+        let _ = session::clear_cookie();
+        self.vip_audio_unlocked = false;
+        self.config.audio_quality = self.config.audio_quality.clamp_for_vip(false);
+
+        self.login = LoginState::default();
+        self.search = SearchState::default();
+        self.playlist = PlaylistState::default();
+        self.author = AuthorState::default();
+        self.home = HomeState::default();
+        self.startup_loading_progress = 0.0;
+        self.startup_loading_started_at = None;
+        self.last_content_click = None;
+        self.clear_content_hits();
+        self.audio_player.stop();
+        self.now_playing = None;
+        self.playback_queue.clear();
+        self.playback_index = None;
+        self.playback_state = PlaybackRuntimeState::Stopped;
+        self.playback_repeat_mode = PlaybackRepeatMode::Sequence;
+
+        self.refresh_qr_login();
+    }
+
+    fn enter_home_tile(&mut self) {
+        if self.home.tiles.is_empty() {
+            return;
+        }
+
+        let focused = self.home.focused_idx.min(self.home.tiles.len() - 1);
+        let title = self.home.tiles[focused].title.clone();
+        let Some(playlist_id) = self.home.tiles[focused].id.clone() else {
+            self.home.status_line = "当前块暂无可用歌单".to_string();
+            return;
+        };
+
+        self.home.status_line = format!("正在加载 {}", title);
+        match self.load_playlist_detail(&playlist_id) {
+            Ok(()) => {
+                self.playlist_return_page = Page::Home;
+                self.page = Page::Playlist;
+                self.home.status_line = format!("已打开 {}", title);
+            }
+            Err(err) => {
+                self.home.status_line = format!("打开歌单失败: {}", err);
+            }
+        }
+    }
+
+    fn submit_login_action(&mut self) {
+        match self.login.method {
+            LoginMethod::Qr => {
+                if self.login.focus_index == 0 {
+                    self.refresh_qr_login();
+                } else {
+                    self.check_qr_status_and_login();
+                }
+            }
+            LoginMethod::Username => match self.login.focus_index {
+                0 | 1 => self.login.next_focus(),
+                _ => self.submit_username_login(),
+            },
+            LoginMethod::Phone => match self.login.focus_index {
+                0 | 1 => self.login.next_focus(),
+                2 => self.send_phone_captcha(),
+                _ => self.submit_phone_login(),
+            },
+        }
+    }
+
+    fn refresh_qr_login(&mut self) {
+        self.qr_last_poll_at = None;
+        let key_resp = match self.api.login_qr_key() {
+            Ok(response) => response,
+            Err(err) => {
+                self.login.status_line = format!("二维码 key 获取失败: {}", err);
+                return;
+            }
+        };
+
+        let key = extract_qr_key(&key_resp);
+
+        if key.is_empty() {
+            self.login.status_line = "二维码 key 为空，请重试".to_string();
+            return;
+        }
+
+        let qr_resp = match self.api.login_qr_create(&key) {
+            Ok(response) => response,
+            Err(err) => {
+                self.login.status_line = format!("二维码创建失败: {}", err);
+                return;
+            }
+        };
+
+        let qr_url = extract_qr_url(&qr_resp);
+
+        self.login.qr_key = key;
+        self.login.qr_url = qr_url.clone();
+        self.login.status_line = if qr_url.is_empty() {
+            "二维码已刷新，请按 Enter 轮询状态".to_string()
+        } else {
+            format!("二维码已刷新: {}", truncate_text(&qr_url, 48))
+        };
+    }
+
+    fn check_qr_status_and_login(&mut self) {
+        if self.login.qr_key.trim().is_empty() {
+            self.login.status_line = "请先按 Enter 刷新二维码".to_string();
+            return;
+        }
+
+        let response = match self.api.login_qr_check(&self.login.qr_key) {
+            Ok(response) => response,
+            Err(err) => {
+                self.login.status_line = format!("轮询二维码失败: {}", err);
+                return;
+            }
+        };
+
+        let code = response_code(&response);
+        match code {
+            800 => {
+                self.login.status_line = "二维码已过期，已自动刷新".to_string();
+                self.refresh_qr_login();
+            }
+            801 => self.login.status_line = "等待扫码".to_string(),
+            802 => self.login.status_line = "已扫码，等待确认".to_string(),
+            803 | 200 => self.mark_login_success("二维码登录成功"),
+            _ => {
+                self.login.status_line = format!(
+                    "二维码状态异常({}): {}",
+                    code,
+                    response_message(&response)
+                )
+            }
+        }
+    }
+
+    fn submit_username_login(&mut self) {
+        let username = self.login.username.trim().to_string();
+        if username.is_empty() || self.login.password.trim().is_empty() {
+            self.login.status_line = "请填写用户名和密码".to_string();
+            return;
+        }
+
+        let response = match self.api.login_email(&username, &self.login.password) {
+            Ok(response) => response,
+            Err(err) => {
+                self.login.status_line = format!("登录失败: {}", err);
+                return;
+            }
+        };
+
+        let code = response_code(&response);
+        if code == 200 {
+            let nickname = response.body["profile"]["nickname"].as_str().unwrap_or("用户");
+            self.mark_login_success(&format!("欢迎回来，{}", nickname));
+            return;
+        }
+
+        self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
+    }
+
+    fn send_phone_captcha(&mut self) {
+        let phone = self.login.phone.trim().to_string();
+        if phone.is_empty() {
+            self.login.status_line = "请输入手机号".to_string();
+            return;
+        }
+
+        let response = match self.api.captcha_sent(&phone) {
+            Ok(response) => response,
+            Err(err) => {
+                self.login.status_line = format!("验证码发送失败: {}", err);
+                return;
+            }
+        };
+
+        let code = response_code(&response);
+        if code == 200 {
+            self.login.status_line = format!("验证码已发送到 {}", phone);
+            return;
+        }
+
+        self.login.status_line = format!("发送失败({}): {}", code, response_message(&response));
+    }
+
+    fn submit_phone_login(&mut self) {
+        let phone = self.login.phone.trim().to_string();
+        let captcha = self.login.captcha.trim().to_string();
+
+        if phone.is_empty() || captcha.is_empty() {
+            self.login.status_line = "请填写手机号和验证码".to_string();
+            return;
+        }
+
+        let response = match self.api.login_phone_captcha(&phone, &captcha) {
+            Ok(response) => response,
+            Err(err) => {
+                self.login.status_line = format!("手机号登录失败: {}", err);
+                return;
+            }
+        };
+
+        let code = response_code(&response);
+        if code == 200 {
+            let nickname = response.body["profile"]["nickname"].as_str().unwrap_or("用户");
+            self.mark_login_success(&format!("欢迎回来，{}", nickname));
+            return;
+        }
+
+        self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
+    }
+
+    fn load_home_recommendations(&mut self) -> Result<()> {
+        let mut cards = Vec::new();
+
+        if let Ok(response) = self.api.recommend_resource() {
+            cards = parse_recommend_cards(&response, 8);
+        }
+
+        if cards.is_empty() {
+            if let Ok(response) = self.api.personalized(8) {
+                cards = parse_personalized_cards(&response, 8);
+            }
+        }
+
+        if cards.is_empty() {
+            return Err(anyhow!("推荐歌单为空"));
+        }
+
+        let mut tiles = Vec::with_capacity(cards.len());
+        for card in cards {
+            let mut tile = HomeTile::from_recommendation(
+                card.id,
+                card.title,
+                card.subtitle,
+                card.cover_url,
+            );
+
+            if let Some(url) = tile.cover_url.clone() {
+                if let Ok(bytes) = self.api.fetch_cover_bytes(&url) {
+                    if !bytes.is_empty() {
+                        tile.cover_bytes = Some(bytes);
+                    }
+                }
+            }
+
+            tiles.push(tile);
+        }
+
+        self.home.set_tiles(tiles);
+        self.home.status_line = "方向键/Tab 切换，Enter 打开歌单".to_string();
+        Ok(())
+    }
+
+    fn load_playlist_detail(&mut self, playlist_id: &str) -> Result<()> {
+        let response = self.api.playlist_detail(playlist_id)?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
+        }
+
+        let playlist = response
+            .body
+            .get("playlist")
+            .ok_or_else(|| anyhow!("歌单数据缺失"))?;
+
+        let title = playlist
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("未命名歌单")
+            .to_string();
+
+        let artist = playlist
+            .pointer("/creator/nickname")
+            .and_then(|value| value.as_str())
+            .unwrap_or("网易云音乐")
+            .to_string();
+
+        let description = first_non_empty(
+            playlist,
+            &["/description", "/copywriter", "/creator/signature"],
+        )
+        .unwrap_or_else(|| "暂无简介".to_string());
+
+        let cover_url = first_non_empty(playlist, &["/coverImgUrl", "/picUrl"]);
+
+        let tracks = playlist
+            .get("tracks")
+            .and_then(|value| value.as_array())
+            .map(|items| parse_tracks(items))
+            .unwrap_or_default();
+
+        self.playlist.id = Some(playlist_id.to_string());
+        self.playlist.title = title;
+        self.playlist.artist = artist;
+        self.playlist.description = description;
+        self.playlist.cover_url = cover_url.clone();
+        self.playlist.tracks = tracks;
+        self.playlist.focused_idx = 0;
+
+        let cover_bytes = if let Some(url) = cover_url {
+            self.api
+                .fetch_cover_bytes(&url)
+                .ok()
+                .filter(|bytes| !bytes.is_empty())
+        } else {
+            None
+        };
+        self.playlist.set_cover_bytes(cover_bytes);
+
+        Ok(())
+    }
+
+    fn load_album_detail(&mut self, album_id: &str) -> Result<()> {
+        let response = self.api.album(album_id)?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
+        }
+
+        let album = response
+            .body
+            .get("album")
+            .or_else(|| response.body.pointer("/data/album"))
+            .ok_or_else(|| anyhow!("专辑数据缺失"))?;
+
+        let title = album
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("未命名专辑")
+            .to_string();
+
+        let artist = first_non_empty(album, &["/artist/name", "/artists/0/name"])
+            .unwrap_or_else(|| "网易云音乐".to_string());
+
+        let description = first_non_empty(
+            album,
+            &["/description", "/company", "/type", "/subType"],
+        )
+        .unwrap_or_else(|| self.lang_text("暂无简介", "No description").to_string());
+
+        let cover_url = first_non_empty(album, &["/picUrl", "/blurPicUrl"]);
+
+        let tracks = response
+            .body
+            .get("songs")
+            .or_else(|| response.body.pointer("/data/songs"))
+            .and_then(|value| value.as_array())
+            .map(|items| parse_tracks(items))
+            .unwrap_or_default();
+
+        self.playlist.id = Some(album_id.to_string());
+        self.playlist.title = title;
+        self.playlist.artist = artist;
+        self.playlist.description = description;
+        self.playlist.cover_url = cover_url.clone();
+        self.playlist.tracks = tracks;
+        self.playlist.focused_idx = 0;
+
+        let cover_bytes = if let Some(url) = cover_url {
+            self.api
+                .fetch_cover_bytes(&url)
+                .ok()
+                .filter(|bytes| !bytes.is_empty())
+        } else {
+            None
+        };
+        self.playlist.set_cover_bytes(cover_bytes);
+
+        Ok(())
+    }
+
+    fn load_author_detail(&mut self, artist_id: &str) -> Result<()> {
+        let detail = self.api.artist_detail(artist_id).ok();
+        let desc = self.api.artist_desc(artist_id).ok();
+        let top_song = self.api.artist_top_song(artist_id).ok();
+        let album = self.api.artist_album(artist_id, 60, 0).ok();
+
+        if detail.is_none() && desc.is_none() && top_song.is_none() && album.is_none() {
+            return Err(anyhow!("作者数据获取失败"));
+        }
+
+        let mut title = String::new();
+        let mut description = String::new();
+        let mut cover_url = None;
+
+        if let Some(response) = detail.as_ref() {
+            if response_code(response) == 200 {
+                title = first_non_empty(
+                    &response.body,
+                    &["/data/artist/name", "/artist/name", "/data/name"],
+                )
+                .unwrap_or_default();
+                cover_url = first_non_empty(
+                    &response.body,
+                    &[
+                        "/data/artist/avatarUrl",
+                        "/data/artist/cover",
+                        "/artist/picUrl",
+                        "/artist/img1v1Url",
+                        "/artist/avatarUrl",
+                    ],
+                );
+                description = first_non_empty(
+                    &response.body,
+                    &["/data/artist/briefDesc", "/artist/briefDesc"],
+                )
+                .unwrap_or_default();
+            }
+        }
+
+        if title.is_empty() {
+            if let Some(response) = top_song.as_ref() {
+                if let Some(first_song) = response
+                    .body
+                    .get("songs")
+                    .and_then(|value| value.as_array())
+                    .and_then(|songs| songs.first())
+                {
+                    title = parse_artists(first_song).unwrap_or_default();
+                }
+            }
+        }
+
+        if let Some(response) = desc.as_ref() {
+            if response_code(response) == 200 {
+                if let Some(text) = first_non_empty(&response.body, &["/briefDesc", "/data/briefDesc"]) {
+                    if !text.trim().is_empty() {
+                        description = text;
+                    }
+                }
+
+                if description.trim().is_empty() {
+                    if let Some(text) = first_non_empty_intro_text(&response.body) {
+                        description = text;
+                    }
+                }
+            }
+        }
+
+        if title.trim().is_empty() {
+            title = self.lang_text("未知作者", "Unknown Author").to_string();
+        }
+
+        if description.trim().is_empty() {
+            description = self.lang_text("暂无作者简介", "No author description yet").to_string();
+        }
+
+        let mut hot_songs = Vec::new();
+        let mut albums = Vec::new();
+        let mut eps = Vec::new();
+        let mut singles = Vec::new();
+
+        if let Some(response) = top_song.as_ref() {
+            if response_code(response) == 200 {
+                if let Some(items) = response.body.get("songs").and_then(|value| value.as_array()) {
+                    hot_songs = parse_tracks(items);
+                }
+            }
+        }
+
+        if let Some(response) = album.as_ref() {
+            if response_code(response) == 200 {
+                let album_items = response
+                    .body
+                    .get("hotAlbums")
+                    .and_then(|value| value.as_array())
+                    .or_else(|| {
+                        response
+                            .body
+                            .pointer("/artist/albums")
+                            .and_then(|value| value.as_array())
+                    });
+
+                if let Some(items) = album_items {
+                    for item in items {
+                        let Some(name) = item.get("name").and_then(|value| value.as_str()) else {
+                            continue;
+                        };
+
+                        let size = item
+                            .get("size")
+                            .and_then(|value| value.as_i64())
+                            .unwrap_or_default();
+
+                        let kind = artist_album_kind(item);
+                        let cover_url = first_non_empty(item, &["/picUrl", "/blurPicUrl"]);
+                        let track = PlaylistTrack {
+                            kind: match kind {
+                                AuthorTileKind::HotSong => PlaylistTrackKind::Song,
+                                AuthorTileKind::Album => PlaylistTrackKind::Album,
+                                AuthorTileKind::Ep => PlaylistTrackKind::Ep,
+                                AuthorTileKind::Single => PlaylistTrackKind::Single,
+                            },
+                            id: parse_value_as_string(item.get("id")),
+                            title: name.to_string(),
+                            artist: first_non_empty(item, &["/artist/name", "/artists/0/name"])
+                                .unwrap_or_else(|| title.clone()),
+                            album: name.to_string(),
+                            cover_url,
+                            duration_ms: 0,
+                            duration: format!("{} {}", size, self.lang_text("首", "tracks")),
+                        };
+
+                        match kind {
+                            AuthorTileKind::HotSong | AuthorTileKind::Album => albums.push(track),
+                            AuthorTileKind::Ep => eps.push(track),
+                            AuthorTileKind::Single => singles.push(track),
+                        }
+                    }
+                }
+            }
+        }
+
+        let hot_count = hot_songs.len();
+        let album_count = albums.len();
+        let ep_count = eps.len();
+        let single_count = singles.len();
+
+        let mut tiles = vec![
+            AuthorTile::from_album(
+                self.lang_text("热门歌曲", "Hot Songs").to_string(),
+                format!("{} {}", hot_count, self.lang_text("首", "tracks")),
+                hot_songs
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| cover_url.clone()),
+                AuthorTileKind::HotSong,
+            ),
+            AuthorTile::from_album(
+                self.lang_text("专辑", "Albums").to_string(),
+                format!("{} {}", album_count, self.lang_text("张", "items")),
+                albums
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| cover_url.clone()),
+                AuthorTileKind::Album,
+            ),
+            AuthorTile::from_album(
+                "EP".to_string(),
+                format!("{} {}", ep_count, self.lang_text("张", "items")),
+                eps.first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| cover_url.clone()),
+                AuthorTileKind::Ep,
+            ),
+            AuthorTile::from_album(
+                "Single".to_string(),
+                format!("{} {}", single_count, self.lang_text("张", "items")),
+                singles
+                    .first()
+                    .and_then(|track| track.cover_url.clone())
+                    .or_else(|| cover_url.clone()),
+                AuthorTileKind::Single,
+            ),
+        ];
+
+        if tiles.is_empty() {
+            tiles.push(AuthorTile::placeholder());
+        }
+
+        for tile in &mut tiles {
+            let bytes = if let Some(url) = tile.cover_url.as_deref() {
+                self.api
+                    .fetch_cover_bytes(url)
+                    .ok()
+                    .filter(|content| !content.is_empty())
+            } else {
+                None
+            };
+            tile.cover_bytes = bytes;
+            tile.cover_ascii.clear();
+            tile.cover_ascii_size = (0, 0);
+        }
+
+        let cover_bytes = if let Some(url) = cover_url.as_deref() {
+            self.api
+                .fetch_cover_bytes(url)
+                .ok()
+                .filter(|content| !content.is_empty())
+        } else {
+            None
+        };
+
+        self.author.id = Some(artist_id.to_string());
+        self.author.title = title;
+        self.author.artist = match self.config.language {
+            Language::Zh => format!(
+                "热门 {} · 专辑 {} · EP {} · Single {}",
+                hot_count, album_count, ep_count, single_count
+            ),
+            Language::En => format!(
+                "Hot {} · Albums {} · EP {} · Singles {}",
+                hot_count, album_count, ep_count, single_count
+            ),
+        };
+        self.author.description = description;
+        self.author.cover_url = cover_url;
+        self.author.set_cover_bytes(cover_bytes);
+        self.author.set_tiles(tiles);
+        self.author.hot_songs = hot_songs;
+        self.author.albums = albums;
+        self.author.eps = eps;
+        self.author.singles = singles;
+        self.author.focused_idx = 0;
+
+        Ok(())
+    }
+
+    fn execute_search(&mut self) -> Result<()> {
+        let (keywords, filter) = parse_search_input(&self.search.query);
+        if keywords.is_empty() {
+            self.search.status_line = "请输入搜索关键词".to_string();
+            self.search.set_results(Vec::new());
+            return Ok(());
+        }
+
+        self.search.filter = filter;
+        self.search.next_offset = 0;
+        self.search.has_more = true;
+
+        let response = self
+            .api
+            .search(&keywords, filter.search_type(), SEARCH_RESULT_PAGE_SIZE, 0)?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
+        }
+
+        let items = parse_search_items(&response, filter);
+        let count = items.len();
+        self.search.set_results(items);
+        self.search.status_line = format!("{} 搜索完成，共 {} 条", filter.display_name(), count);
+        Ok(())
+    }
+
+    fn load_more_search_results(&mut self) -> Result<usize> {
+        if !self.search.has_more {
+            return Ok(0);
+        }
+
+        let (keywords, filter) = parse_search_input(&self.search.query);
+        if keywords.is_empty() {
+            return Ok(0);
+        }
+
+        let response = self.api.search(
+            &keywords,
+            filter.search_type(),
+            SEARCH_RESULT_PAGE_SIZE,
+            self.search.next_offset,
+        )?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
+        }
+
+        let items = parse_search_items(&response, filter);
+        let added = self.search.append_results(items);
+
+        if added == 0 {
+            self.search.has_more = false;
+            self.search.status_line = format!(
+                "{} 搜索结果已全部加载，共 {} 条",
+                filter.display_name(),
+                self.search.results.len()
+            );
+            return Ok(0);
+        }
+
+        self.search.status_line = format!(
+            "{} 已加载 {} 条",
+            filter.display_name(),
+            self.search.results.len()
+        );
+        Ok(added)
+    }
+
+    fn mark_login_success(&mut self, text: &str) {
+        self.session_cookie = self.api.session_cookie().map(|value| value.to_string());
+        if let Some(cookie) = self.session_cookie.as_deref() {
+            let _ = session::save_cookie(cookie);
+        }
+        self.refresh_vip_audio_access();
+        self.home.status_line = text.to_string();
+        self.begin_startup_loading();
+        if let Err(err) = self.load_home_recommendations() {
+            self.home.status_line = format!("{}，推荐歌单加载失败: {}", text, err);
+        }
+        self.finish_startup_loading();
+    }
+}
+
+fn startup_loading_progress_at(elapsed: f32, bar_width: u16, complete_requested: bool) -> f32 {
+    if elapsed <= 0.0 {
+        return 0.0;
+    }
+
+    if elapsed < STARTUP_LOADING_FILL_SECS {
+        let t = (elapsed / STARTUP_LOADING_FILL_SECS).clamp(0.0, 1.0);
+        return 1.0 - (1.0 - t).powf(3.55);
+    }
+
+    if complete_requested {
+        return 1.0;
+    }
+
+    let bounce_elapsed = elapsed - STARTUP_LOADING_FILL_SECS;
+    let period = STARTUP_LOADING_BOUNCE_PERIOD_SECS.max(0.12);
+    let cycle = (bounce_elapsed / period).floor() as u32;
+
+    let max_retreat = STARTUP_LOADING_MAX_RETREAT_CHARS.min(bar_width.saturating_sub(1));
+    let retreat_chars = max_retreat.saturating_sub((cycle / STARTUP_LOADING_BOUNCE_GROUP) as u16);
+    if retreat_chars == 0 {
+        return 1.0;
+    }
+
+    let min_ratio = 1.0 - retreat_chars as f32 / bar_width.max(1) as f32;
+    let phase = (bounce_elapsed / period).fract();
+
+    if phase < 0.14 {
+        return 1.0;
+    }
+
+    if phase < 0.56 {
+        let t = ((phase - 0.14) / 0.42).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t).powf(3.2);
+        return 1.0 - (1.0 - min_ratio) * eased;
+    }
+
+    if phase < 0.96 {
+        let t = ((phase - 0.56) / 0.40).clamp(0.0, 1.0);
+        let eased = t.powf(3.2);
+        return min_ratio + (1.0 - min_ratio) * eased;
+    }
+
+    1.0
+}
+
+fn map_audio_state(state: AudioPlayerState) -> PlaybackRuntimeState {
+    match state {
+        AudioPlayerState::Playing => PlaybackRuntimeState::Playing,
+        AudioPlayerState::Paused => PlaybackRuntimeState::Paused,
+        AudioPlayerState::Stopped => PlaybackRuntimeState::Stopped,
+    }
+}
+
+fn braille_from_two_bars(left: u8, right: u8) -> char {
+    const LEFT_BITS: [u8; 4] = [6, 2, 1, 0];
+    const RIGHT_BITS: [u8; 4] = [7, 5, 4, 3];
+
+    let mut dots = 0u8;
+    for idx in 0..left.min(4) {
+        dots |= 1 << LEFT_BITS[idx as usize];
+    }
+    for idx in 0..right.min(4) {
+        dots |= 1 << RIGHT_BITS[idx as usize];
+    }
+
+    if dots == 0 {
+        ' '
+    } else {
+        char::from_u32(0x2800 + dots as u32).unwrap_or(' ')
+    }
+}
+
+fn pick_shuffle_index(len: usize, current: usize) -> usize {
+    if len <= 1 {
+        return 0;
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as usize;
+    let mut index = now % len;
+    if index == current {
+        index = (index + 1) % len;
+    }
+    index
+}
+
+fn response_code(response: &ApiResponse) -> i64 {
+    response
+        .body
+        .get("code")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(response.status)
+}
+
+fn response_message(response: &ApiResponse) -> String {
+    if let Some(message) = response.body.get("msg").and_then(|value| value.as_str()) {
+        return message.to_string();
+    }
+    if let Some(message) = response.body.get("message").and_then(|value| value.as_str()) {
+        return message.to_string();
+    }
+    "未知错误".to_string()
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn extract_qr_key(response: &ApiResponse) -> String {
+    for pointer in ["/data/unikey", "/data/uniKey", "/unikey", "/uniKey"] {
+        if let Some(value) = response.body.pointer(pointer).and_then(|value| value.as_str()) {
+            if !value.trim().is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn extract_qr_url(response: &ApiResponse) -> String {
+    for pointer in ["/data/qrurl", "/data/qrUrl", "/qrurl", "/qrUrl"] {
+        if let Some(value) = response.body.pointer(pointer).and_then(|value| value.as_str()) {
+            if !value.trim().is_empty() {
+                return value.to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn byte_index_for_char(text: &str, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+
+    text.char_indices()
+        .nth(char_index)
+        .map(|(idx, _)| idx)
+        .unwrap_or(text.len())
+}
+
+fn insert_char_at(text: &mut String, char_index: usize, ch: char) {
+    let byte_index = byte_index_for_char(text, char_index);
+    text.insert(byte_index, ch);
+}
+
+fn remove_char_before(text: &mut String, char_index: usize) -> usize {
+    if char_index == 0 {
+        return 0;
+    }
+
+    let start = byte_index_for_char(text, char_index - 1);
+    let end = byte_index_for_char(text, char_index);
+    if start < end && end <= text.len() {
+        text.drain(start..end);
+    }
+    char_index.saturating_sub(1)
+}
+
+fn remove_char_at(text: &mut String, char_index: usize) {
+    let start = byte_index_for_char(text, char_index);
+    let end = byte_index_for_char(text, char_index + 1);
+    if start < end && end <= text.len() {
+        text.drain(start..end);
+    }
+}
+
+fn char_index_for_display_column(text: &str, column: u16) -> usize {
+    let mut width = 0usize;
+    let target = column as usize;
+    let mut index = 0usize;
+
+    for ch in text.chars() {
+        let ch_width = ch.width().unwrap_or(1).max(1);
+        if width + ch_width > target {
+            break;
+        }
+        width += ch_width;
+        index += 1;
+    }
+
+    index
+}
+
+struct RecommendCard {
+    id: Option<String>,
+    title: String,
+    subtitle: String,
+    cover_url: Option<String>,
+}
+
+fn parse_recommend_cards(response: &ApiResponse, limit: usize) -> Vec<RecommendCard> {
+    response
+        .body
+        .get("recommend")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let title = item.get("name").and_then(|value| value.as_str())?.to_string();
+                    let subtitle = first_non_empty(item, &["/copywriter", "/creator/nickname"])
+                        .unwrap_or_else(|| "推荐歌单".to_string());
+                    Some(RecommendCard {
+                        id: parse_value_as_string(item.get("id")),
+                        title,
+                        subtitle,
+                        cover_url: first_non_empty(item, &["/picUrl", "/coverImgUrl"]),
+                    })
+                })
+                .take(limit.max(1))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_personalized_cards(response: &ApiResponse, limit: usize) -> Vec<RecommendCard> {
+    response
+        .body
+        .get("result")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let title = item.get("name").and_then(|value| value.as_str())?.to_string();
+                    let subtitle = first_non_empty(item, &["/copywriter", "/creator/nickname"])
+                        .unwrap_or_else(|| "推荐歌单".to_string());
+                    Some(RecommendCard {
+                        id: parse_value_as_string(item.get("id")),
+                        title,
+                        subtitle,
+                        cover_url: first_non_empty(item, &["/picUrl", "/coverImgUrl"]),
+                    })
+                })
+                .take(limit.max(1))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_tracks(items: &[Value]) -> Vec<PlaylistTrack> {
+    let mut tracks = Vec::new();
+
+    for item in items {
+        let Some(title) = item.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+
+        let artist = parse_artists(item)
+            .unwrap_or_else(|| "Unknown Artist".to_string())
+            .trim()
+            .to_string();
+        let duration_ms = item
+            .get("dt")
+            .and_then(|value| value.as_i64())
+            .or_else(|| item.get("duration").and_then(|value| value.as_i64()))
+            .unwrap_or(0);
+
+        tracks.push(PlaylistTrack {
+            kind: PlaylistTrackKind::Song,
+            id: parse_value_as_string(item.get("id")),
+            title: title.to_string(),
+            artist,
+            album: item
+                .pointer("/al/name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Unknown Album")
+                .to_string(),
+            cover_url: first_non_empty(item, &["/al/picUrl", "/album/picUrl"]),
+            duration_ms,
+            duration: format_duration(duration_ms),
+        });
+    }
+
+    tracks
+}
+
+fn first_non_empty_intro_text(value: &Value) -> Option<String> {
+    value
+        .get("introduction")
+        .and_then(|item| item.as_array())
+        .and_then(|items| {
+            items
+                .iter()
+                .find_map(|intro| first_non_empty(intro, &["/txt", "/ti"]))
+        })
+}
+
+fn artist_album_kind(item: &Value) -> AuthorTileKind {
+    let type_text = item
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let sub_type_text = item
+        .get("subType")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+
+    let type_lower = type_text.to_ascii_lowercase();
+    let sub_type_lower = sub_type_text.to_ascii_lowercase();
+
+    let is_single = type_lower.contains("single")
+        || sub_type_lower.contains("single")
+        || type_text.contains("单曲")
+        || sub_type_text.contains("单曲");
+    if is_single {
+        return AuthorTileKind::Single;
+    }
+
+    let is_ep = type_lower.contains("ep") || sub_type_lower.contains("ep") || type_text.contains("EP");
+    if is_ep {
+        return AuthorTileKind::Ep;
+    }
+
+    AuthorTileKind::Album
+}
+
+fn parse_search_input(raw: &str) -> (String, SearchFilter) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return (String::new(), SearchFilter::Single);
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+
+    for (suffix, filter) in [
+        ("@single", SearchFilter::Single),
+        ("@album", SearchFilter::Album),
+        ("@author", SearchFilter::Author),
+        ("@artist", SearchFilter::Author),
+        ("@list", SearchFilter::Playlist),
+    ] {
+        if lower.ends_with(suffix) {
+            let cut = trimmed.len().saturating_sub(suffix.len());
+            let stripped = &trimmed[..cut];
+            return (stripped.trim().to_string(), filter);
+        }
+    }
+
+    (trimmed.to_string(), SearchFilter::Single)
+}
+
+fn parse_search_items(response: &ApiResponse, filter: SearchFilter) -> Vec<SearchItem> {
+    let Some(result) = response.body.get("result") else {
+        return Vec::new();
+    };
+
+    match filter {
+        SearchFilter::Single => result
+            .get("songs")
+            .and_then(|value| value.as_array())
+            .map(|items| parse_song_items(items))
+            .unwrap_or_default(),
+        SearchFilter::Album => result
+            .get("albums")
+            .and_then(|value| value.as_array())
+            .map(|items| parse_album_items(items))
+            .unwrap_or_default(),
+        SearchFilter::Author => result
+            .get("artists")
+            .and_then(|value| value.as_array())
+            .map(|items| parse_author_items(items))
+            .unwrap_or_default(),
+        SearchFilter::Playlist => result
+            .get("playlists")
+            .and_then(|value| value.as_array())
+            .map(|items| parse_playlist_items(items))
+            .unwrap_or_default(),
+    }
+}
+
+fn parse_song_items(items: &[Value]) -> Vec<SearchItem> {
+    let mut out = Vec::new();
+
+    for item in items {
+        let Some(name) = item.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let artist = parse_artists(item).unwrap_or_else(|| "Unknown Artist".to_string());
+        let duration = item
+            .get("dt")
+            .and_then(|value| value.as_i64())
+            .or_else(|| item.get("duration").and_then(|value| value.as_i64()))
+            .unwrap_or(0);
+
+        out.push(SearchItem {
+            left_label: format!("{} - {}", name, artist),
+            right_label: format_duration(duration),
+            type_tag: None,
+            song_id: parse_value_as_string(item.get("id")),
+            album_id: None,
+            playlist_id: None,
+            artist_id: None,
+            title: Some(name.to_string()),
+            artist: Some(artist),
+            album: item
+                .pointer("/al/name")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            cover_url: first_non_empty(item, &["/al/picUrl", "/album/picUrl"]),
+            duration_ms: Some(duration),
+        });
+    }
+
+    out
+}
+
+fn parse_album_items(items: &[Value]) -> Vec<SearchItem> {
+    let mut out = Vec::new();
+
+    for item in items {
+        let Some(name) = item.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+
+        let artist = item
+            .pointer("/artist/name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Unknown Artist");
+        let size = item
+            .get("size")
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default();
+
+        out.push(SearchItem {
+            left_label: format!("{} - {}", name, artist),
+            right_label: format!("{} 首", size),
+            type_tag: Some("@album".to_string()),
+            song_id: None,
+            album_id: parse_value_as_string(item.get("id")),
+            playlist_id: None,
+            artist_id: None,
+            title: Some(name.to_string()),
+            artist: Some(artist.to_string()),
+            album: Some(name.to_string()),
+            cover_url: first_non_empty(item, &["/picUrl", "/blurPicUrl"]),
+            duration_ms: None,
+        });
+    }
+
+    out
+}
+
+fn parse_author_items(items: &[Value]) -> Vec<SearchItem> {
+    let mut out = Vec::new();
+
+    for item in items {
+        let Some(name) = item.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+
+        let album_size = item
+            .get("albumSize")
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default();
+
+        out.push(SearchItem {
+            left_label: name.to_string(),
+            right_label: format!("{} 张专辑", album_size),
+            type_tag: Some("@author".to_string()),
+            song_id: None,
+            album_id: None,
+            playlist_id: None,
+            artist_id: parse_value_as_string(item.get("id")),
+            title: None,
+            artist: Some(name.to_string()),
+            album: None,
+            cover_url: first_non_empty(item, &["/picUrl", "/img1v1Url", "/avatarUrl"]),
+            duration_ms: None,
+        });
+    }
+
+    out
+}
+
+fn parse_playlist_items(items: &[Value]) -> Vec<SearchItem> {
+    let mut out = Vec::new();
+
+    for item in items {
+        let Some(name) = item.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+
+        let creator = item
+            .pointer("/creator/nickname")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Unknown User");
+        let count = item
+            .get("trackCount")
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default();
+
+        out.push(SearchItem {
+            left_label: format!("{} - {}", name, creator),
+            right_label: format!("{} 首", count),
+            type_tag: Some("@list".to_string()),
+            song_id: None,
+            album_id: None,
+            playlist_id: parse_value_as_string(item.get("id")),
+            artist_id: None,
+            title: None,
+            artist: None,
+            album: None,
+            cover_url: first_non_empty(item, &["/coverImgUrl", "/picUrl"]),
+            duration_ms: None,
+        });
+    }
+
+    out
+}
+
+fn parse_artists(track: &Value) -> Option<String> {
+    let artists = track
+        .get("ar")
+        .and_then(|value| value.as_array())
+        .or_else(|| track.get("artists").and_then(|value| value.as_array()))?;
+
+    let names: Vec<String> = artists
+        .iter()
+        .filter_map(|item| item.get("name").and_then(|value| value.as_str()))
+        .map(|name| name.to_string())
+        .collect();
+
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(" / "))
+    }
+}
+
+fn format_duration(duration_ms: i64) -> String {
+    let total = (duration_ms.max(0) / 1000) as u64;
+    let mm = total / 60;
+    let ss = total % 60;
+    format!("{:02}:{:02}", mm, ss)
+}
+
+fn parse_value_as_string(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    if let Some(text) = value.as_str() {
+        if !text.trim().is_empty() {
+            return Some(text.to_string());
+        }
+    }
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
+    }
+    None
+}
+
+fn first_non_empty(value: &Value, pointers: &[&str]) -> Option<String> {
+    for pointer in pointers {
+        if let Some(text) = value.pointer(pointer).and_then(|item| item.as_str()) {
+            let text = text.trim();
+            if !text.is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn response_indicates_vip(response: &ApiResponse) -> bool {
+    let code = response
+        .body
+        .get("code")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(response.status);
+    if code != 200 {
+        return false;
+    }
+
+    let root = response.body.get("data").unwrap_or(&response.body);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    for pointer in [
+        "/redVipLevel",
+        "/redplusLevel",
+        "/musicPackage/vipCode",
+        "/associator/vipCode",
+        "/musicVipLevel",
+    ] {
+        if root
+            .pointer(pointer)
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0)
+            > 0
+        {
+            return true;
+        }
+    }
+
+    for pointer in [
+        "/vipStatus",
+        "/musicPackage/isSign",
+        "/associator/isSign",
+        "/isVip",
+    ] {
+        if root
+            .pointer(pointer)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+
+    let music_expire = root
+        .pointer("/musicPackage/expireTime")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
+    if music_expire > now_ms {
+        return true;
+    }
+
+    let associator_expire = root
+        .pointer("/associator/expireTime")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(0);
+    if associator_expire > now_ms {
+        return true;
+    }
+
+    false
+}
+
+fn cycle_bar_number(current: BarNumber, delta: i32) -> BarNumber {
+    let options = [
+        BarNumber::Auto,
+        BarNumber::N16,
+        BarNumber::N32,
+        BarNumber::N48,
+        BarNumber::N64,
+        BarNumber::N80,
+        BarNumber::N96,
+    ];
+    let current_idx = options
+        .iter()
+        .position(|item| *item == current)
+        .unwrap_or(0) as i32;
+    let next = (current_idx + delta).rem_euclid(options.len() as i32) as usize;
+    options[next]
+}
+
+fn keybind_matches(binding: &str, key: KeyEvent) -> bool {
+    let Some(expected) = normalize_keybind_text(binding) else {
+        return false;
+    };
+    let Some(actual) = key_event_to_keybind_text(key) else {
+        return false;
+    };
+    expected.eq_ignore_ascii_case(actual.as_str())
+}
+
+fn is_reserved_reset_combo(key: KeyEvent) -> bool {
+    key_event_to_keybind_text(key)
+        .map(|value| value.eq_ignore_ascii_case(RESERVED_RESET_KEYBIND))
+        .unwrap_or(false)
+}
+
+fn key_event_to_keybind_text(key: KeyEvent) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl");
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt");
+    }
+
+    let include_shift = key.modifiers.contains(KeyModifiers::SHIFT)
+        && !matches!(key.code, KeyCode::Char(ch) if ch.is_ascii_alphabetic());
+    if include_shift {
+        parts.push("Shift");
+    }
+
+    let key_token = key_code_to_keybind_token(key.code)?;
+    let mut out = parts.join("+");
+    if !out.is_empty() {
+        out.push('+');
+    }
+    out.push_str(&key_token);
+    Some(out)
+}
+
+fn normalize_keybind_text(raw: &str) -> Option<String> {
+    let mut ctrl = false;
+    let mut alt = false;
+    let mut shift = false;
+    let mut key_token: Option<String> = None;
+
+    for token in raw.split('+') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+
+        if token.eq_ignore_ascii_case("ctrl") || token.eq_ignore_ascii_case("control") {
+            ctrl = true;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("alt") {
+            alt = true;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("shift") {
+            shift = true;
+            continue;
+        }
+        if token.eq_ignore_ascii_case("backtab") {
+            shift = true;
+        }
+
+        if key_token.is_some() {
+            return None;
+        }
+        key_token = normalize_keybind_token(token);
+        if key_token.is_none() {
+            return None;
+        }
+    }
+
+    let key_token = key_token?;
+    let mut parts: Vec<&str> = Vec::new();
+    if ctrl {
+        parts.push("Ctrl");
+    }
+    if alt {
+        parts.push("Alt");
+    }
+    if shift {
+        parts.push("Shift");
+    }
+
+    let mut out = parts.join("+");
+    if !out.is_empty() {
+        out.push('+');
+    }
+    out.push_str(&key_token);
+    Some(out)
+}
+
+fn normalize_keybind_token(token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+
+    let lower = token.to_ascii_lowercase();
+    match lower.as_str() {
+        "esc" | "escape" => return Some("Esc".to_string()),
+        "enter" | "return" => return Some("Enter".to_string()),
+        "space" | "spacebar" => return Some("Space".to_string()),
+        "tab" | "backtab" => return Some("Tab".to_string()),
+        "left" => return Some("Left".to_string()),
+        "right" => return Some("Right".to_string()),
+        "up" => return Some("Up".to_string()),
+        "down" => return Some("Down".to_string()),
+        "home" => return Some("Home".to_string()),
+        "end" => return Some("End".to_string()),
+        "pageup" | "pgup" => return Some("PageUp".to_string()),
+        "pagedown" | "pgdown" | "pgdn" => return Some("PageDown".to_string()),
+        "insert" | "ins" => return Some("Insert".to_string()),
+        "delete" | "del" => return Some("Delete".to_string()),
+        "backspace" | "bs" => return Some("Backspace".to_string()),
+        "plus" => return Some("Plus".to_string()),
+        _ => {}
+    }
+
+    if let Some(rest) = lower.strip_prefix('f') {
+        if let Ok(num) = rest.parse::<u8>() {
+            if num > 0 {
+                return Some(format!("F{}", num));
+            }
+        }
+    }
+
+    let mut chars = token.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+
+    if ch == ' ' {
+        return Some("Space".to_string());
+    }
+    if ch == '+' {
+        return Some("Plus".to_string());
+    }
+    if ch.is_control() {
+        return None;
+    }
+    if ch.is_ascii_alphabetic() {
+        return Some(ch.to_ascii_uppercase().to_string());
+    }
+    Some(ch.to_string())
+}
+
+fn key_code_to_keybind_token(code: KeyCode) -> Option<String> {
+    match code {
+        KeyCode::Backspace => Some("Backspace".to_string()),
+        KeyCode::Enter => Some("Enter".to_string()),
+        KeyCode::Left => Some("Left".to_string()),
+        KeyCode::Right => Some("Right".to_string()),
+        KeyCode::Up => Some("Up".to_string()),
+        KeyCode::Down => Some("Down".to_string()),
+        KeyCode::Home => Some("Home".to_string()),
+        KeyCode::End => Some("End".to_string()),
+        KeyCode::PageUp => Some("PageUp".to_string()),
+        KeyCode::PageDown => Some("PageDown".to_string()),
+        KeyCode::Tab => Some("Tab".to_string()),
+        KeyCode::BackTab => Some("Tab".to_string()),
+        KeyCode::Delete => Some("Delete".to_string()),
+        KeyCode::Insert => Some("Insert".to_string()),
+        KeyCode::F(n) if n > 0 => Some(format!("F{}", n)),
+        KeyCode::Char(' ') => Some("Space".to_string()),
+        KeyCode::Char('+') => Some("Plus".to_string()),
+        KeyCode::Char(ch) => {
+            if ch.is_control() {
+                return None;
+            }
+            if ch.is_ascii_alphabetic() {
+                return Some(ch.to_ascii_uppercase().to_string());
+            }
+            Some(ch.to_string())
+        }
+        KeyCode::Esc => Some("Esc".to_string()),
+        _ => None,
+    }
+}
+
+fn placeholder_cover_ascii(width: u16, height: u16, ch: char) -> String {
+    if width == 0 || height == 0 {
+        return String::new();
+    }
+
+    let row = ch.to_string().repeat(width as usize);
+    let mut out = String::new();
+    for _ in 0..height {
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
+}

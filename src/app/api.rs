@@ -1,0 +1,307 @@
+use anyhow::{anyhow, Context, Result};
+use ncm_api::{create_client, ApiClient, ApiResponse, Query};
+use reqwest::{header, Client};
+use tokio::runtime::{Builder, Runtime};
+
+pub struct ApiState {
+    runtime: Runtime,
+    client: ApiClient,
+    cookie: Option<String>,
+    http: Client,
+}
+
+impl ApiState {
+    pub fn new(cookie: Option<String>) -> Result<Self> {
+        let runtime = Builder::new_multi_thread().enable_all().build()?;
+        let client = create_client(cookie.clone());
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            header::HeaderValue::from_static("Mozilla/5.0 CNMPlayer/0.1"),
+        );
+        headers.insert(
+            header::REFERER,
+            header::HeaderValue::from_static("https://music.163.com/"),
+        );
+        let http = Client::builder().default_headers(headers).build()?;
+
+        Ok(Self {
+            runtime,
+            client,
+            cookie,
+            http,
+        })
+    }
+
+    pub fn session_cookie(&self) -> Option<&str> {
+        self.cookie.as_deref()
+    }
+
+    pub fn set_cookie(&mut self, cookie: String) {
+        self.cookie = Some(cookie.clone());
+        self.client.set_cookie(cookie);
+    }
+
+    pub fn clear_cookie(&mut self) {
+        self.cookie = None;
+        self.client.set_cookie(String::new());
+    }
+
+    pub fn validate_cookie(&mut self, cookie: &str) -> Result<bool> {
+        let query = Query::new().cookie(cookie);
+        let response = self.runtime.block_on(self.client.login_status(&query))?;
+        let code = response
+            .body
+            .get("code")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(response.status);
+
+        if code == 200 {
+            self.set_cookie(cookie.to_string());
+            self.capture_cookie(&response);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    pub fn login_email(&mut self, email: &str, password: &str) -> Result<ApiResponse> {
+        let query = Query::new()
+            .param("email", email)
+            .param("password", password);
+        let response = self.runtime.block_on(self.client.login(&query))?;
+        self.capture_cookie(&response);
+        Ok(response)
+    }
+
+    pub fn captcha_sent(&mut self, phone: &str) -> Result<ApiResponse> {
+        let query = Query::new().param("phone", phone);
+        let response = self.runtime.block_on(self.client.captcha_sent(&query))?;
+        Ok(response)
+    }
+
+    pub fn login_phone_captcha(&mut self, phone: &str, captcha: &str) -> Result<ApiResponse> {
+        let query = Query::new()
+            .param("phone", phone)
+            .param("captcha", captcha);
+        let response = self.runtime.block_on(self.client.login_cellphone(&query))?;
+        self.capture_cookie(&response);
+        Ok(response)
+    }
+
+    pub fn login_qr_key(&mut self) -> Result<ApiResponse> {
+        let query = Query::new();
+        let response = self.runtime.block_on(self.client.login_qr_key(&query))?;
+        Ok(response)
+    }
+
+    pub fn login_qr_create(&mut self, key: &str) -> Result<ApiResponse> {
+        let query = Query::new().param("key", key);
+        let response = self.runtime.block_on(self.client.login_qr_create(&query))?;
+        Ok(response)
+    }
+
+    pub fn login_qr_check(&mut self, key: &str) -> Result<ApiResponse> {
+        let query = Query::new().param("key", key);
+        let response = self.runtime.block_on(self.client.login_qr_check(&query))?;
+        self.capture_cookie(&response);
+        Ok(response)
+    }
+
+    pub fn recommend_resource(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.runtime.block_on(self.client.recommend_resource(&query))?;
+        Ok(response)
+    }
+
+    pub fn personalized(&mut self, limit: usize) -> Result<ApiResponse> {
+        let limit = limit.max(1).to_string();
+        let query = self.query_with_cookie().param("limit", &limit);
+        let response = self.runtime.block_on(self.client.personalized(&query))?;
+        Ok(response)
+    }
+
+    pub fn playlist_detail(&mut self, id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", id);
+        let response = self.runtime.block_on(self.client.playlist_detail(&query))?;
+        Ok(response)
+    }
+
+    pub fn album(&mut self, id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", id);
+        let response = self.runtime.block_on(self.client.album(&query))?;
+        Ok(response)
+    }
+
+    pub fn artist_detail(&mut self, id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", id);
+        let response = self.runtime.block_on(self.client.artist_detail(&query))?;
+        Ok(response)
+    }
+
+    pub fn artist_desc(&mut self, id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", id);
+        let response = self.runtime.block_on(self.client.artist_desc(&query))?;
+        Ok(response)
+    }
+
+    pub fn artist_top_song(&mut self, id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", id);
+        let response = self.runtime.block_on(self.client.artist_top_song(&query))?;
+        Ok(response)
+    }
+
+    pub fn artist_album(&mut self, id: &str, limit: usize, offset: usize) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("id", id)
+            .param("limit", &limit.max(1).to_string())
+            .param("offset", &offset.to_string());
+        let response = self.runtime.block_on(self.client.artist_album(&query))?;
+        Ok(response)
+    }
+
+    pub fn song_detail(&mut self, song_id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("ids", song_id);
+        let response = self.runtime.block_on(self.client.song_detail(&query))?;
+        Ok(response)
+    }
+
+    pub fn lyric(&mut self, song_id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", song_id);
+        let response = self.runtime.block_on(self.client.lyric(&query))?;
+        Ok(response)
+    }
+
+    pub fn song_url(&mut self, song_id: &str) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("id", song_id)
+            .param("br", "320000");
+        let response = self.runtime.block_on(self.client.song_url(&query))?;
+        Ok(response)
+    }
+
+    pub fn song_url_v1(&mut self, song_id: &str, level: &str) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("id", song_id)
+            .param("level", level);
+        let response = self.runtime.block_on(self.client.song_url_v1(&query))?;
+        Ok(response)
+    }
+
+    pub fn song_stream_url_with_quality(&mut self, song_id: &str, level: &str) -> Result<String> {
+        let response = self.song_url_v1(song_id, level)?;
+        if let Some(url) = response
+            .body
+            .pointer("/data/0/url")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(url.to_string());
+        }
+
+        // Keep backward compatibility for songs that only expose legacy stream URLs.
+        let fallback = self.song_url(song_id)?;
+        if let Some(url) = fallback
+            .body
+            .pointer("/data/0/url")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(url.to_string());
+        }
+
+        Err(anyhow!(
+            "song stream url not found for id {} at level {}",
+            song_id,
+            level
+        ))
+    }
+
+    pub fn song_stream_url(&mut self, song_id: &str) -> Result<String> {
+        self.song_stream_url_with_quality(song_id, "exhigh")
+    }
+
+    pub fn vip_info(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.runtime.block_on(self.client.vip_info(&query))?;
+        Ok(response)
+    }
+
+    pub fn vip_info_v2(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.runtime.block_on(self.client.vip_info_v2(&query))?;
+        Ok(response)
+    }
+
+    pub fn search(&mut self, keywords: &str, search_type: i32, limit: usize, offset: usize) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("keywords", keywords)
+            .param("type", &search_type.to_string())
+            .param("limit", &limit.max(1).to_string())
+            .param("offset", &offset.to_string());
+        let response = self.runtime.block_on(self.client.search(&query))?;
+        Ok(response)
+    }
+
+    pub fn fetch_cover_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let bytes = self
+            .runtime
+            .block_on(async {
+                let response = self.http.get(url).send().await?;
+                let response = response.error_for_status()?;
+                let bytes = response.bytes().await?;
+                Ok::<Vec<u8>, reqwest::Error>(bytes.to_vec())
+            })
+            .with_context(|| format!("download cover image failed: {}", url))?;
+
+        Ok(bytes)
+    }
+
+    pub fn fetch_audio_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let bytes = self
+            .runtime
+            .block_on(async {
+                let response = self.http.get(url).send().await?;
+                let response = response.error_for_status()?;
+                let bytes = response.bytes().await?;
+                Ok::<Vec<u8>, reqwest::Error>(bytes.to_vec())
+            })
+            .with_context(|| format!("download audio failed: {}", url))?;
+
+        Ok(bytes)
+    }
+
+    fn query_with_cookie(&self) -> Query {
+        if let Some(cookie) = self.cookie.as_deref() {
+            return Query::new().cookie(cookie);
+        }
+        Query::new()
+    }
+
+    fn capture_cookie(&mut self, response: &ApiResponse) {
+        if response.cookie.is_empty() {
+            return;
+        }
+
+        let merged = response.cookie.join("; ");
+        self.cookie = Some(merged.clone());
+        self.client.set_cookie(merged);
+    }
+}

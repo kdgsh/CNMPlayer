@@ -1,0 +1,253 @@
+use crate::app::{App, HitRect, PlayerBarHitTargets, PlaybackRuntimeState};
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::Frame;
+use std::time::Duration;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub const PLAYER_BAR_HEIGHT: u16 = 5;
+
+pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(app.theme.color_surface()))
+            .style(base_bg_style(app)),
+        area,
+    );
+
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let top = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: 1,
+    };
+    let bottom = Rect {
+        x: inner.x,
+        y: inner.y + inner.height.saturating_sub(1),
+        width: inner.width,
+        height: 1,
+    };
+
+    let prev_label = "[]";
+    let play_label = if app.playback_state == PlaybackRuntimeState::Playing {
+        "[]"
+    } else {
+        "[]"
+    };
+    let next_label = "[]";
+    let controls = format!("{prev_label} {play_label} {next_label}");
+
+    let spectrum = if app.now_playing.is_some() && app.playback_state != PlaybackRuntimeState::Stopped
+    {
+        app.main_spectrum_braille()
+    } else {
+        " ".repeat(10)
+    };
+
+    let controls_w = display_width(&controls) as u16;
+    let spectrum_w = display_width(&spectrum).min(10) as u16;
+
+    let controls_col_w = controls_w.saturating_add(2).min(top.width);
+    let spectrum_col_w = spectrum_w.min(top.width.saturating_sub(controls_col_w));
+    let left_col_w = top
+        .width
+        .saturating_sub(controls_col_w)
+        .saturating_sub(spectrum_col_w);
+
+    let left_rect = Rect {
+        x: top.x,
+        y: top.y,
+        width: left_col_w,
+        height: 1,
+    };
+    let controls_rect = Rect {
+        x: left_rect.x + left_rect.width,
+        y: top.y,
+        width: controls_col_w,
+        height: 1,
+    };
+    let spectrum_rect = Rect {
+        x: controls_rect.x + controls_rect.width,
+        y: top.y,
+        width: spectrum_col_w,
+        height: 1,
+    };
+
+    let left_text = match app.now_playing.as_ref() {
+        Some(track) if !track.title.trim().is_empty() => {
+            if app.now_playing_artist_text().trim().is_empty() {
+                track.title.clone()
+            } else {
+                format!("{} - {}", track.title, app.now_playing_artist_text())
+            }
+        }
+        _ => String::new(),
+    };
+
+    let left_style = if app.now_playing.is_some() {
+        Style::default()
+            .fg(app.theme.color_accent3())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.color_subtext())
+    };
+
+    frame.render_widget(
+        Paragraph::new(clip_to_display_width(&left_text, left_rect.width as usize)).style(left_style),
+        left_rect,
+    );
+
+    frame.render_widget(
+        Paragraph::new(controls)
+            .style(Style::default().fg(app.theme.color_text()))
+            .alignment(Alignment::Center),
+        controls_rect,
+    );
+
+    frame.render_widget(
+        Paragraph::new(spectrum)
+            .style(Style::default().fg(app.theme.color_accent2()))
+            .alignment(Alignment::Right),
+        spectrum_rect,
+    );
+
+    let position = app.playback_position();
+    let duration = app.playback_duration();
+    let time_text = format!("{}/{}", format_mmss(position), format_mmss(duration));
+    let time_w = display_width(&time_text) as u16;
+
+    let progress_w = bottom.width.saturating_sub(time_w.saturating_add(1));
+    let progress_rect = Rect {
+        x: bottom.x,
+        y: bottom.y,
+        width: progress_w,
+        height: 1,
+    };
+    let time_rect = Rect {
+        x: bottom.x + progress_w,
+        y: bottom.y,
+        width: bottom.width.saturating_sub(progress_w),
+        height: 1,
+    };
+
+    let mut hits = PlayerBarHitTargets::default();
+
+    let controls_start = controls_rect.x + controls_rect.width.saturating_sub(controls_w) / 2;
+    let prev_w = display_width(prev_label) as u16;
+    let play_w = display_width(play_label) as u16;
+    let next_w = display_width(next_label) as u16;
+
+    let mut x = controls_start;
+    hits.prev = Some(HitRect {
+        x,
+        y: top.y,
+        width: prev_w,
+        height: 1,
+    });
+    x = x.saturating_add(prev_w).saturating_add(1);
+    hits.play_pause = Some(HitRect {
+        x,
+        y: top.y,
+        width: play_w,
+        height: 1,
+    });
+    x = x.saturating_add(play_w).saturating_add(1);
+    hits.next = Some(HitRect {
+        x,
+        y: top.y,
+        width: next_w,
+        height: 1,
+    });
+
+    if progress_w > 0 {
+        let ratio = progress_ratio(position, duration);
+        let filled = ((ratio * progress_w as f32).round() as u16).min(progress_w);
+
+        let mut spans = Vec::new();
+        spans.push(Span::styled(
+            "▁".repeat(filled as usize),
+            Style::default()
+                .fg(app.theme.color_accent3())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            "▁".repeat(progress_w.saturating_sub(filled) as usize),
+            Style::default().fg(app.theme.color_surface()),
+        ));
+
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+            progress_rect,
+        );
+
+        hits.progress = Some(HitRect {
+            x: progress_rect.x,
+            y: progress_rect.y,
+            width: progress_rect.width,
+            height: 1,
+        });
+    }
+
+    frame.render_widget(
+        Paragraph::new(time_text)
+            .style(Style::default().fg(app.theme.color_subtext()))
+            .alignment(Alignment::Right),
+        time_rect,
+    );
+
+    app.set_player_bar_hits(hits);
+}
+
+fn progress_ratio(position: Duration, duration: Duration) -> f32 {
+    if duration.as_millis() == 0 {
+        return 0.0;
+    }
+
+    (position.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
+}
+
+fn format_mmss(value: Duration) -> String {
+    let secs = value.as_secs();
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+fn base_bg_style(app: &App) -> Style {
+    if app.config.transparent_background {
+        Style::default()
+    } else {
+        Style::default().bg(app.theme.color_base())
+    }
+}
+
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+fn clip_to_display_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > max_width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
+}
