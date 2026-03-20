@@ -190,4 +190,6 @@ cargo build --release
 
 CNMPlayer 采用 [AGPL-3.0-only](LICENSE) 许可证。
 
+仓库内 vendored 代码的第三方归属与许可证声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 标准引用元数据和上游依赖请查看 [CITATION.cff](CITATION.cff)。

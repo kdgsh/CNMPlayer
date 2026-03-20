@@ -190,4 +190,6 @@ Settings keybind page:
 
 CNMPlayer is licensed under [AGPL-3.0-only](LICENSE).
 
+Third-party attributions and license notices for vendored code are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 See [CITATION.cff](CITATION.cff) for the standard citation metadata and upstream references.

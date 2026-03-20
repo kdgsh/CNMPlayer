@@ -20,7 +20,7 @@ ratatui = "0.26"
 crossterm = "0.27"
 directories = "6"
 tokio = { version = "1", features = ["full"] }
-ncm-api = { path = "../../参考文件/ncm-api-rs" }
+ncm-api = { path = "./ncm-api-rs" }
 qrcode = "0.14"
 image = "0.24"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
