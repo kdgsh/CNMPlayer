@@ -1,12 +1,13 @@
-use crate::app::App;
+use crate::app::{App, HomeSidebarHit, HomeSidebarSection};
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw_home(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
@@ -52,6 +53,9 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
     }
     if app.config.show_hints {
         draw_home_hint(frame, app, hint_area);
+    }
+    if app.home_sidebar.is_visible() {
+        draw_home_sidebar(frame, app, rows[0]);
     }
 
     player_bar::draw_collapsed_player_bar(frame, app, rows[1]);
@@ -206,16 +210,18 @@ fn draw_home_hint(frame: &mut Frame, app: &App, area: Rect) {
 
     let text = match app.config.language {
         Language::Zh => format!(
-            "{} 搜索  {} 设置  {} 全屏  {} 退出",
+            "{} 搜索  {} 设置  {} 侧边栏  {} 全屏  {} 退出",
             app.config.keybind_search_box,
             app.config.keybind_settings,
+            app.config.keybind_sidebar,
             app.config.keybind_fullscreen,
             app.config.keybind_quit
         ),
         Language::En => format!(
-            "{} Search  {} Settings  {} Fullscreen  {} Quit",
+            "{} Search  {} Settings  {} Sidebar  {} Fullscreen  {} Quit",
             app.config.keybind_search_box,
             app.config.keybind_settings,
+            app.config.keybind_sidebar,
             app.config.keybind_fullscreen,
             app.config.keybind_quit
         ),
@@ -227,6 +233,310 @@ fn draw_home_hint(frame: &mut Frame, app: &App, area: Rect) {
             .alignment(Alignment::Left),
         area,
     );
+}
+
+fn draw_home_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.width < 20 || area.height < 8 {
+        return;
+    }
+
+    let max_width = (area.width / 3).max(24).min(area.width);
+    let progress = app.home_sidebar.anim_progress.clamp(0.0, 1.0);
+    let width = ((max_width as f32) * progress).round() as u16;
+    if width < 12 {
+        return;
+    }
+
+    let sidebar = Rect {
+        x: area.x,
+        y: area.y,
+        width,
+        height: area.height,
+    };
+
+    frame.render_widget(Clear, sidebar);
+
+    app.set_home_sidebar_panel_hit(Some(crate::app::HitRect {
+        x: sidebar.x,
+        y: sidebar.y,
+        width: sidebar.width,
+        height: sidebar.height,
+    }));
+
+    let title = match app.config.language {
+        Language::Zh => "主页侧边栏",
+        Language::En => "Home Sidebar",
+    };
+
+    let panel_style = Style::default()
+        .fg(app.theme.color_subtext())
+        .bg(app.theme.color_surface());
+
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(Line::from(Span::styled(
+                title,
+                Style::default().fg(app.theme.color_subtext()),
+            )))
+            .border_style(Style::default().fg(app.theme.color_subtext()))
+            .style(panel_style),
+        sidebar,
+    );
+
+    let inner = sidebar.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    if inner.width < 8 || inner.height < 4 {
+        return;
+    }
+
+    let header_height = if inner.height >= 5 { 2 } else { 1 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(header_height), Constraint::Min(1)])
+        .split(inner);
+
+    let user_name = if app.home_sidebar.user_name.trim().is_empty() {
+        match app.config.language {
+            Language::Zh => "未识别用户".to_string(),
+            Language::En => "Unknown User".to_string(),
+        }
+    } else {
+        app.home_sidebar.user_name.clone()
+    };
+
+    let status = if app.home_sidebar.loading {
+        match app.config.language {
+            Language::Zh => "正在同步歌单...".to_string(),
+            Language::En => "Syncing playlists...".to_string(),
+        }
+    } else if app.home_sidebar.status_line.trim().is_empty() {
+        match app.config.language {
+            Language::Zh => "Ctrl+上下切换分区 上下切换歌单 Enter进入 Esc收起".to_string(),
+            Language::En => {
+                "Ctrl+Up/Down switch section, Up/Down switch playlist, Enter open, Esc collapse"
+                    .to_string()
+            }
+        }
+    } else {
+        app.home_sidebar.status_line.clone()
+    };
+
+    let mut header_lines = vec![Line::from(Span::styled(
+        user_name,
+        Style::default()
+            .fg(app.theme.color_text())
+            .add_modifier(Modifier::BOLD),
+    ))];
+    if header_height > 1 {
+        header_lines.push(Line::from(Span::styled(
+            status,
+            Style::default().fg(app.theme.color_subtext()),
+        )));
+    }
+    frame.render_widget(Paragraph::new(header_lines).wrap(Wrap { trim: true }), chunks[0]);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(chunks[1]);
+
+    let created_items = app.home_sidebar.created_playlists.clone();
+    let collected_items = app.home_sidebar.collected_playlists.clone();
+
+    draw_home_sidebar_section(
+        frame,
+        app,
+        sections[0],
+        match app.config.language {
+            Language::Zh => "用户创建的歌单",
+            Language::En => "Created Playlists",
+        },
+        &created_items,
+        HomeSidebarSection::Created,
+    );
+
+    draw_home_sidebar_section(
+        frame,
+        app,
+        sections[1],
+        match app.config.language {
+            Language::Zh => "用户收藏的歌单",
+            Language::En => "Collected Playlists",
+        },
+        &collected_items,
+        HomeSidebarSection::Collected,
+    );
+}
+
+fn draw_home_sidebar_section(
+    frame: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    title: &str,
+    items: &[crate::app::HomeSidebarPlaylist],
+    section: HomeSidebarSection,
+) {
+    if area.width < 6 || area.height < 3 {
+        return;
+    }
+
+    let section_focused = app.home_sidebar.expanded && app.home_sidebar.focused_section == section;
+    let section_title_style = if section_focused {
+        Style::default()
+            .fg(app.theme.color_accent2())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.color_subtext())
+    };
+
+    frame.render_widget(
+        Block::default().style(Style::default().bg(app.theme.color_surface())),
+        area,
+    );
+
+    let title_line_area = Rect {
+        x: area.x.saturating_sub(1),
+        y: area.y,
+        width: area.width.saturating_add(2),
+        height: 1,
+    };
+    if title_line_area.width > 2 {
+        let line_width = usize::from(title_line_area.width);
+        let title_max = line_width.saturating_sub(2);
+        let clipped_title = clip_to_display_width(title, title_max.max(1));
+        let used = 2 + display_width(&clipped_title);
+        let dash_count = line_width.saturating_sub(used);
+        let connector_style = Style::default().fg(app.theme.color_subtext());
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("├", connector_style),
+                Span::styled(clipped_title, section_title_style),
+                Span::styled("─".repeat(dash_count), connector_style),
+                Span::styled("┤", connector_style),
+            ]))
+            .style(Style::default().bg(app.theme.color_surface())),
+            title_line_area,
+        );
+    }
+
+    let inner = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(1),
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            match app.config.language {
+                Language::Zh => "暂无歌单",
+                Language::En => "No playlists",
+            },
+            Style::default().fg(app.theme.color_subtext()),
+        )));
+    } else {
+        let max_rows = inner.height as usize;
+        if max_rows == 0 {
+            return;
+        }
+        let total = items.len();
+        let focus_idx = if section_focused {
+            app.home_sidebar.focused_index.min(total.saturating_sub(1))
+        } else {
+            0
+        };
+        let start = if total <= max_rows {
+            0
+        } else {
+            focus_idx
+                .saturating_sub(max_rows / 2)
+                .min(total.saturating_sub(max_rows))
+        };
+
+        for (visual_idx, item) in items.iter().skip(start).take(max_rows).enumerate() {
+            let idx = start + visual_idx;
+            let left = if item.creator.trim().is_empty() {
+                format!("{:02}. {}", idx + 1, item.title)
+            } else {
+                format!("{:02}. {} - {}", idx + 1, item.title, item.creator)
+            };
+            let right = match app.config.language {
+                Language::Zh => format!("{}首", item.track_count),
+                Language::En => format!("{}", item.track_count),
+            };
+
+            let reserved = display_width(&right) + 1;
+            let left_max = usize::from(inner.width).saturating_sub(reserved);
+            let clipped_left = clip_to_display_width(&left, left_max);
+            let used = display_width(&clipped_left) + display_width(&right);
+            let spaces = usize::from(inner.width).saturating_sub(used).max(1);
+            let is_focused = section_focused && idx == app.home_sidebar.focused_index;
+
+            app.push_home_sidebar_playlist_hit(
+                crate::app::HitRect {
+                    x: inner.x,
+                    y: inner.y + visual_idx as u16,
+                    width: inner.width,
+                    height: 1,
+                },
+                HomeSidebarHit { section, index: idx },
+            );
+
+            let text_style = if is_focused {
+                Style::default()
+                    .fg(app.theme.color_accent2())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(app.theme.color_text())
+            };
+            let right_style = if is_focused {
+                Style::default().fg(app.theme.color_accent())
+            } else {
+                Style::default().fg(app.theme.color_subtext())
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(clipped_left, text_style),
+                Span::styled(" ".repeat(spaces), text_style),
+                Span::styled(right, right_style),
+            ]));
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
+        inner,
+    );
+}
+
+fn display_width(text: &str) -> usize {
+    UnicodeWidthStr::width(text)
+}
+
+fn clip_to_display_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > max_width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
 }
 
 fn base_bg_style(app: &App) -> Style {

@@ -1,5 +1,7 @@
 use crate::app::{App, Overlay};
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
+use crate::tmplayer::data::about::{about_info, BrailleImage};
+use crate::tmplayer::ui::borders::SOLID_BORDER;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -8,6 +10,12 @@ use ratatui::Frame;
 
 pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
     let size = frame.size();
+
+    if matches!(app.overlay, Some(Overlay::SettingsAbout)) {
+        draw_about_modal(frame, app, size);
+        return;
+    }
+
     let area = centered_rect(70, 20, size);
 
     frame.render_widget(Clear, area);
@@ -23,8 +31,9 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
+            .border_set(SOLID_BORDER)
             .title(title)
-            .border_style(Style::default().fg(app.theme.color_accent()))
+            .border_style(Style::default().fg(app.theme.color_subtext()))
             .style(base_bg_style(app)),
         area,
     );
@@ -37,7 +46,6 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
     match app.overlay {
         Some(Overlay::SettingsPlayback) => draw_playback_settings(frame, app, inner),
         Some(Overlay::SettingsKeybinds) => draw_keybind_settings(frame, app, inner),
-        Some(Overlay::SettingsAbout) => draw_about(frame, app, inner),
         _ => draw_root_settings(frame, app, inner),
     }
 }
@@ -47,7 +55,10 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
-    frame.render_widget(Paragraph::new(""), rows[0]);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[0],
+    );
 
     let items = vec![
         format!("{}: {}", l(app, "主题", "Theme"), app.config.theme),
@@ -81,8 +92,7 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
         .map(|(idx, text)| {
             let style = if idx == app.settings_selected {
                 Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent())
+                    .fg(app.theme.color_accent2())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(app.theme.color_text())
@@ -91,9 +101,15 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines), rows[1]);
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
+        rows[1],
+    );
 
-    frame.render_widget(Paragraph::new(""), rows[2]);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[2],
+    );
 }
 
 fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
@@ -101,7 +117,10 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
-    frame.render_widget(Paragraph::new(""), rows[0]);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[0],
+    );
 
     let bar_number = match app.config.bar_number {
         BarNumber::Auto => l(app, "自动", "Auto"),
@@ -158,8 +177,7 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         .map(|(idx, text)| {
             let style = if idx == app.settings_playback_selected {
                 Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent())
+                    .fg(app.theme.color_accent2())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(app.theme.color_text())
@@ -167,9 +185,15 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             Line::from(Span::styled(format!("  {}", text), style))
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines), rows[1]);
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
+        rows[1],
+    );
 
-    frame.render_widget(Paragraph::new(""), rows[2]);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[2],
+    );
 }
 
 fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
@@ -177,20 +201,21 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(2)])
         .split(inner);
-    frame.render_widget(Paragraph::new(""), rows[0]);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[0],
+    );
 
-    let lines: Vec<Line> = (0..9)
+    let mut lines: Vec<Line> = (0..9)
         .map(|idx| {
             let is_rebinding = app.settings_keybind_rebinding == Some(idx);
             let style = if is_rebinding {
                 Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent2())
+                    .fg(app.theme.color_accent())
                     .add_modifier(Modifier::BOLD)
             } else if idx == app.settings_keybind_selected {
                 Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent())
+                    .fg(app.theme.color_accent2())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(app.theme.color_text())
@@ -205,7 +230,22 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines), rows[1]);
+    lines.push(Line::from(Span::styled(
+        format!(
+            "  {}",
+            l(
+                app,
+                "侧边栏歌单区切换（Ctrl+up/down）",
+                "Sidebar Playlist Section Switch (Ctrl+Up/Down)",
+            )
+        ),
+        Style::default().fg(app.theme.color_subtext()),
+    )));
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
+        rows[1],
+    );
 
     let hint = if let Some(index) = app.settings_keybind_rebinding {
         format!(
@@ -226,32 +266,252 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
 
     frame.render_widget(
         Paragraph::new(hint)
-            .style(Style::default().fg(app.theme.color_subtext()))
+            .style(
+                Style::default()
+                    .fg(app.theme.color_subtext())
+                    .bg(app.theme.color_surface()),
+            )
             .wrap(ratatui::widgets::Wrap { trim: true }),
         rows[2],
     );
 }
 
-fn draw_about(frame: &mut Frame, app: &App, inner: Rect) {
-    let text = vec![
-        Line::from(Span::styled(
-            "CNMPlayer",
-            Style::default()
-                .fg(app.theme.color_accent())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            l(
-                app,
-                "全屏播放页基于 TMPlayer 原始代码整合。",
-                "Fullscreen playback is integrated from original TMPlayer code.",
-            ),
-            Style::default().fg(app.theme.color_text()),
-        )),
-    ];
+fn draw_about_modal(frame: &mut Frame, app: &App, size: Rect) {
+    let area = centered_rect(70, 22, size);
+    frame.render_widget(Clear, area);
 
-    frame.render_widget(Paragraph::new(text).alignment(Alignment::Left), inner);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(SOLID_BORDER)
+        .title(" about ")
+        .style(base_bg_style(app));
+    frame.render_widget(block, area);
+
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(inner);
+
+    draw_about_braille(frame, app, chunks[0]);
+    draw_about_text(frame, app, chunks[1]);
+
+    let info = about_info();
+    let version = format!("v{}", info.version);
+    let y = area.y + area.height.saturating_sub(1);
+    let version_area = Rect {
+        x: area.x.saturating_add(1),
+        y,
+        width: area.width.saturating_sub(2),
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(version)
+            .alignment(Alignment::Center)
+            .style(
+                Style::default()
+                    .fg(app.theme.color_subtext())
+                    .bg(app.theme.color_surface()),
+            ),
+        version_area,
+    );
+}
+
+fn draw_about_braille(frame: &mut Frame, app: &App, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let lines = about_braille_lines(area.width as usize, area.height as usize);
+    let p = Paragraph::new(lines)
+        .style(Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface()));
+    frame.render_widget(p, area);
+}
+
+fn draw_about_text(frame: &mut Frame, app: &App, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let info = about_info();
+    let max_width = area.width as usize;
+    if max_width == 0 {
+        return;
+    }
+
+    let mut rendered: Vec<String> = Vec::new();
+    for (k, v) in &info.links {
+        let line = if k.eq_ignore_ascii_case("github_url") {
+            v.to_string()
+        } else {
+            format!("{}: {}", k, v)
+        };
+        rendered.extend(wrap_text(&line, max_width));
+    }
+
+    let desc_lines: Vec<String> = wrap_text(&info.description, max_width);
+    if !desc_lines.is_empty() {
+        rendered.push(String::new());
+        rendered.extend(desc_lines);
+    }
+
+    let max_line_len = rendered
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(max_width);
+    let block_h = rendered.len() as u16;
+    let block_w = max_line_len.max(1) as u16;
+    let offset_x = (area.width.saturating_sub(block_w)) / 2;
+    let offset_y = if block_h <= area.height {
+        (area.height.saturating_sub(block_h)) / 2
+    } else {
+        0
+    };
+
+    let lines: Vec<Line> = rendered
+        .into_iter()
+        .map(|l| {
+            Line::styled(
+                l,
+                Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface()),
+            )
+        })
+        .collect();
+    let p = Paragraph::new(lines)
+        .style(Style::default().bg(app.theme.color_surface()))
+        .wrap(ratatui::widgets::Wrap { trim: false });
+    let text_h = area.height.saturating_sub(offset_y).min(block_h.max(1));
+    let text_area = Rect {
+        x: area.x + offset_x,
+        y: area.y + offset_y,
+        width: block_w,
+        height: text_h,
+    };
+    frame.render_widget(p, text_area);
+}
+
+fn wrap_text(s: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if s.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    for ch in s.chars() {
+        if buf.chars().count() >= width {
+            out.push(buf);
+            buf = String::new();
+        }
+        buf.push(ch);
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
+}
+
+fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
+    let blank = " ".repeat(width);
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let info = about_info();
+    let Some(selected) = select_about_braille_art(width, height, &info.braille_images) else {
+        return (0..height).map(|_| Line::from(blank.clone())).collect();
+    };
+
+    let mut rows: Vec<String> = selected
+        .art
+        .lines()
+        .map(|line| line.trim_end().to_string())
+        .collect();
+
+    let mut start = 0usize;
+    let mut end = rows.len();
+    while start < end && rows[start].trim().is_empty() {
+        start += 1;
+    }
+    while end > start && rows[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    rows = rows[start..end].to_vec();
+
+    let rows_w = rows.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let canvas_w = selected.width.max(rows_w);
+    let canvas_h = selected.height.max(rows.len());
+
+    let offset_x = width.saturating_sub(canvas_w) / 2;
+    let offset_y = height.saturating_sub(canvas_h) / 2;
+    let mut grid: Vec<Vec<char>> = vec![vec![' '; width]; height];
+
+    for (row_idx, row) in rows.iter().enumerate() {
+        let gy = offset_y + row_idx;
+        if gy >= height {
+            break;
+        }
+        for (col_idx, ch) in row.chars().enumerate() {
+            let gx = offset_x + col_idx;
+            if gx >= width {
+                break;
+            }
+            grid[gy][gx] = ch;
+        }
+    }
+
+    grid
+        .into_iter()
+        .map(|row| Line::from(row.into_iter().collect::<String>()))
+        .collect()
+}
+
+fn select_about_braille_art<'a>(
+    width: usize,
+    height: usize,
+    arts: &'a [BrailleImage],
+) -> Option<&'a BrailleImage> {
+    let mut best_fit: Option<(&BrailleImage, u128)> = None;
+    for art in arts {
+        if art.width == 0 || art.height == 0 {
+            continue;
+        }
+        if art.width <= width && art.height <= height {
+            let score = (art.width as u128) * (art.height as u128);
+            let should_replace = best_fit
+                .as_ref()
+                .map(|(_, best_score)| score > *best_score)
+                .unwrap_or(true);
+            if should_replace {
+                best_fit = Some((art, score));
+            }
+        }
+    }
+
+    if let Some((art, _)) = best_fit {
+        return Some(art);
+    }
+
+    arts
+        .iter()
+        .filter(|art| art.width > 0 && art.height > 0)
+        .min_by_key(|art| {
+            let dw = art.width.saturating_sub(width) as u128;
+            let dh = art.height.saturating_sub(height) as u128;
+            let overflow = dw
+                .saturating_mul(dh)
+                .saturating_add(dw)
+                .saturating_add(dh);
+            let area = (art.width as u128).saturating_mul(art.height as u128);
+            (overflow, area)
+        })
 }
 
 fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
@@ -266,7 +526,9 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn base_bg_style(app: &App) -> Style {
-    Style::default().bg(app.theme.color_base())
+    Style::default()
+        .fg(app.theme.color_subtext())
+        .bg(app.theme.color_surface())
 }
 
 fn audio_quality_label(app: &App, quality: AudioQuality) -> &'static str {

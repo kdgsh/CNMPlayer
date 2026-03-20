@@ -557,7 +557,7 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, " 设置 ", " Settings "))
-        .style(Style::default().fg(app.theme.color_accent()).bg(app.theme.color_base()));
+        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
     f.render_widget(block, area);
 
     let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 1 });
@@ -595,8 +595,7 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
     for (idx, text) in items.iter().enumerate() {
         let style = if idx == app.settings_selected {
             Style::default()
-                .fg(app.theme.color_base())
-                .bg(app.theme.color_accent())
+                .fg(app.theme.color_accent2())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(app.theme.color_text())
@@ -653,7 +652,7 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, " 播放页设置 ", " Playback Settings "))
-        .style(Style::default().fg(app.theme.color_accent()).bg(app.theme.color_base()));
+        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
     f.render_widget(block, area);
 
     let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 1 });
@@ -730,8 +729,7 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
     for (idx, text) in items.iter().enumerate() {
         let style = if idx == app.bar_settings_selected {
             Style::default()
-                .fg(app.theme.color_base())
-                .bg(app.theme.color_accent())
+                .fg(app.theme.color_accent2())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(app.theme.color_text())
@@ -844,8 +842,7 @@ fn render_local_audio_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &m
                 Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())
             } else {
                 Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent())
+                    .fg(app.theme.color_accent2())
                     .add_modifier(Modifier::BOLD)
             }
         } else if disabled {
@@ -1089,7 +1086,7 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, " 按键绑定 ", " Keybinds "))
-        .style(Style::default().fg(app.theme.color_accent()).bg(app.theme.color_base()));
+        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
     f.render_widget(block, area);
 
     let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 1 });
@@ -1114,7 +1111,7 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
             app.config.keybind_settings.as_str(),
         ),
         (
-            lang_text(app, "播放页侧边栏", "Playback Sidebar"),
+            lang_text(app, "侧边栏", "Sidebar"),
             app.config.keybind_sidebar.as_str(),
         ),
         (
@@ -1136,6 +1133,10 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         (
             lang_text(app, "模式切换", "Switch Mode"),
             app.config.keybind_toggle_mode.as_str(),
+        ),
+        (
+            lang_text(app, "侧边栏歌单区切换", "Sidebar Playlist Section Switch"),
+            "Ctrl+Up/Down",
         ),
         (lang_text(app, "按键绑定", "Keybinds"), "Ctrl+K"),
     ];

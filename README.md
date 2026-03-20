@@ -1,4 +1,4 @@
-<h1 align="center">CNMPlayer</h1>
+<h1 align="center"><img src="logo.svg"/></h1>
 
 <p align="center">
 	<a href="README.md">English</a>
@@ -142,7 +142,8 @@ Global shortcuts:
 - `Ctrl+S`: open the search box
 - `Ctrl+F`: open fullscreen playback
 - `T`: open settings
-- `P`: toggle the playback sidebar
+- `P`: toggle the sidebar
+- `Ctrl+Up` / `Ctrl+Down`: switch sidebar playlist section (Created / Collected) when the sidebar is expanded
 - `Q`: quit the host app
 - `Esc`: close overlays or go back from the current page
 - `Ctrl+K`: open help
@@ -156,6 +157,7 @@ Login page:
 - `F1`: QR login
 - `F2`: username login
 - `F3`: phone login
+- `Q`: quit the app
 - `Tab` / `Up` / `Down`: switch focus
 - `Enter`: confirm or submit
 

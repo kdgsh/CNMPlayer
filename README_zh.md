@@ -1,4 +1,4 @@
-<h1 align="center">CNMPlayer</h1>
+<h1 align="center"><img src="logo.svg"/></h1>
 
 <p align="center">
 	<a href="README.md">English</a>
@@ -142,7 +142,8 @@ cargo build --release
 - `Ctrl+S`：打开搜索框
 - `Ctrl+F`：打开全屏播放页
 - `T`：打开设置
-- `P`：切换播放页侧边栏
+- `P`：切换侧边栏
+- `Ctrl+Up` / `Ctrl+Down`：在侧边栏展开时切换歌单分区（用户创建 / 用户收藏）
 - `Q`：退出主程序
 - `Esc`：关闭浮层或返回当前页面
 - `Ctrl+K`：打开帮助
@@ -156,6 +157,7 @@ cargo build --release
 - `F1`：二维码登录
 - `F2`：用户名登录
 - `F3`：手机号登录
+- `Q`：退出程序
 - `Tab` / `↑` / `↓`：切换焦点
 - `Enter`：确认或提交
 

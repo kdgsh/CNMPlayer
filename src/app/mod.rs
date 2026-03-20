@@ -20,8 +20,9 @@ use api::ApiState;
 use player::{AudioPlayer, AudioPlayerState};
 
 const MAX_INPUT_LEN: usize = 64;
-const SEARCH_RESULT_PAGE_SIZE: usize = 30;
+const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
+const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 8;
 const SETTINGS_PLAYBACK_ITEMS: usize = 8;
 const SETTINGS_KEYBIND_ITEMS: usize = 9;
@@ -333,6 +334,198 @@ impl HomeState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeSidebarSection {
+    Created,
+    Collected,
+}
+
+#[derive(Debug, Clone)]
+pub struct HomeSidebarPlaylist {
+    pub id: Option<String>,
+    pub title: String,
+    pub creator: String,
+    pub track_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HomeSidebarHit {
+    pub section: HomeSidebarSection,
+    pub index: usize,
+}
+
+pub struct HomeSidebarState {
+    pub expanded: bool,
+    pub loading: bool,
+    pub user_id: Option<String>,
+    pub user_name: String,
+    pub created_playlists: Vec<HomeSidebarPlaylist>,
+    pub collected_playlists: Vec<HomeSidebarPlaylist>,
+    pub focused_section: HomeSidebarSection,
+    pub focused_index: usize,
+    pub created_focused_index: usize,
+    pub collected_focused_index: usize,
+    pub anim_progress: f32,
+    pub status_line: String,
+}
+
+impl Default for HomeSidebarState {
+    fn default() -> Self {
+        Self {
+            expanded: false,
+            loading: false,
+            user_id: None,
+            user_name: String::new(),
+            created_playlists: Vec::new(),
+            collected_playlists: Vec::new(),
+            focused_section: HomeSidebarSection::Created,
+            focused_index: 0,
+            created_focused_index: 0,
+            collected_focused_index: 0,
+            anim_progress: 0.0,
+            status_line: String::new(),
+        }
+    }
+}
+
+impl HomeSidebarState {
+    fn section_memory(&self, section: HomeSidebarSection) -> usize {
+        match section {
+            HomeSidebarSection::Created => self.created_focused_index,
+            HomeSidebarSection::Collected => self.collected_focused_index,
+        }
+    }
+
+    fn set_section_memory(&mut self, section: HomeSidebarSection, index: usize) {
+        match section {
+            HomeSidebarSection::Created => {
+                self.created_focused_index = index;
+            }
+            HomeSidebarSection::Collected => {
+                self.collected_focused_index = index;
+            }
+        }
+    }
+
+    fn sync_memory_from_current(&mut self) {
+        self.set_section_memory(self.focused_section, self.focused_index);
+    }
+
+    fn section_len(&self, section: HomeSidebarSection) -> usize {
+        match section {
+            HomeSidebarSection::Created => self.created_playlists.len(),
+            HomeSidebarSection::Collected => self.collected_playlists.len(),
+        }
+    }
+
+    pub fn clamp_focus(&mut self) {
+        let created_len = self.created_playlists.len();
+        let collected_len = self.collected_playlists.len();
+
+        self.created_focused_index = if created_len == 0 {
+            0
+        } else {
+            self.created_focused_index.min(created_len.saturating_sub(1))
+        };
+        self.collected_focused_index = if collected_len == 0 {
+            0
+        } else {
+            self.collected_focused_index.min(collected_len.saturating_sub(1))
+        };
+
+        if created_len == 0 && collected_len == 0 {
+            self.focused_section = HomeSidebarSection::Created;
+            self.focused_index = 0;
+            return;
+        }
+
+        match self.focused_section {
+            HomeSidebarSection::Created if created_len == 0 => {
+                self.focused_section = HomeSidebarSection::Collected;
+            }
+            HomeSidebarSection::Collected if collected_len == 0 => {
+                self.focused_section = HomeSidebarSection::Created;
+            }
+            _ => {}
+        }
+
+        self.focused_index = self.section_memory(self.focused_section);
+    }
+
+    pub fn reset_focus(&mut self) {
+        self.created_focused_index = 0;
+        self.collected_focused_index = 0;
+        self.focused_section = if !self.created_playlists.is_empty() {
+            HomeSidebarSection::Created
+        } else if !self.collected_playlists.is_empty() {
+            HomeSidebarSection::Collected
+        } else {
+            HomeSidebarSection::Created
+        };
+        self.focused_index = 0;
+        self.clamp_focus();
+    }
+
+    pub fn focus_next(&mut self) {
+        let len = self.section_len(self.focused_section);
+        if len == 0 {
+            return;
+        }
+        self.focused_index = (self.focused_index + 1) % len;
+        self.sync_memory_from_current();
+    }
+
+    pub fn focus_prev(&mut self) {
+        let len = self.section_len(self.focused_section);
+        if len == 0 {
+            return;
+        }
+        self.focused_index = if self.focused_index == 0 {
+            len - 1
+        } else {
+            self.focused_index - 1
+        };
+        self.sync_memory_from_current();
+    }
+
+    pub fn switch_section_prev(&mut self) {
+        self.sync_memory_from_current();
+        self.focused_section = match self.focused_section {
+            HomeSidebarSection::Created => HomeSidebarSection::Collected,
+            HomeSidebarSection::Collected => HomeSidebarSection::Created,
+        };
+        self.clamp_focus();
+    }
+
+    pub fn switch_section_next(&mut self) {
+        self.sync_memory_from_current();
+        self.focused_section = match self.focused_section {
+            HomeSidebarSection::Created => HomeSidebarSection::Collected,
+            HomeSidebarSection::Collected => HomeSidebarSection::Created,
+        };
+        self.clamp_focus();
+    }
+
+    pub fn set_focus(&mut self, section: HomeSidebarSection, index: usize) {
+        self.sync_memory_from_current();
+        self.focused_section = section;
+        self.focused_index = index;
+        self.sync_memory_from_current();
+        self.clamp_focus();
+    }
+
+    pub fn focused_playlist(&self) -> Option<&HomeSidebarPlaylist> {
+        match self.focused_section {
+            HomeSidebarSection::Created => self.created_playlists.get(self.focused_index),
+            HomeSidebarSection::Collected => self.collected_playlists.get(self.focused_index),
+        }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.expanded || self.anim_progress > 0.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PlaylistTrack {
     pub kind: PlaylistTrackKind,
@@ -455,6 +648,7 @@ impl SearchState {
     }
 }
 
+#[derive(Clone)]
 pub struct PlaylistState {
     pub id: Option<String>,
     pub title: String,
@@ -905,6 +1099,7 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub login: LoginState,
     pub home: HomeState,
+    pub home_sidebar: HomeSidebarState,
     pub playlist: PlaylistState,
     pub author: AuthorState,
     pub search: SearchState,
@@ -915,6 +1110,8 @@ pub struct App {
     pub playback_state: PlaybackRuntimeState,
     pub startup_loading_progress: f32,
     pub player_bar_hits: PlayerBarHitTargets,
+    pub home_sidebar_panel_hit: Option<HitRect>,
+    pub home_sidebar_playlist_hits: Vec<(HitRect, HomeSidebarHit)>,
     pub home_tile_hits: Vec<(HitRect, usize)>,
     pub playlist_track_hits: Vec<(HitRect, usize)>,
     pub author_tile_hits: Vec<(HitRect, usize)>,
@@ -934,6 +1131,7 @@ pub struct App {
     pub vip_audio_unlocked: bool,
     search_return_page: Page,
     playlist_return_page: Page,
+    playlist_section_return_snapshot: Option<PlaylistState>,
     qr_last_poll_at: Option<Instant>,
     startup_loading_started_at: Option<Instant>,
     startup_loading_complete_requested: bool,
@@ -957,6 +1155,7 @@ impl App {
             overlay: None,
             login: LoginState::default(),
             home: HomeState::default(),
+            home_sidebar: HomeSidebarState::default(),
             playlist: PlaylistState::default(),
             author: AuthorState::default(),
             search: SearchState::default(),
@@ -967,6 +1166,8 @@ impl App {
             playback_state: PlaybackRuntimeState::Stopped,
             startup_loading_progress: 0.0,
             player_bar_hits: PlayerBarHitTargets::default(),
+            home_sidebar_panel_hit: None,
+            home_sidebar_playlist_hits: Vec::new(),
             home_tile_hits: Vec::new(),
             playlist_track_hits: Vec::new(),
             author_tile_hits: Vec::new(),
@@ -986,6 +1187,7 @@ impl App {
             vip_audio_unlocked: false,
             search_return_page: Page::Home,
             playlist_return_page: Page::Home,
+            playlist_section_return_snapshot: None,
             qr_last_poll_at: None,
             startup_loading_started_at: None,
             startup_loading_complete_requested: false,
@@ -1027,6 +1229,7 @@ impl App {
         self.tick_audio();
         self.tick_main_cava();
         self.tick_search_box_animation();
+        self.tick_home_sidebar_animation();
         self.tick_startup_loading();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
@@ -1155,10 +1358,20 @@ impl App {
     }
 
     pub fn clear_content_hits(&mut self) {
+        self.home_sidebar_panel_hit = None;
+        self.home_sidebar_playlist_hits.clear();
         self.home_tile_hits.clear();
         self.playlist_track_hits.clear();
         self.author_tile_hits.clear();
         self.search_item_hits.clear();
+    }
+
+    pub fn set_home_sidebar_panel_hit(&mut self, rect: Option<HitRect>) {
+        self.home_sidebar_panel_hit = rect;
+    }
+
+    pub fn push_home_sidebar_playlist_hit(&mut self, rect: HitRect, hit: HomeSidebarHit) {
+        self.home_sidebar_playlist_hits.push((rect, hit));
     }
 
     pub fn push_home_tile_hit(&mut self, rect: HitRect, index: usize) {
@@ -1326,7 +1539,7 @@ impl App {
                 self.launch_fullscreen_requested = true;
             }
             KeybindAction::Settings => self.open_settings(),
-            KeybindAction::Sidebar => {}
+            KeybindAction::Sidebar => self.toggle_home_sidebar(),
             KeybindAction::Quit => {
                 self.should_quit = true;
             }
@@ -1337,14 +1550,87 @@ impl App {
         }
     }
 
-    fn cycle_sidebar_page(&mut self) {
-        self.page = match self.page {
-            Page::Home => Page::Playlist,
-            Page::Playlist => Page::Search,
-            Page::Search => Page::Home,
-            Page::Author => Page::Home,
-            other => other,
+    fn toggle_home_sidebar(&mut self) {
+        if self.page != Page::Home || self.overlay.is_some() {
+            return;
+        }
+
+        if self.home_sidebar.expanded {
+            self.home_sidebar.expanded = false;
+            return;
+        }
+
+        self.home_sidebar.expanded = true;
+
+        if !self.home_sidebar.created_playlists.is_empty()
+            || !self.home_sidebar.collected_playlists.is_empty()
+        {
+            self.home_sidebar.reset_focus();
+            return;
+        }
+
+        match self.load_home_sidebar_playlists() {
+            Ok(()) => {
+                self.home.status_line = self.home_sidebar.status_line.clone();
+                self.home_sidebar.reset_focus();
+            }
+            Err(err) => {
+                let text = format!(
+                    "{}: {}",
+                    self.lang_text("主页歌单加载失败", "Failed to load home playlists"),
+                    err
+                );
+                self.home_sidebar.status_line = text.clone();
+                self.home.status_line = text;
+            }
+        }
+    }
+
+    fn open_focused_home_sidebar_playlist(&mut self) {
+        let (playlist_id, title) = {
+            let Some(item) = self.home_sidebar.focused_playlist() else {
+                self.home.status_line = self
+                    .lang_text("侧边栏暂无可打开歌单", "No sidebar playlist to open")
+                    .to_string();
+                return;
+            };
+
+            let Some(playlist_id) = item.id.clone() else {
+                self.home.status_line = self
+                    .lang_text("当前歌单缺少 ID，无法打开", "The selected playlist has no ID")
+                    .to_string();
+                return;
+            };
+
+            (playlist_id, item.title.clone())
         };
+
+        self.home.status_line = format!(
+            "{} {}",
+            self.lang_text("正在加载", "Loading"),
+            title
+        );
+
+        match self.load_playlist_detail(&playlist_id) {
+            Ok(()) => {
+                self.playlist_return_page = Page::Home;
+                self.playlist_section_return_snapshot = None;
+                self.home_sidebar.expanded = false;
+                self.page = Page::Playlist;
+                self.home.status_line = format!(
+                    "{} {}",
+                    self.lang_text("已打开", "Opened"),
+                    title
+                );
+            }
+            Err(err) => {
+                self.home.status_line = format!(
+                    "{}: {}",
+                    self.lang_text("打开歌单失败", "Failed to open playlist"),
+                    err
+                );
+            }
+        }
     }
 
     fn keybind_action_from_event(&self, key: KeyEvent) -> Option<KeybindAction> {
@@ -1437,7 +1723,7 @@ impl App {
             0 => self.lang_text("搜索框", "Search Box"),
             1 => self.lang_text("全屏播放页", "Fullscreen"),
             2 => self.lang_text("设置弹窗", "Settings Modal"),
-            3 => self.lang_text("播放页侧边栏", "Playback Sidebar"),
+            3 => self.lang_text("侧边栏", "Sidebar"),
             4 => self.lang_text("退出应用", "Quit"),
             5 => self.lang_text("上一首", "Previous"),
             6 => self.lang_text("下一首", "Next"),
@@ -1820,6 +2106,7 @@ impl App {
         }
 
         self.playlist_return_page = Page::Author;
+        self.playlist_section_return_snapshot = None;
         self.playlist.id = self
             .author
             .id
@@ -1849,7 +2136,7 @@ impl App {
     }
 
     fn open_focused_playlist_album(&mut self) {
-        let (album_id, title, fallback_cover_url) = {
+        let (album_id, title, fallback_cover_url, track_kind) = {
             let Some(track) = self.playlist.tracks.get(self.playlist.focused_idx) else {
                 return;
             };
@@ -1862,11 +2149,28 @@ impl App {
                 return;
             };
 
-            (album_id, track.title.clone(), track.cover_url.clone())
+            (
+                album_id,
+                track.title.clone(),
+                track.cover_url.clone(),
+                track.kind,
+            )
+        };
+
+        let is_author_section_album = self.playlist_return_page == Page::Author
+            && matches!(
+                track_kind,
+                PlaylistTrackKind::Album | PlaylistTrackKind::Ep | PlaylistTrackKind::Single
+            );
+        let section_snapshot = if is_author_section_album {
+            Some(self.playlist.clone())
+        } else {
+            None
         };
 
         match self.load_album_detail(&album_id) {
             Ok(()) => {
+                self.playlist_section_return_snapshot = section_snapshot;
                 if self.playlist.cover_bytes.is_none() {
                     if let Some(url) = fallback_cover_url.as_deref() {
                         let bytes = self
@@ -1936,6 +2240,7 @@ impl App {
                         }
                     }
                 }
+                self.playlist_section_return_snapshot = None;
                 self.page = Page::Author;
                 self.search.status_line = format!("已打开作者 {}", self.author.title);
             }
@@ -1982,6 +2287,7 @@ impl App {
 
         match self.load_album_detail(&album_id) {
             Ok(()) => {
+                self.playlist_section_return_snapshot = None;
                 if self.playlist.cover_bytes.is_none() {
                     if let Some(url) = fallback_cover_url.as_deref() {
                         let bytes = self
@@ -2044,6 +2350,7 @@ impl App {
 
         match self.load_playlist_detail(&playlist_id) {
             Ok(()) => {
+                self.playlist_section_return_snapshot = None;
                 if self.playlist.cover_bytes.is_none() {
                     if let Some(url) = fallback_cover_url.as_deref() {
                         let bytes = self
@@ -2539,6 +2846,11 @@ impl App {
             KeyCode::BackTab | KeyCode::Up => self.login.prev_focus(),
             KeyCode::Enter => self.submit_login_action(),
             KeyCode::Backspace => self.login.pop_char(),
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.should_quit = true;
+                }
+            }
             KeyCode::Char(ch) => {
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
                     self.login.push_char(ch);
@@ -2549,6 +2861,33 @@ impl App {
     }
 
     fn handle_home_key(&mut self, key: KeyEvent) {
+        if self.home_sidebar.expanded {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                match key.code {
+                    KeyCode::Up => {
+                        self.home_sidebar.switch_section_prev();
+                        return;
+                    }
+                    KeyCode::Down => {
+                        self.home_sidebar.switch_section_next();
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+
+            match key.code {
+                KeyCode::Esc => {
+                    self.home_sidebar.expanded = false;
+                }
+                KeyCode::Up | KeyCode::BackTab => self.home_sidebar.focus_prev(),
+                KeyCode::Down | KeyCode::Tab => self.home_sidebar.focus_next(),
+                KeyCode::Enter => self.open_focused_home_sidebar_playlist(),
+                _ => {}
+            }
+            return;
+        }
+
         match key.code {
             KeyCode::Tab => self.home.focus_next(),
             KeyCode::BackTab => self.home.focus_prev(),
@@ -2567,6 +2906,10 @@ impl App {
             KeyCode::Down | KeyCode::Tab => self.playlist.focus_next(),
             KeyCode::Enter => self.play_focused_playlist_track(),
             KeyCode::Esc | KeyCode::Left => {
+                if let Some(snapshot) = self.playlist_section_return_snapshot.take() {
+                    self.playlist = snapshot;
+                    return;
+                }
                 self.page = match self.playlist_return_page {
                     Page::Author => Page::Author,
                     Page::Search => Page::Search,
@@ -2598,6 +2941,17 @@ impl App {
             self.search_box_anim_height = (self.search_box_anim_height + 1).min(SEARCH_BOX_TARGET_HEIGHT);
         } else {
             self.search_box_anim_height = 0;
+        }
+    }
+
+    fn tick_home_sidebar_animation(&mut self) {
+        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
+        let step = 0.16;
+
+        if self.home_sidebar.anim_progress < target {
+            self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress + step).min(target);
+        } else if self.home_sidebar.anim_progress > target {
+            self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress - step).max(target);
         }
     }
 
@@ -2672,6 +3026,31 @@ impl App {
     fn handle_content_click(&mut self, col: u16, row: u16) -> bool {
         match self.page {
             Page::Home => {
+                if self.home_sidebar.is_visible() {
+                    if let Some(panel) = self.home_sidebar_panel_hit {
+                        if panel.contains(col, row) {
+                            let sidebar_hit = self
+                                .home_sidebar_playlist_hits
+                                .iter()
+                                .find(|(rect, _)| rect.contains(col, row))
+                                .map(|(_, hit)| *hit);
+                            if let Some(hit) = sidebar_hit {
+                                if self.home_sidebar.expanded {
+                                    self.home_sidebar.set_focus(hit.section, hit.index);
+                                    self.open_focused_home_sidebar_playlist();
+                                }
+                            }
+                            self.last_content_click = None;
+                            return true;
+                        }
+                    }
+
+                    if self.home_sidebar.expanded {
+                        self.last_content_click = None;
+                        return true;
+                    }
+                }
+
                 let hit = self
                     .home_tile_hits
                     .iter()
@@ -2770,6 +3149,7 @@ impl App {
             self.search.status_line = format!("搜索失败: {}", err);
             self.search.set_results(Vec::new());
         }
+        self.playlist_section_return_snapshot = None;
         self.page = Page::Search;
         self.close_overlay();
     }
@@ -3117,6 +3497,8 @@ impl App {
         self.playlist = PlaylistState::default();
         self.author = AuthorState::default();
         self.home = HomeState::default();
+        self.home_sidebar = HomeSidebarState::default();
+        self.playlist_section_return_snapshot = None;
         self.startup_loading_progress = 0.0;
         self.startup_loading_started_at = None;
         self.last_content_click = None;
@@ -3147,6 +3529,7 @@ impl App {
         match self.load_playlist_detail(&playlist_id) {
             Ok(()) => {
                 self.playlist_return_page = Page::Home;
+                self.playlist_section_return_snapshot = None;
                 self.page = Page::Playlist;
                 self.home.status_line = format!("已打开 {}", title);
             }
@@ -3360,8 +3743,90 @@ impl App {
         }
 
         self.home.set_tiles(tiles);
-        self.home.status_line = "方向键/Tab 切换，Enter 打开歌单".to_string();
+        self.home.status_line = self
+            .lang_text(
+                "方向键/Tab 切换，Enter 打开歌单",
+                "Use arrows/Tab to focus, Enter to open playlist",
+            )
+            .to_string();
         Ok(())
+    }
+
+    fn load_home_sidebar_playlists(&mut self) -> Result<()> {
+        self.home_sidebar.loading = true;
+
+        let result = (|| -> Result<()> {
+            let account = self
+                .api
+                .user_account()
+                .or_else(|_| self.api.login_status())?;
+            let account_code = response_code(&account);
+            if account_code != 200 {
+                return Err(anyhow!(
+                    "{}({}): {}",
+                    self.lang_text("账号信息请求失败", "Failed to fetch account profile"),
+                    account_code,
+                    response_message(&account)
+                ));
+            }
+
+            let uid = extract_current_user_id(&account)
+                .ok_or_else(|| anyhow!(self.lang_text("未找到当前用户 ID", "Current user id not found")))?;
+            let user_name = extract_current_user_name(&account)
+                .unwrap_or_else(|| self.lang_text("当前用户", "Current User").to_string());
+
+            let created_response = self
+                .api
+                .user_playlist_create(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)?;
+            let created_code = response_code(&created_response);
+            if created_code != 200 {
+                return Err(anyhow!(
+                    "{}({}): {}",
+                    self.lang_text("创建歌单请求失败", "Created playlists request failed"),
+                    created_code,
+                    response_message(&created_response)
+                ));
+            }
+
+            let collected_response = self
+                .api
+                .user_playlist_collect(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)?;
+            let collected_code = response_code(&collected_response);
+            if collected_code != 200 {
+                return Err(anyhow!(
+                    "{}({}): {}",
+                    self.lang_text("收藏歌单请求失败", "Collected playlists request failed"),
+                    collected_code,
+                    response_message(&collected_response)
+                ));
+            }
+
+            let created_playlists = parse_home_sidebar_playlists(&created_response);
+            let collected_playlists = parse_home_sidebar_playlists(&collected_response);
+
+            self.home_sidebar.user_id = Some(uid);
+            self.home_sidebar.user_name = user_name;
+            self.home_sidebar.created_playlists = created_playlists;
+            self.home_sidebar.collected_playlists = collected_playlists;
+            self.home_sidebar.clamp_focus();
+            self.home_sidebar.status_line = match self.config.language {
+                Language::Zh => format!(
+                    "创建 {} 个，收藏 {} 个",
+                    self.home_sidebar.created_playlists.len(),
+                    self.home_sidebar.collected_playlists.len()
+                ),
+                Language::En => format!(
+                    "{} created, {} collected",
+                    self.home_sidebar.created_playlists.len(),
+                    self.home_sidebar.collected_playlists.len()
+                ),
+            };
+
+            Ok(())
+        })();
+
+        self.home_sidebar.loading = false;
+        result
     }
 
     fn load_playlist_detail(&mut self, playlist_id: &str) -> Result<()> {
@@ -3794,6 +4259,8 @@ impl App {
             let _ = session::save_cookie(cookie);
         }
         self.refresh_vip_audio_access();
+        self.home_sidebar = HomeSidebarState::default();
+        self.playlist_section_return_snapshot = None;
         self.home.status_line = text.to_string();
         self.begin_startup_loading();
         if let Err(err) = self.load_home_recommendations() {
@@ -4057,6 +4524,96 @@ fn parse_personalized_cards(response: &ApiResponse, limit: usize) -> Vec<Recomme
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn parse_home_sidebar_playlists(response: &ApiResponse) -> Vec<HomeSidebarPlaylist> {
+    let Some(items) = response
+        .body
+        .get("playlist")
+        .and_then(|value| value.as_array())
+        .or_else(|| {
+            response
+                .body
+                .pointer("/data/list")
+                .and_then(|value| value.as_array())
+        })
+        .or_else(|| {
+            response
+                .body
+                .pointer("/data/playlist")
+                .and_then(|value| value.as_array())
+        })
+    else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(title) = item.get("name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+
+        let track_count = item
+            .get("trackCount")
+            .and_then(|value| value.as_u64())
+            .map(|value| value as usize)
+            .or_else(|| {
+                item.get("trackCount")
+                    .and_then(|value| value.as_i64())
+                    .map(|value| value.max(0) as usize)
+            })
+            .unwrap_or(0);
+
+        out.push(HomeSidebarPlaylist {
+            id: parse_value_as_string(item.get("id")),
+            title: title.to_string(),
+            creator: item
+                .pointer("/creator/nickname")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Unknown User")
+                .to_string(),
+            track_count,
+        });
+    }
+
+    out
+}
+
+fn extract_current_user_id(response: &ApiResponse) -> Option<String> {
+    for pointer in [
+        "/profile/userId",
+        "/data/profile/userId",
+        "/account/id",
+        "/data/account/id",
+    ] {
+        if let Some(value) = response.body.pointer(pointer) {
+            if let Some(id) = parse_value_as_string(Some(value)) {
+                if !id.trim().is_empty() {
+                    return Some(id);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_current_user_name(response: &ApiResponse) -> Option<String> {
+    for pointer in [
+        "/profile/nickname",
+        "/data/profile/nickname",
+        "/account/userName",
+        "/data/account/userName",
+    ] {
+        if let Some(name) = response.body.pointer(pointer).and_then(|value| value.as_str()) {
+            let name = name.trim();
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 fn parse_tracks(items: &[Value]) -> Vec<PlaylistTrack> {

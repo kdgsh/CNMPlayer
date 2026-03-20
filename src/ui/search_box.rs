@@ -1,5 +1,6 @@
 use crate::app::App;
 use crate::data::config::Language;
+use crate::tmplayer::ui::borders::SOLID_BORDER;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -31,7 +32,8 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(app.theme.color_accent()))
+            .border_set(SOLID_BORDER)
+            .border_style(Style::default().fg(app.theme.color_subtext()))
             .style(base_bg_style(app)),
         area,
     );
@@ -59,9 +61,13 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
     };
 
     let style = if input.trim().is_empty() {
-        Style::default().fg(app.theme.color_subtext())
+        Style::default()
+            .fg(app.theme.color_subtext())
+            .bg(app.theme.color_surface())
     } else {
-        Style::default().fg(app.theme.color_text())
+        Style::default()
+            .fg(app.theme.color_text())
+            .bg(app.theme.color_surface())
     };
 
     frame.render_widget(
@@ -84,5 +90,7 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
 }
 
 fn base_bg_style(app: &App) -> Style {
-    Style::default().bg(app.theme.color_base())
+    Style::default()
+        .fg(app.theme.color_subtext())
+        .bg(app.theme.color_surface())
 }

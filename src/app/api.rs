@@ -66,6 +66,40 @@ impl ApiState {
         Ok(false)
     }
 
+    pub fn login_status(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.runtime.block_on(self.client.login_status(&query))?;
+        self.capture_cookie(&response);
+        Ok(response)
+    }
+
+    pub fn user_account(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.runtime.block_on(self.client.user_account(&query))?;
+        self.capture_cookie(&response);
+        Ok(response)
+    }
+
+    pub fn user_playlist_create(&mut self, uid: &str, limit: usize, offset: usize) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("uid", uid)
+            .param("limit", &limit.max(1).to_string())
+            .param("offset", &offset.to_string());
+        let response = self.runtime.block_on(self.client.user_playlist_create(&query))?;
+        Ok(response)
+    }
+
+    pub fn user_playlist_collect(&mut self, uid: &str, limit: usize, offset: usize) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("uid", uid)
+            .param("limit", &limit.max(1).to_string())
+            .param("offset", &offset.to_string());
+        let response = self.runtime.block_on(self.client.user_playlist_collect(&query))?;
+        Ok(response)
+    }
+
     pub fn login_email(&mut self, email: &str, password: &str) -> Result<ApiResponse> {
         let query = Query::new()
             .param("email", email)
