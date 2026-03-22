@@ -296,7 +296,7 @@ fn default_keybind_toggle_play_pause() -> String {
 }
 
 fn default_keybind_toggle_mode() -> String {
-    "M".to_string()
+    "Alt+M".to_string()
 }
 
 fn default_keybind_fullscreen_prev() -> String {
