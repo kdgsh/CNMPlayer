@@ -18,6 +18,8 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, Instant};
 
+const HELP_MODAL_ITEMS: usize = 12;
+
 fn sync_playlists_when_viewing_playback(app: &mut AppState) {
     if app.local_view_album_folder.is_some() && app.local_folder.is_some() {
         if app.local_view_album_folder.as_ref() == app.local_folder.as_ref() {
@@ -39,6 +41,7 @@ fn open_local_folder(app: &mut AppState, mode_manager: &mut ModeManager, folder:
     let res = mode_manager.local.load_path(folder)?;
     mode_manager.pause_other(PlayMode::LocalPlayback);
     app.player.mode = PlayMode::LocalPlayback;
+    app.player.liked = false;
     app.playlist = res.playlist;
     app.playlist_view = app.playlist.clone();
     app.player.track = res.track;
@@ -253,6 +256,7 @@ fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
         app.player.mode = PlayMode::Idle;
         app.player.playback = map_host_state(snapshot.state);
         app.player.repeat_mode = map_host_repeat(snapshot.repeat_mode);
+        app.player.liked = false;
         app.player.position = snapshot.position;
         app.player.track = empty_track_metadata();
         app.local_view_album_cover = None;
@@ -334,6 +338,7 @@ fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
     app.player.mode = PlayMode::Idle;
     app.player.playback = map_host_state(snapshot.state);
     app.player.repeat_mode = map_host_repeat(snapshot.repeat_mode);
+    app.player.liked = snapshot.current_liked;
     app.player.position = snapshot.position;
     app.player.track = current_track;
 }
@@ -693,6 +698,9 @@ fn handle_action(
             app.overlay = Overlay::SettingsModal;
         }
         Action::OpenHelpModal => {
+            app.help_keybind_selected = app
+                .help_keybind_selected
+                .min(HELP_MODAL_ITEMS.saturating_sub(1));
             app.overlay = Overlay::HelpModal;
         }
         Action::OpenEqModal => {
@@ -1109,6 +1117,12 @@ fn handle_action(
                 if app.player.mode == PlayMode::LocalPlayback {
                     let _ = mode_manager.local.set_eq(app.eq);
                 }
+            } else if app.overlay == Overlay::HelpModal {
+                if app.help_keybind_selected == 0 {
+                    app.help_keybind_selected = HELP_MODAL_ITEMS - 1;
+                } else {
+                    app.help_keybind_selected -= 1;
+                }
             }
         }
         Action::ModalDown => {
@@ -1132,6 +1146,8 @@ fn handle_action(
                 if app.player.mode == PlayMode::LocalPlayback {
                     let _ = mode_manager.local.set_eq(app.eq);
                 }
+            } else if app.overlay == Overlay::HelpModal {
+                app.help_keybind_selected = (app.help_keybind_selected + 1) % HELP_MODAL_ITEMS;
             }
         }
         Action::ModalLeft => {
@@ -1459,13 +1475,25 @@ fn handle_action(
             }
         },
         Action::ToggleRepeatMode => {
-            // 系统(MPRIS)来源固定显示“顺序()”且不受 m 影响。
-            if host_bridge.is_some() {
+            if let Some(bridge) = host_bridge.as_mut() {
+                (*bridge).toggle_repeat_mode();
+                let snapshot = (*bridge).snapshot();
+                sync_from_host_snapshot(app, snapshot);
                 return Ok(());
             }
             if app.player.mode == PlayMode::LocalPlayback || app.player.mode == PlayMode::Idle {
                 app.player.repeat_mode = app.player.repeat_mode.next();
             }
+        }
+        Action::ToggleFavorite => {
+            if let Some(bridge) = host_bridge.as_mut() {
+                (*bridge).toggle_like_current();
+                let snapshot = (*bridge).snapshot();
+                sync_from_host_snapshot(app, snapshot);
+                return Ok(());
+            }
+
+            app.set_toast("Like is unavailable in local mode");
         }
         Action::SeekToFraction(r) => {
             if let Some(bridge) = host_bridge.as_mut() {

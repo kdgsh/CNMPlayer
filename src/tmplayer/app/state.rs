@@ -196,6 +196,7 @@ pub struct PlayerState {
     pub position: Duration,
     pub volume: f32,
     pub repeat_mode: RepeatMode,
+    pub liked: bool,
     pub track: TrackMetadata,
 }
 
@@ -207,6 +208,7 @@ impl Default for PlayerState {
             position: Duration::from_secs(0),
             volume: 0.0,
             repeat_mode: RepeatMode::Sequence,
+            liked: false,
             track: TrackMetadata::default(),
         }
     }
@@ -279,6 +281,7 @@ pub struct AppState {
     pub settings_selected: usize,
     pub bar_settings_selected: usize,
     pub local_audio_settings_selected: usize,
+    pub help_keybind_selected: usize,
     pub vip_audio_unlocked: bool,
 
     pub eq: EqSettings,
@@ -396,6 +399,7 @@ impl AppState {
             settings_selected: 0,
             bar_settings_selected: 0,
             local_audio_settings_selected: 0,
+            help_keybind_selected: 0,
             vip_audio_unlocked: false,
 
             eq: EqSettings::default(),

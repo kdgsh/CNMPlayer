@@ -36,6 +36,7 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
                 playlist: Vec::new(),
                 current_index: None,
                 current_track: None,
+                current_liked: snapshot.now_playing_liked,
                 state: tmplayer::HostPlaybackState::Stopped,
                 repeat_mode: match snapshot.repeat_mode {
                     app::PlaybackRepeatMode::Sequence => tmplayer::HostRepeatMode::Sequence,
@@ -65,6 +66,7 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
             artist: track.artist.clone(),
             album: track.album.clone(),
             duration: Duration::from_millis(track.duration_ms.max(0) as u64),
+            liked: snapshot.now_playing_liked,
             cover: track.cover.clone(),
             lyrics: track.lyrics.clone(),
         });
@@ -73,6 +75,7 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
             playlist,
             current_index: snapshot.current_index,
             current_track,
+            current_liked: snapshot.now_playing_liked,
             state: match snapshot.state {
                 app::PlaybackRuntimeState::Playing => tmplayer::HostPlaybackState::Playing,
                 app::PlaybackRuntimeState::Paused => tmplayer::HostPlaybackState::Paused,
@@ -114,6 +117,14 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
 
     fn seek_to_ratio(&mut self, ratio: f32) {
         self.app.fullscreen_seek_to_ratio(ratio);
+    }
+
+    fn toggle_repeat_mode(&mut self) {
+        self.app.fullscreen_toggle_repeat_mode();
+    }
+
+    fn toggle_like_current(&mut self) {
+        self.app.fullscreen_toggle_like();
     }
 }
 

@@ -1120,19 +1120,23 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         ),
         (
             lang_text(app, "上一首", "Previous"),
-            app.config.keybind_prev.as_str(),
+            app.config.keybind_fullscreen_prev.as_str(),
         ),
         (
             lang_text(app, "下一首", "Next"),
-            app.config.keybind_next.as_str(),
+            app.config.keybind_fullscreen_next.as_str(),
         ),
         (
             lang_text(app, "播放/暂停", "Play/Pause"),
-            app.config.keybind_toggle_play_pause.as_str(),
+            app.config.keybind_fullscreen_toggle_play_pause.as_str(),
         ),
         (
-            lang_text(app, "模式切换", "Switch Mode"),
-            app.config.keybind_toggle_mode.as_str(),
+            lang_text(app, "全屏模式切换", "Fullscreen Mode Switch"),
+            app.config.keybind_fullscreen_toggle_mode.as_str(),
+        ),
+        (
+            lang_text(app, "收藏/取消收藏", "Like/Unlike"),
+            app.config.keybind_toggle_like_fullscreen.as_str(),
         ),
         (
             lang_text(app, "侧边栏歌单区切换", "Sidebar Playlist Section Switch"),
@@ -1141,15 +1145,37 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         (lang_text(app, "按键绑定", "Keybinds"), "Ctrl+K"),
     ];
 
-    for (idx, (label, key)) in items.iter().take(rows[1].height as usize).enumerate() {
+    let visible_rows = rows[1].height as usize;
+    let total_rows = items.len();
+    let selected = app.help_keybind_selected.min(total_rows.saturating_sub(1));
+    let max_scroll = total_rows.saturating_sub(visible_rows);
+    let scroll = if visible_rows == 0 || selected < visible_rows {
+        0
+    } else {
+        (selected + 1 - visible_rows).min(max_scroll)
+    };
+
+    for (idx, (label, key)) in items
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_rows)
+    {
+        let style = if idx == selected {
+            Style::default()
+                .fg(app.theme.color_accent2())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.theme.color_text())
+        };
         f.render_widget(
             Paragraph::new(Line::styled(
                 format!("  {}: {}", label, key),
-                Style::default().fg(app.theme.color_text()),
+                style,
             )),
             Rect {
                 x: rows[1].x,
-                y: rows[1].y + idx as u16,
+                y: rows[1].y + (idx - scroll) as u16,
                 width: rows[1].width,
                 height: 1,
             },
@@ -1157,7 +1183,11 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
     }
 
     f.render_widget(
-        Paragraph::new(lang_text(app, "Esc 关闭", "Esc close"))
+        Paragraph::new(lang_text(
+            app,
+            "Up/Down 浏览  Esc 关闭（仅查看）",
+            "Up/Down browse  Esc close (view only, no rebinding)",
+        ))
             .style(Style::default().fg(app.theme.color_subtext())),
         rows[2],
     );

@@ -1,4 +1,4 @@
-use crate::tmplayer::app::state::{AppState, PlayMode, PlaybackState};
+use crate::tmplayer::app::state::{AppState, PlaybackState};
 use crate::tmplayer::utils::input::Action;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -13,11 +13,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
         _ => "[]",
     };
 
-    // 需求：外部音源（SystemMonitor）固定显示“顺序播放()”
-    let repeat_symbol = match app.player.mode {
-        PlayMode::LocalPlayback => app.player.repeat_mode.symbol(),
-        _ => "",
-    };
+    let repeat_symbol = app.player.repeat_mode.symbol();
 
     let line = Line::from(vec![
         Span::styled("[] ", Style::default().fg(app.theme.color_text())),
@@ -42,10 +38,7 @@ pub fn hit_test(area: Rect, app: &AppState, col: u16, row: u16) -> Option<Action
         PlaybackState::Playing => "[]",
         _ => "[]",
     };
-    let repeat_symbol = match app.player.mode {
-        PlayMode::LocalPlayback => app.player.repeat_mode.symbol(),
-        _ => "",
-    };
+    let repeat_symbol = app.player.repeat_mode.symbol();
 
     // Must match render() exactly (including spaces) because we align by glyph width.
     let s_prev = "[]";
@@ -88,11 +81,7 @@ pub fn hit_test(area: Rect, app: &AppState, col: u16, row: u16) -> Option<Action
 
     let w_mode = UnicodeWidthStr::width(repeat_symbol) as u16;
     if col >= x && col < x + w_mode {
-        // 需求：仅本地有效；外部音源点击不生效
-        if app.player.mode == PlayMode::LocalPlayback {
-            return Some(Action::ToggleRepeatMode);
-        }
-        return None;
+        return Some(Action::ToggleRepeatMode);
     }
 
     None

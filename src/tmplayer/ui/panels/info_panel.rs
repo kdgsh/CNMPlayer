@@ -5,11 +5,12 @@ use crate::tmplayer::ui::borders::SOLID_BORDER;
 use crate::tmplayer::utils::timefmt;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::text::{Line};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui::{Frame};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct InfoPanelLayout {
@@ -228,16 +229,49 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         let title = app.player.track.title.as_str();
         let artist = app.player.track.artist.as_str();
         let album = app.player.track.album.as_str();
+        let heart = if app.player.liked { "" } else { "" };
 
         let text_style = Style::default().fg(app.theme.color_text());
         let sub_style = Style::default().fg(app.theme.color_subtext());
 
-        let t = Paragraph::new(title).style(text_style).alignment(Alignment::Center);
-        f.render_widget(t, Rect { x: l.inner.x, y: title_y, width: l.inner.width, height: 1 });
-        let a = Paragraph::new(artist).style(sub_style).alignment(Alignment::Center);
-        f.render_widget(a, Rect { x: l.inner.x, y: title_y + 1, width: l.inner.width, height: 1 });
-        let al = Paragraph::new(album).style(sub_style).alignment(Alignment::Center);
-        f.render_widget(al, Rect { x: l.inner.x, y: title_y + 2, width: l.inner.width, height: 1 });
+        let meta_rect = Rect {
+            x: l.cover.x,
+            y: title_y,
+            width: l.cover.width.min(l.inner.width),
+            height: 1,
+        };
+
+        let title_line = compose_left_right_line(title, heart, meta_rect.width as usize);
+        let t = Paragraph::new(Line::from(vec![
+            Span::styled(title_line, text_style),
+        ]))
+        .alignment(Alignment::Left);
+        f.render_widget(t, meta_rect);
+
+        let a = Paragraph::new(clip_to_display_width(artist, meta_rect.width as usize))
+            .style(sub_style)
+            .alignment(Alignment::Left);
+        f.render_widget(
+            a,
+            Rect {
+                x: meta_rect.x,
+                y: title_y + 1,
+                width: meta_rect.width,
+                height: 1,
+            },
+        );
+        let al = Paragraph::new(clip_to_display_width(album, meta_rect.width as usize))
+            .style(sub_style)
+            .alignment(Alignment::Left);
+        f.render_widget(
+            al,
+            Rect {
+                x: meta_rect.x,
+                y: title_y + 2,
+                width: meta_rect.width,
+                height: 1,
+            },
+        );
 
         // time + progress
         let pos = app.player.position;
@@ -514,6 +548,38 @@ fn generate_random_cover_ascii(width: u16, height: u16, seed: u64) -> String {
         out.push('\n');
     }
     out
+}
+
+fn clip_to_display_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut used = 0;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > max_width {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out
+}
+
+fn compose_left_right_line(left: &str, right: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    let right_w = right.width().min(width);
+    let left_max = width.saturating_sub(right_w + 1);
+    let left_text = clip_to_display_width(left, left_max);
+    let used = left_text.width() + right_w;
+    let pad = width.saturating_sub(used);
+
+    format!("{left_text}{}{right}", " ".repeat(pad))
 }
 
 fn mode_label(m: PlayMode, lang: crate::data::config::Language) -> &'static str {

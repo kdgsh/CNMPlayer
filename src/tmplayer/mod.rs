@@ -37,6 +37,7 @@ pub struct FullscreenTrackSeed {
     pub artist: String,
     pub album: String,
     pub duration: Duration,
+    pub liked: bool,
     pub cover: Option<Vec<u8>>,
     pub lyrics: Option<Vec<app::state::LyricLine>>,
 }
@@ -87,6 +88,7 @@ pub struct HostPlaybackSnapshot {
     pub playlist: Vec<FullscreenPlaylistItemSeed>,
     pub current_index: Option<usize>,
     pub current_track: Option<FullscreenTrackSeed>,
+    pub current_liked: bool,
     pub state: HostPlaybackState,
     pub repeat_mode: HostRepeatMode,
     pub position: Duration,
@@ -119,6 +121,8 @@ pub trait HostPlaybackBridge {
     fn play_next(&mut self);
     fn play_queue_index(&mut self, index: usize);
     fn seek_to_ratio(&mut self, ratio: f32);
+    fn toggle_repeat_mode(&mut self);
+    fn toggle_like_current(&mut self);
 }
 
 pub fn run_fullscreen(
@@ -200,6 +204,11 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         keybind_next: host.keybind_next.clone(),
         keybind_toggle_play_pause: host.keybind_toggle_play_pause.clone(),
         keybind_toggle_mode: host.keybind_toggle_mode.clone(),
+        keybind_fullscreen_prev: host.keybind_fullscreen_prev.clone(),
+        keybind_fullscreen_next: host.keybind_fullscreen_next.clone(),
+        keybind_fullscreen_toggle_play_pause: host.keybind_fullscreen_toggle_play_pause.clone(),
+        keybind_fullscreen_toggle_mode: host.keybind_fullscreen_toggle_mode.clone(),
+        keybind_toggle_like_fullscreen: host.keybind_toggle_like_fullscreen.clone(),
         default_opening_folder: String::new(),
     }
 }
@@ -269,6 +278,7 @@ fn apply_bootstrap(app: &mut app::state::AppState, bootstrap: FullscreenBootstra
     }
 
     let mut active_idx = bootstrap.current_index.unwrap_or(0).min(tracks.len().saturating_sub(1));
+    let mut current_liked = false;
 
     if let Some(current) = bootstrap.current_track.as_ref() {
         let target_idx = current
@@ -277,6 +287,7 @@ fn apply_bootstrap(app: &mut app::state::AppState, bootstrap: FullscreenBootstra
             .min(tracks.len().saturating_sub(1));
         tracks[target_idx] = track_from_seed(current);
         active_idx = target_idx;
+        current_liked = current.liked;
     }
 
     playlist.selected = active_idx;
@@ -289,6 +300,7 @@ fn apply_bootstrap(app: &mut app::state::AppState, bootstrap: FullscreenBootstra
 
     app.player.mode = app::state::PlayMode::Idle;
     app.player.playback = app::state::PlaybackState::Playing;
+    app.player.liked = current_liked;
     app.player.position = Duration::from_secs(0);
     app.player.track = app.api_tracks[active_idx].clone();
 

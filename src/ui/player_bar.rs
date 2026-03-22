@@ -46,7 +46,8 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         "[]"
     };
     let next_label = "[]";
-    let controls = format!("{prev_label} {play_label} {next_label}");
+    let mode_symbol = playback_repeat_symbol(app);
+    let controls = format!("{prev_label} {play_label} {next_label} {mode_symbol}");
 
     let spectrum = if app.now_playing.is_some() && app.playback_state != PlaybackRuntimeState::Stopped
     {
@@ -103,10 +104,14 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(app.theme.color_subtext())
     };
 
-    frame.render_widget(
-        Paragraph::new(clip_to_display_width(&left_text, left_rect.width as usize)).style(left_style),
-        left_rect,
-    );
+    let left_render = if app.now_playing.is_some() {
+        let heart = if app.now_playing_liked { "" } else { "" };
+        compose_left_right_line(&left_text, heart, left_rect.width as usize)
+    } else {
+        clip_to_display_width(&left_text, left_rect.width as usize)
+    };
+
+    frame.render_widget(Paragraph::new(left_render).style(left_style), left_rect);
 
     frame.render_widget(
         Paragraph::new(controls)
@@ -250,4 +255,26 @@ fn clip_to_display_width(text: &str, max_width: usize) -> String {
         used += w;
     }
     out
+}
+
+fn compose_left_right_line(left: &str, right: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+
+    let right_w = display_width(right).min(width);
+    let left_max = width.saturating_sub(right_w + 1);
+    let left_text = clip_to_display_width(left, left_max);
+    let used = display_width(&left_text) + right_w;
+    let pad = width.saturating_sub(used);
+    format!("{left_text}{}{right}", " ".repeat(pad))
+}
+
+fn playback_repeat_symbol(app: &App) -> &'static str {
+    match app.playback_repeat_mode {
+        crate::app::PlaybackRepeatMode::Sequence => "",
+        crate::app::PlaybackRepeatMode::Shuffle => "",
+        crate::app::PlaybackRepeatMode::LoopAll => "",
+        crate::app::PlaybackRepeatMode::LoopOne => "",
+    }
 }

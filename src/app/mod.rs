@@ -25,7 +25,7 @@ const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 8;
 const SETTINGS_PLAYBACK_ITEMS: usize = 8;
-const SETTINGS_KEYBIND_ITEMS: usize = 9;
+const SETTINGS_KEYBIND_ITEMS: usize = 15;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
 const STARTUP_LOADING_FILL_SECS: f32 = 0.62;
@@ -42,7 +42,13 @@ const DEFAULT_KEYBIND_QUIT: &str = "Q";
 const DEFAULT_KEYBIND_PREV: &str = "Alt+Left";
 const DEFAULT_KEYBIND_NEXT: &str = "Alt+Right";
 const DEFAULT_KEYBIND_TOGGLE_PLAY_PAUSE: &str = "Alt+Space";
-const DEFAULT_KEYBIND_TOGGLE_MODE: &str = "Alt+M";
+const DEFAULT_KEYBIND_TOGGLE_MODE: &str = "M";
+const DEFAULT_KEYBIND_FULLSCREEN_PREV: &str = "Left";
+const DEFAULT_KEYBIND_FULLSCREEN_NEXT: &str = "Right";
+const DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_PLAY_PAUSE: &str = "Space";
+const DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_MODE: &str = "M";
+const DEFAULT_KEYBIND_TOGGLE_LIKE_FULLSCREEN: &str = "L";
+const DEFAULT_KEYBIND_TOGGLE_LIKE_COLLAPSED: &str = "Alt+L";
 
 #[derive(Debug, Clone, Copy)]
 enum KeybindAction {
@@ -55,6 +61,12 @@ enum KeybindAction {
     Next,
     TogglePlayPause,
     ToggleMode,
+    FullscreenPrev,
+    FullscreenNext,
+    FullscreenTogglePlayPause,
+    FullscreenToggleMode,
+    ToggleLikeFullscreen,
+    ToggleLikeCollapsed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1087,6 +1099,7 @@ pub struct FullscreenPlaybackSnapshot {
     pub queue: Vec<PlaybackTrack>,
     pub current_index: Option<usize>,
     pub now_playing: Option<PlaybackTrack>,
+    pub now_playing_liked: bool,
     pub state: PlaybackRuntimeState,
     pub repeat_mode: PlaybackRepeatMode,
     pub position: Duration,
@@ -1104,6 +1117,7 @@ pub struct App {
     pub author: AuthorState,
     pub search: SearchState,
     pub now_playing: Option<PlaybackTrack>,
+    pub now_playing_liked: bool,
     pub playback_queue: Vec<PlaybackTrack>,
     pub playback_index: Option<usize>,
     pub playback_repeat_mode: PlaybackRepeatMode,
@@ -1160,6 +1174,7 @@ impl App {
             author: AuthorState::default(),
             search: SearchState::default(),
             now_playing: None,
+            now_playing_liked: false,
             playback_queue: Vec::new(),
             playback_index: None,
             playback_repeat_mode: PlaybackRepeatMode::Sequence,
@@ -1486,6 +1501,7 @@ impl App {
             queue: self.playback_queue.clone(),
             current_index: self.playback_index,
             now_playing: self.now_playing.clone(),
+            now_playing_liked: self.now_playing_liked,
             state: self.playback_state,
             repeat_mode: self.playback_repeat_mode,
             position: self.audio_player.position(),
@@ -1514,6 +1530,14 @@ impl App {
         self.seek_to_ratio(ratio);
     }
 
+    pub fn fullscreen_toggle_repeat_mode(&mut self) {
+        self.cycle_repeat_mode_hotkey();
+    }
+
+    pub fn fullscreen_toggle_like(&mut self) {
+        self.toggle_like_hotkey();
+    }
+
     fn handle_overlay_key(&mut self, overlay: Overlay, key: KeyEvent) {
         match overlay {
             Overlay::Settings => self.handle_settings_root_key(key),
@@ -1528,6 +1552,18 @@ impl App {
         let Some(action) = self.keybind_action_from_event(key) else {
             return false;
         };
+
+        if matches!(
+            action,
+            KeybindAction::ToggleLikeFullscreen
+                | KeybindAction::FullscreenPrev
+                | KeybindAction::FullscreenNext
+                | KeybindAction::FullscreenTogglePlayPause
+                | KeybindAction::FullscreenToggleMode
+        ) {
+            return false;
+        }
+
         self.trigger_keybind_action(action);
         true
     }
@@ -1547,6 +1583,12 @@ impl App {
             KeybindAction::Next => self.play_next_hotkey(),
             KeybindAction::TogglePlayPause => self.toggle_play_pause_hotkey(),
             KeybindAction::ToggleMode => self.cycle_repeat_mode_hotkey(),
+            KeybindAction::FullscreenPrev => {},
+            KeybindAction::FullscreenNext => {},
+            KeybindAction::FullscreenTogglePlayPause => {},
+            KeybindAction::FullscreenToggleMode => {},
+            KeybindAction::ToggleLikeFullscreen => {},
+            KeybindAction::ToggleLikeCollapsed => self.toggle_like_hotkey(),
         }
     }
 
@@ -1644,6 +1686,12 @@ impl App {
             KeybindAction::Next,
             KeybindAction::TogglePlayPause,
             KeybindAction::ToggleMode,
+            KeybindAction::FullscreenPrev,
+            KeybindAction::FullscreenNext,
+            KeybindAction::FullscreenTogglePlayPause,
+            KeybindAction::FullscreenToggleMode,
+            KeybindAction::ToggleLikeFullscreen,
+            KeybindAction::ToggleLikeCollapsed,
         ];
 
         for action in actions {
@@ -1666,6 +1714,12 @@ impl App {
             KeybindAction::Next => &self.config.keybind_next,
             KeybindAction::TogglePlayPause => &self.config.keybind_toggle_play_pause,
             KeybindAction::ToggleMode => &self.config.keybind_toggle_mode,
+            KeybindAction::FullscreenPrev => &self.config.keybind_fullscreen_prev,
+            KeybindAction::FullscreenNext => &self.config.keybind_fullscreen_next,
+            KeybindAction::FullscreenTogglePlayPause => &self.config.keybind_fullscreen_toggle_play_pause,
+            KeybindAction::FullscreenToggleMode => &self.config.keybind_fullscreen_toggle_mode,
+            KeybindAction::ToggleLikeFullscreen => &self.config.keybind_toggle_like_fullscreen,
+            KeybindAction::ToggleLikeCollapsed => &self.config.keybind_toggle_like_collapsed,
         }
     }
 
@@ -1679,7 +1733,13 @@ impl App {
             5 => Some(&mut self.config.keybind_prev),
             6 => Some(&mut self.config.keybind_next),
             7 => Some(&mut self.config.keybind_toggle_play_pause),
-            8 => Some(&mut self.config.keybind_toggle_mode),
+            8 => Some(&mut self.config.keybind_fullscreen_prev),
+            9 => Some(&mut self.config.keybind_fullscreen_next),
+            10 => Some(&mut self.config.keybind_fullscreen_toggle_play_pause),
+            11 => Some(&mut self.config.keybind_fullscreen_toggle_mode),
+            12 => Some(&mut self.config.keybind_toggle_like_fullscreen),
+            13 => Some(&mut self.config.keybind_toggle_mode),
+            14 => Some(&mut self.config.keybind_toggle_like_collapsed),
             _ => None,
         }
     }
@@ -1694,7 +1754,13 @@ impl App {
             5 => Some(self.config.keybind_prev.as_str()),
             6 => Some(self.config.keybind_next.as_str()),
             7 => Some(self.config.keybind_toggle_play_pause.as_str()),
-            8 => Some(self.config.keybind_toggle_mode.as_str()),
+            8 => Some(self.config.keybind_fullscreen_prev.as_str()),
+            9 => Some(self.config.keybind_fullscreen_next.as_str()),
+            10 => Some(self.config.keybind_fullscreen_toggle_play_pause.as_str()),
+            11 => Some(self.config.keybind_fullscreen_toggle_mode.as_str()),
+            12 => Some(self.config.keybind_toggle_like_fullscreen.as_str()),
+            13 => Some(self.config.keybind_toggle_mode.as_str()),
+            14 => Some(self.config.keybind_toggle_like_collapsed.as_str()),
             _ => None,
         }
     }
@@ -1728,7 +1794,13 @@ impl App {
             5 => self.lang_text("上一首", "Previous"),
             6 => self.lang_text("下一首", "Next"),
             7 => self.lang_text("播放/暂停", "Play/Pause"),
-            8 => self.lang_text("模式切换", "Switch Mode"),
+            8 => self.lang_text("全屏上一首", "Fullscreen Previous"),
+            9 => self.lang_text("全屏下一首", "Fullscreen Next"),
+            10 => self.lang_text("全屏暂停/播放", "Fullscreen Pause/Play"),
+            11 => self.lang_text("全屏模式切换", "Fullscreen Mode Switch"),
+            12 => self.lang_text("全屏收藏/取消收藏", "Fullscreen Like/Unlike"),
+            13 => self.lang_text("折叠栏模式切换", "Collapsed Mode Switch"),
+            14 => self.lang_text("折叠栏收藏/取消收藏", "Collapsed Like/Unlike"),
             _ => self.lang_text("未知", "Unknown"),
         }
     }
@@ -1743,6 +1815,12 @@ impl App {
         self.config.keybind_next = DEFAULT_KEYBIND_NEXT.to_string();
         self.config.keybind_toggle_play_pause = DEFAULT_KEYBIND_TOGGLE_PLAY_PAUSE.to_string();
         self.config.keybind_toggle_mode = DEFAULT_KEYBIND_TOGGLE_MODE.to_string();
+        self.config.keybind_fullscreen_prev = DEFAULT_KEYBIND_FULLSCREEN_PREV.to_string();
+        self.config.keybind_fullscreen_next = DEFAULT_KEYBIND_FULLSCREEN_NEXT.to_string();
+        self.config.keybind_fullscreen_toggle_play_pause = DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_PLAY_PAUSE.to_string();
+        self.config.keybind_fullscreen_toggle_mode = DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_MODE.to_string();
+        self.config.keybind_toggle_like_fullscreen = DEFAULT_KEYBIND_TOGGLE_LIKE_FULLSCREEN.to_string();
+        self.config.keybind_toggle_like_collapsed = DEFAULT_KEYBIND_TOGGLE_LIKE_COLLAPSED.to_string();
     }
 
     pub fn keybind_label_for_index(&self, index: usize) -> String {
@@ -1755,7 +1833,13 @@ impl App {
             5 => KeybindAction::Prev,
             6 => KeybindAction::Next,
             7 => KeybindAction::TogglePlayPause,
-            8 => KeybindAction::ToggleMode,
+            8 => KeybindAction::FullscreenPrev,
+            9 => KeybindAction::FullscreenNext,
+            10 => KeybindAction::FullscreenTogglePlayPause,
+            11 => KeybindAction::FullscreenToggleMode,
+            12 => KeybindAction::ToggleLikeFullscreen,
+            13 => KeybindAction::ToggleMode,
+            14 => KeybindAction::ToggleLikeCollapsed,
             _ => KeybindAction::SearchBox,
         });
         format!("{}: {}", self.keybind_name_for_index(index), value)
@@ -1839,6 +1923,63 @@ impl App {
         ));
     }
 
+    fn refresh_now_playing_like_state(&mut self) {
+        let Some(song_id) = self.now_playing.as_ref().map(|track| track.song_id.clone()) else {
+            self.now_playing_liked = false;
+            return;
+        };
+
+        let ids = format!("[{song_id}]");
+        if let Ok(response) = self.api.song_like_check(&ids) {
+            if let Some(liked) = parse_song_like_check_result(&response.body, &song_id) {
+                self.now_playing_liked = liked;
+                return;
+            }
+        }
+    }
+
+    fn toggle_like_hotkey(&mut self) {
+        let Some(song_id) = self.now_playing.as_ref().map(|track| track.song_id.clone()) else {
+            self.set_runtime_status(self.lang_text(
+                "当前没有可收藏的歌曲",
+                "No song is available for like/unlike",
+            ));
+            return;
+        };
+
+        let target = !self.now_playing_liked;
+        match self.api.like_song(&song_id, target) {
+            Ok(response) => {
+                let code = response
+                    .body
+                    .get("code")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(response.status);
+                if code == 200 {
+                    self.now_playing_liked = target;
+                    self.set_runtime_status(if target {
+                        self.lang_text("已收藏当前歌曲", "Liked current song").to_string()
+                    } else {
+                        self.lang_text("已取消收藏当前歌曲", "Unliked current song").to_string()
+                    });
+                } else {
+                    self.set_runtime_status(format!(
+                        "{}: {}",
+                        self.lang_text("收藏操作失败", "Like operation failed"),
+                        code
+                    ));
+                }
+            }
+            Err(err) => {
+                self.set_runtime_status(format!(
+                    "{}: {}",
+                    self.lang_text("收藏操作失败", "Like operation failed"),
+                    err
+                ));
+            }
+        }
+    }
+
     fn tick_audio(&mut self) {
         let runtime = map_audio_state(self.audio_player.state());
 
@@ -1898,6 +2039,7 @@ impl App {
                 let mut enriched = track.clone();
                 self.enrich_track_metadata(&mut enriched);
                 self.now_playing = Some(enriched.clone());
+                self.refresh_now_playing_like_state();
                 self.playback_index = Some(index);
                 self.playback_state = PlaybackRuntimeState::Playing;
                 if announce {
@@ -1910,6 +2052,7 @@ impl App {
                 }
             }
             Err(err) => {
+                self.now_playing_liked = false;
                 self.playback_state = PlaybackRuntimeState::Stopped;
                 self.set_runtime_status(format!("{}: {}", self.lang_text("播放失败", "Playback failed"), err));
             }
@@ -3325,6 +3468,7 @@ impl App {
                 artist: active.artist,
                 album: active.album,
                 duration: active.duration,
+                liked: self.now_playing_liked,
                 cover: None,
                 lyrics: None,
             };
@@ -3505,6 +3649,7 @@ impl App {
         self.clear_content_hits();
         self.audio_player.stop();
         self.now_playing = None;
+        self.now_playing_liked = false;
         self.playback_queue.clear();
         self.playback_index = None;
         self.playback_state = PlaybackRuntimeState::Stopped;
@@ -4651,6 +4796,33 @@ fn parse_tracks(items: &[Value]) -> Vec<PlaylistTrack> {
     }
 
     tracks
+}
+
+fn parse_song_like_check_result(body: &Value, song_id: &str) -> Option<bool> {
+    if let Some(value) = body.pointer(&format!("/data/{song_id}")).and_then(|value| value.as_bool()) {
+        return Some(value);
+    }
+
+    for pointer in [
+        "/data/0/liked",
+        "/songs/0/liked",
+        "/data/songs/0/liked",
+        "/liked",
+    ] {
+        if let Some(value) = body.pointer(pointer).and_then(|value| value.as_bool()) {
+            return Some(value);
+        }
+    }
+
+    if let Some(obj) = body.get("data").and_then(|value| value.as_object()) {
+        for value in obj.values() {
+            if let Some(value) = value.as_bool() {
+                return Some(value);
+            }
+        }
+    }
+
+    None
 }
 
 fn first_non_empty_intro_text(value: &Value) -> Option<String> {

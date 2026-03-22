@@ -103,6 +103,24 @@ pub struct Config {
 
     #[serde(default = "default_keybind_toggle_mode")]
     pub keybind_toggle_mode: String,
+
+    #[serde(default = "default_keybind_fullscreen_prev")]
+    pub keybind_fullscreen_prev: String,
+
+    #[serde(default = "default_keybind_fullscreen_next")]
+    pub keybind_fullscreen_next: String,
+
+    #[serde(default = "default_keybind_fullscreen_toggle_play_pause")]
+    pub keybind_fullscreen_toggle_play_pause: String,
+
+    #[serde(default = "default_keybind_fullscreen_toggle_mode")]
+    pub keybind_fullscreen_toggle_mode: String,
+
+    #[serde(default = "default_keybind_toggle_like_fullscreen")]
+    pub keybind_toggle_like_fullscreen: String,
+
+    #[serde(default = "default_keybind_toggle_like_collapsed")]
+    pub keybind_toggle_like_collapsed: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -355,7 +373,31 @@ fn default_keybind_toggle_play_pause() -> String {
 }
 
 fn default_keybind_toggle_mode() -> String {
-    "Alt+M".to_string()
+    "M".to_string()
+}
+
+fn default_keybind_fullscreen_prev() -> String {
+    "Left".to_string()
+}
+
+fn default_keybind_fullscreen_next() -> String {
+    "Right".to_string()
+}
+
+fn default_keybind_fullscreen_toggle_play_pause() -> String {
+    "Space".to_string()
+}
+
+fn default_keybind_fullscreen_toggle_mode() -> String {
+    "M".to_string()
+}
+
+fn default_keybind_toggle_like_fullscreen() -> String {
+    "L".to_string()
+}
+
+fn default_keybind_toggle_like_collapsed() -> String {
+    "Alt+L".to_string()
 }
 
 impl Default for Config {
@@ -396,6 +438,12 @@ impl Default for Config {
             keybind_next: default_keybind_next(),
             keybind_toggle_play_pause: default_keybind_toggle_play_pause(),
             keybind_toggle_mode: default_keybind_toggle_mode(),
+            keybind_fullscreen_prev: default_keybind_fullscreen_prev(),
+            keybind_fullscreen_next: default_keybind_fullscreen_next(),
+            keybind_fullscreen_toggle_play_pause: default_keybind_fullscreen_toggle_play_pause(),
+            keybind_fullscreen_toggle_mode: default_keybind_fullscreen_toggle_mode(),
+            keybind_toggle_like_fullscreen: default_keybind_toggle_like_fullscreen(),
+            keybind_toggle_like_collapsed: default_keybind_toggle_like_collapsed(),
         }
     }
 }
@@ -450,6 +498,12 @@ impl Config {
             || !raw.contains("keybind_next")
             || !raw.contains("keybind_toggle_play_pause")
             || !raw.contains("keybind_toggle_mode")
+            || !raw.contains("keybind_fullscreen_prev")
+            || !raw.contains("keybind_fullscreen_next")
+            || !raw.contains("keybind_fullscreen_toggle_play_pause")
+            || !raw.contains("keybind_fullscreen_toggle_mode")
+            || !raw.contains("keybind_toggle_like_fullscreen")
+            || !raw.contains("keybind_toggle_like_collapsed")
             || migrated_legacy_sidebar
         {
             let _ = cfg.save();

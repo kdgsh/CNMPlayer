@@ -12,6 +12,7 @@ pub enum Action {
     VolumeDown,
     SetVolume(f32),
     ToggleRepeatMode,
+    ToggleFavorite,
     TogglePlaylist,
     Confirm,
     CloseOverlay,
@@ -153,6 +154,8 @@ pub fn map_key(ev: KeyEvent, overlay: Overlay, config: &Config) -> Action {
         }
         return match ev.code {
             KeyCode::Esc => Action::CloseOverlay,
+            KeyCode::Up | KeyCode::BackTab => Action::ModalUp,
+            KeyCode::Down | KeyCode::Tab => Action::ModalDown,
             _ => Action::None,
         };
     }
@@ -199,8 +202,29 @@ pub fn map_key(ev: KeyEvent, overlay: Overlay, config: &Config) -> Action {
         return Action::TogglePlaylist;
     }
 
+    if keybind_matches(&config.keybind_fullscreen_toggle_mode, ev) {
+        return Action::ToggleRepeatMode;
+    }
+
+    if keybind_matches(&config.keybind_toggle_like_fullscreen, ev) {
+        return Action::ToggleFavorite;
+    }
+
+    if keybind_matches(&config.keybind_fullscreen_prev, ev) {
+        return Action::Prev;
+    }
+
+    if keybind_matches(&config.keybind_fullscreen_next, ev) {
+        return Action::Next;
+    }
+
+    if keybind_matches(&config.keybind_fullscreen_toggle_play_pause, ev) {
+        return Action::TogglePlayPause;
+    }
+
     match ev.code {
         KeyCode::Char('m') | KeyCode::Char('M') => Action::ToggleRepeatMode,
+        KeyCode::Char('l') | KeyCode::Char('L') => Action::ToggleFavorite,
         KeyCode::Esc => Action::Quit,
         KeyCode::Enter => Action::Confirm,
         KeyCode::Left => Action::Prev,

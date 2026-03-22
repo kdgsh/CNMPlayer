@@ -206,7 +206,7 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         rows[0],
     );
 
-    let mut lines: Vec<Line> = (0..9)
+    let mut lines: Vec<Line> = (0..15)
         .map(|idx| {
             let is_rebinding = app.settings_keybind_rebinding == Some(idx);
             let style = if is_rebinding {
@@ -241,9 +241,31 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         Style::default().fg(app.theme.color_subtext()),
     )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", l(app, "按键绑定弹窗（Ctrl+K）", "Open Keybinds (Ctrl+K)")),
+        Style::default().fg(app.theme.color_subtext()),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("  {}", l(app, "重置快捷键（Ctrl+Alt+R）", "Reset Keybinds (Ctrl+Alt+R)")),
+        Style::default().fg(app.theme.color_subtext()),
+    )));
+
+    let focus_index = app
+        .settings_keybind_rebinding
+        .unwrap_or(app.settings_keybind_selected);
+    let visible_rows = rows[1].height as usize;
+    let total_rows = lines.len();
+    let max_scroll = total_rows.saturating_sub(visible_rows);
+    let scroll = if visible_rows == 0 || focus_index < visible_rows {
+        0
+    } else {
+        (focus_index + 1 - visible_rows).min(max_scroll)
+    };
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
+        Paragraph::new(lines)
+            .style(Style::default().bg(app.theme.color_surface()))
+            .scroll((scroll as u16, 0)),
         rows[1],
     );
 

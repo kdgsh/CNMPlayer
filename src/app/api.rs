@@ -208,6 +208,21 @@ impl ApiState {
         Ok(response)
     }
 
+    pub fn like_song(&mut self, song_id: &str, like: bool) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("id", song_id)
+            .param("like", if like { "true" } else { "false" });
+        let response = self.runtime.block_on(self.client.like(&query))?;
+        Ok(response)
+    }
+
+    pub fn song_like_check(&mut self, ids_json: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("ids", ids_json);
+        let response = self.runtime.block_on(self.client.song_like_check(&query))?;
+        Ok(response)
+    }
+
     pub fn song_url(&mut self, song_id: &str) -> Result<ApiResponse> {
         let query = self
             .query_with_cookie()
