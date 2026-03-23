@@ -243,7 +243,7 @@ fn sanitize_cache_key(raw: &str) -> String {
     }
 }
 
-fn resolve_cache_root(config: &Config) -> PathBuf {
+pub(crate) fn resolve_cache_root(config: &Config) -> PathBuf {
     if let Some(custom) = config
         .cache
         .path
@@ -268,7 +268,7 @@ struct CacheEntry {
     modified: SystemTime,
 }
 
-fn cleanup_cache_dir(cache_dir: &Path, policy: &crate::data::config::CacheConfig) -> Result<()> {
+pub(crate) fn cleanup_cache_dir(cache_dir: &Path, policy: &crate::data::config::CacheConfig) -> Result<()> {
     let mut entries = list_cache_entries(cache_dir)?;
 
     if matches!(policy.clean_strategy, CacheCleanStrategy::Age | CacheCleanStrategy::Both)

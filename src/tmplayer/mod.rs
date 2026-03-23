@@ -7,6 +7,7 @@ pub mod ui;
 pub mod utils;
 
 use anyhow::Result;
+use crate::app::player::{cleanup_cache_dir, resolve_cache_root};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -139,6 +140,12 @@ pub fn run_fullscreen(
     let theme = data::theme_loader::ThemeLoader::load(&host_config.theme)?;
 
     let mut app = app::state::AppState::new(config, theme, host_config.language);
+    let ncm_cover_cache_dir = resolve_cache_root(host_config).join("tmplayer_ncm_cover");
+    if host_config.cache.clean_on_startup {
+        let _ = cleanup_cache_dir(&ncm_cover_cache_dir, &host_config.cache);
+    }
+    let _ = std::fs::create_dir_all(&ncm_cover_cache_dir);
+    app.ncm_cover_cache_dir = Some(ncm_cover_cache_dir);
     app.eq.bands_db = app.config.eq_bands_db;
 
     apply_bootstrap(&mut app, bootstrap);

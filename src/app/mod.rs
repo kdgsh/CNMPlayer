@@ -1,5 +1,5 @@
 mod api;
-mod player;
+pub(crate) mod player;
 
 use crate::data::config::Config;
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
@@ -14,11 +14,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButto
 use ncm_api::ApiResponse;
 use serde_json::Value;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::fs;
+use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
-use player::{AudioPlayer, AudioPlayerState};
+use player::{AudioPlayer, AudioPlayerState, cleanup_cache_dir, resolve_cache_root};
 
 const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
@@ -33,6 +37,7 @@ const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
 const STARTUP_LOADING_FILL_SECS: f32 = 0.62;
 const STARTUP_LOADING_COMPLETE_RAMP_SECS: f32 = 0.26;
 const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
+const COVER_CACHE_SUBDIR: &str = "cover";
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
 const DEFAULT_KEYBIND_FULLSCREEN: &str = "Ctrl+F";
@@ -1158,6 +1163,7 @@ pub struct App {
     main_cava: Option<CavaRunner>,
     main_cava_bars: [f32; 20],
     main_cava_last_tick: Instant,
+    cover_cache_dir: PathBuf,
     api: ApiState,
     audio_player: AudioPlayer,
 }
@@ -1166,6 +1172,12 @@ impl App {
     pub fn new(config: Config, theme: Theme) -> Result<Self> {
         let saved_cookie = session::load_cookie().ok().flatten();
         let audio_player = AudioPlayer::new(&config);
+        let cache_root = resolve_cache_root(&config);
+        let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
+        if config.cache.clean_on_startup {
+            let _ = cleanup_cache_dir(&cover_cache_dir, &config.cache);
+        }
+        let _ = fs::create_dir_all(&cover_cache_dir);
 
         let mut app = Self {
             config,
@@ -1218,6 +1230,7 @@ impl App {
             main_cava: None,
             main_cava_bars: [0.0; 20],
             main_cava_last_tick: Instant::now(),
+            cover_cache_dir,
             api: ApiState::new(saved_cookie.clone())?,
             audio_player,
         };
@@ -2066,6 +2079,10 @@ impl App {
             Ok(()) => {
                 let mut enriched = track.clone();
                 self.enrich_track_metadata(&mut enriched);
+                if let Some(slot) = self.playback_queue.get_mut(index) {
+                    slot.cover = enriched.cover.clone();
+                }
+                self.trim_non_current_cover_memory(index);
                 self.now_playing = Some(enriched.clone());
                 self.refresh_now_playing_like_state();
                 self.playback_index = Some(index);
@@ -2087,13 +2104,77 @@ impl App {
         }
     }
 
+    fn cover_cache_path_for_url(&self, url: &str) -> Option<PathBuf> {
+        let key = url.trim();
+        if key.is_empty() {
+            return None;
+        }
+
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let hash = hasher.finish();
+        Some(self.cover_cache_dir.join(format!("{hash:016x}.img")))
+    }
+
+    fn load_cover_from_disk_cache(&self, url: &str) -> Option<Vec<u8>> {
+        let path = self.cover_cache_path_for_url(url)?;
+        let bytes = fs::read(path).ok()?;
+        if bytes.is_empty() {
+            return None;
+        }
+        Some(bytes)
+    }
+
+    fn persist_cover_to_disk_cache(&self, url: &str, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+
+        let Some(path) = self.cover_cache_path_for_url(url) else {
+            return;
+        };
+
+        let _ = fs::create_dir_all(&self.cover_cache_dir);
+        let _ = fs::write(path, bytes);
+    }
+
+    fn fetch_cover_with_disk_cache(&mut self, url: &str) -> Option<Vec<u8>> {
+        if let Some(bytes) = self.load_cover_from_disk_cache(url) {
+            return Some(bytes);
+        }
+
+        let bytes = self.api.fetch_cover_bytes(url).ok()?;
+        if bytes.is_empty() {
+            return None;
+        }
+        self.persist_cover_to_disk_cache(url, &bytes);
+        Some(bytes)
+    }
+
+    fn trim_non_current_cover_memory(&mut self, current_index: usize) {
+        let cover_cache_dir = self.cover_cache_dir.clone();
+        for (idx, track) in self.playback_queue.iter_mut().enumerate() {
+            if idx == current_index {
+                continue;
+            }
+
+            if let (Some(bytes), Some(url)) = (track.cover.as_deref(), track.cover_url.as_deref()) {
+                let mut hasher = DefaultHasher::new();
+                url.hash(&mut hasher);
+                let hash = hasher.finish();
+                let path = cover_cache_dir.join(format!("{hash:016x}.img"));
+                let _ = fs::create_dir_all(&cover_cache_dir);
+                let _ = fs::write(path, bytes);
+            }
+            track.cover = None;
+        }
+    }
+
     fn enrich_track_metadata(&mut self, track: &mut PlaybackTrack) {
         if track.cover.is_none() {
             if let Some(url) = track.cover_url.as_deref() {
-                if let Ok(bytes) = self.api.fetch_cover_bytes(url) {
-                    if !bytes.is_empty() {
-                        track.cover = Some(bytes);
-                    }
+                if let Some(bytes) = self.fetch_cover_with_disk_cache(url) {
+                    track.cover = Some(bytes);
                 }
             }
         }
@@ -2107,10 +2188,8 @@ impl App {
                     .and_then(|items| items.first())
                 {
                     if let Some(cover_url) = song.pointer("/al/picUrl").and_then(|value| value.as_str()) {
-                        if let Ok(bytes) = self.api.fetch_cover_bytes(cover_url) {
-                            if !bytes.is_empty() {
-                                track.cover = Some(bytes);
-                            }
+                        if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url) {
+                            track.cover = Some(bytes);
                         }
                     }
                 }
@@ -3546,10 +3625,8 @@ impl App {
 
                         if seed.cover.is_none() {
                             if let Some(cover_url) = song.pointer("/al/picUrl").and_then(|value| value.as_str()) {
-                                if let Ok(bytes) = self.api.fetch_cover_bytes(cover_url) {
-                                    if !bytes.is_empty() {
-                                        seed.cover = Some(bytes);
-                                    }
+                                if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url) {
+                                    seed.cover = Some(bytes);
                                 }
                             }
                         }
@@ -3557,15 +3634,13 @@ impl App {
                 }
 
                 if seed.cover.is_none() {
-                    if let Some(cover_url) = self
+                    let fallback_cover_url = self
                         .now_playing
                         .as_ref()
-                        .and_then(|track| track.cover_url.as_deref())
-                    {
-                        if let Ok(bytes) = self.api.fetch_cover_bytes(cover_url) {
-                            if !bytes.is_empty() {
-                                seed.cover = Some(bytes);
-                            }
+                        .and_then(|track| track.cover_url.clone());
+                    if let Some(cover_url) = fallback_cover_url.as_deref() {
+                        if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url) {
+                            seed.cover = Some(bytes);
                         }
                     }
                 }

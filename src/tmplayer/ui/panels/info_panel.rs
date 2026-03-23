@@ -16,6 +16,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 pub struct InfoPanelLayout {
     pub inner: Rect,
     pub cover: Rect,
+    pub meta: Rect,
     pub progress: Rect,
     pub volume: Rect,
     pub controls: Rect,
@@ -25,53 +26,120 @@ pub struct InfoPanelLayout {
 }
 
 pub fn layout(area: Rect) -> InfoPanelLayout {
-    // padding +1 char compared to previous (keep borders outside)
+    // Keep borders outside and reserve an inner content area.
     let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 2 });
 
-    // cover box: approximate visual square for terminal glyph aspect.
-    // Baseline is height ≈ width/2; user request: expand vertically by +4 chars.
-    let max_cover_h = inner.height.saturating_sub(10).max(3);
-    let max_square_h_by_width = (inner.width / 2).max(3);
-    let mut cover_h = max_square_h_by_width.min(max_cover_h);
-    cover_h = cover_h.saturating_add(4).min(max_square_h_by_width).min(max_cover_h);
-    let cover_w = (cover_h.saturating_mul(2)).min(inner.width).max(6);
+    // Required rows in priority order (must survive resize as long as possible):
+    // 1) metadata (3 lines) 2) progress 3) volume 4) controls
+    const META_H: u16 = 3;
+    const PROGRESS_H: u16 = 1;
+    const VOLUME_H: u16 = 1;
+    const CONTROLS_H: u16 = 1;
+    const CORE_H: u16 = META_H + PROGRESS_H + VOLUME_H + CONTROLS_H;
 
-    // stack height (using the fixed offsets below)
+    // Secondary rows can be dropped before affecting core rows.
+    let show_time_line = inner.height >= CORE_H.saturating_add(1);
+    let show_volume_label = inner.height >= CORE_H.saturating_add(2);
+    let time_h = if show_time_line { 1 } else { 0 };
+    let volume_label_h = if show_volume_label { 1 } else { 0 };
+
+    // Remaining height is for cover + an optional gap below cover.
+    let used_without_cover = CORE_H.saturating_add(time_h).saturating_add(volume_label_h);
+    let mut cover_h = inner.height.saturating_sub(used_without_cover);
+    let use_cover_gap = cover_h > 1;
+    if use_cover_gap {
+        cover_h = cover_h.saturating_sub(1);
+    }
+
+    // Cover should shrink first. Clamp by panel width and keep as low as 0 for tiny windows.
+    let max_cover_h_by_width = inner.width / 2;
+    cover_h = cover_h.min(max_cover_h_by_width);
+    let cover_w = if cover_h == 0 {
+        0
+    } else {
+        (cover_h.saturating_mul(2)).min(inner.width)
+    };
+
     let stack_h = cover_h
-        .saturating_add(1) // gap
-        .saturating_add(3) // title/artist/album
-        .saturating_add(1) // gap
-        .saturating_add(1) // time
-        .saturating_add(1) // gap
-        .saturating_add(1) // progress
-        .saturating_add(1) // gap
-        .saturating_add(1) // volume
-        .saturating_add(1) // vol label
-        .saturating_add(1) // gap
-        .saturating_add(1) // controls
-        .saturating_add(1); // S/R hint
-
+        .saturating_add(if use_cover_gap && cover_h > 0 { 1 } else { 0 })
+        .saturating_add(used_without_cover);
     let top_pad = inner.height.saturating_sub(stack_h) / 2;
-    let cover_y = inner.y.saturating_add(top_pad);
+    let mut y = inner.y.saturating_add(top_pad);
+
     let cover = Rect {
-        x: inner.x + (inner.width.saturating_sub(cover_w)) / 2,
-        y: cover_y,
+        x: if cover_w > 0 {
+            inner.x + (inner.width.saturating_sub(cover_w)) / 2
+        } else {
+            inner.x
+        },
+        y,
         width: cover_w,
         height: cover_h,
     };
 
-    let title_y = cover.y + cover.height + 1;
+    y = y.saturating_add(cover_h);
+    if use_cover_gap && cover_h > 0 {
+        y = y.saturating_add(1);
+    }
 
-    let time_line = Rect { x: inner.x, y: title_y + 4, width: inner.width, height: 1 };
-    let progress = Rect { x: inner.x, y: title_y + 6, width: inner.width, height: 1 };
-    let volume = Rect { x: inner.x, y: title_y + 8, width: inner.width, height: 1 };
-    let volume_label = Rect { x: inner.x, y: title_y + 9, width: inner.width, height: 1 };
-    let controls = Rect { x: inner.x, y: title_y + 11, width: inner.width, height: 1 };
-    let sr_hint = Rect { x: inner.x, y: title_y + 12, width: inner.width, height: 1 };
+    let meta = Rect {
+        x: inner.x,
+        y,
+        width: inner.width,
+        height: META_H.min(inner.height.saturating_sub(y.saturating_sub(inner.y))),
+    };
+    y = y.saturating_add(meta.height);
+
+    let time_line = Rect {
+        x: inner.x,
+        y,
+        width: inner.width,
+        height: time_h,
+    };
+    y = y.saturating_add(time_h);
+
+    let progress = Rect {
+        x: inner.x,
+        y,
+        width: inner.width,
+        height: PROGRESS_H,
+    };
+    y = y.saturating_add(PROGRESS_H);
+
+    let volume = Rect {
+        x: inner.x,
+        y,
+        width: inner.width,
+        height: VOLUME_H,
+    };
+    y = y.saturating_add(VOLUME_H);
+
+    let volume_label = Rect {
+        x: inner.x,
+        y,
+        width: inner.width,
+        height: volume_label_h,
+    };
+    y = y.saturating_add(volume_label_h);
+
+    let controls = Rect {
+        x: inner.x,
+        y,
+        width: inner.width,
+        height: CONTROLS_H,
+    };
+
+    let sr_hint = Rect {
+        x: inner.x,
+        y: controls.y.saturating_add(1),
+        width: inner.width,
+        height: 0,
+    };
 
     InfoPanelLayout {
         inner,
         cover,
+        meta,
         progress,
         volume,
         controls,
@@ -220,12 +288,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         }
     }
 
-    // metadata lines
-    let title_y = l.cover.y + l.cover.height + 1;
-    let inner_bottom = l.inner.y.saturating_add(l.inner.height);
-    let can_render_meta = l.controls.y.saturating_add(l.controls.height) <= inner_bottom;
-
-    if can_render_meta {
+    // metadata + controls/progress/volume: prioritized content for small windows.
+    if l.meta.height >= 1 && l.progress.height >= 1 && l.volume.height >= 1 && l.controls.height >= 1 {
         let title = app.player.track.title.as_str();
         let artist = app.player.track.artist.as_str();
         let album = app.player.track.album.as_str();
@@ -235,9 +299,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         let sub_style = Style::default().fg(app.theme.color_subtext());
 
         let meta_rect = Rect {
-            x: l.cover.x,
-            y: title_y,
-            width: l.cover.width.min(l.inner.width),
+            x: l.meta.x,
+            y: l.meta.y,
+            width: l.meta.width,
             height: 1,
         };
 
@@ -251,52 +315,60 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         let a = Paragraph::new(clip_to_display_width(artist, meta_rect.width as usize))
             .style(sub_style)
             .alignment(Alignment::Left);
-        f.render_widget(
-            a,
-            Rect {
-                x: meta_rect.x,
-                y: title_y + 1,
-                width: meta_rect.width,
-                height: 1,
-            },
-        );
+        if l.meta.height >= 2 {
+            f.render_widget(
+                a,
+                Rect {
+                    x: meta_rect.x,
+                    y: l.meta.y + 1,
+                    width: meta_rect.width,
+                    height: 1,
+                },
+            );
+        }
         let al = Paragraph::new(clip_to_display_width(album, meta_rect.width as usize))
             .style(sub_style)
             .alignment(Alignment::Left);
-        f.render_widget(
-            al,
-            Rect {
-                x: meta_rect.x,
-                y: title_y + 2,
-                width: meta_rect.width,
-                height: 1,
-            },
-        );
+        if l.meta.height >= 3 {
+            f.render_widget(
+                al,
+                Rect {
+                    x: meta_rect.x,
+                    y: l.meta.y + 2,
+                    width: meta_rect.width,
+                    height: 1,
+                },
+            );
+        }
 
         // time + progress
         let pos = app.player.position;
         let dur = app.player.track.duration;
         let left = timefmt::mmss(pos);
         let right = timefmt::mmss(dur);
-        let time_line = format!(
-            "{}{:>width$}",
-            left,
-            right,
-            width = (l.inner.width as usize).saturating_sub(left.len())
-        );
-        f.render_widget(
-            Paragraph::new(Line::from(time_line)).style(sub_style).alignment(Alignment::Center),
-            l.time_line,
-        );
+        if l.time_line.height > 0 {
+            let time_line = format!(
+                "{}{:>width$}",
+                left,
+                right,
+                width = (l.inner.width as usize).saturating_sub(left.len())
+            );
+            f.render_widget(
+                Paragraph::new(Line::from(time_line)).style(sub_style).alignment(Alignment::Center),
+                l.time_line,
+            );
+        }
 
         progress_bar::render(f, l.progress, app, pos, dur);
         volume_bar::render(f, l.volume, app, app.player.volume);
 
-        let v_label = format!("Vol {}%", (app.player.volume * 100.0).round() as i32);
-        f.render_widget(
-            Paragraph::new(v_label).style(sub_style).alignment(Alignment::Left),
-            l.volume_label,
-        );
+        if l.volume_label.height > 0 {
+            let v_label = format!("Vol {}%", (app.player.volume * 100.0).round() as i32);
+            f.render_widget(
+                Paragraph::new(v_label).style(sub_style).alignment(Alignment::Left),
+                l.volume_label,
+            );
+        }
 
         control_buttons::render(f, l.controls, app);
 

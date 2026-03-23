@@ -305,6 +305,7 @@ pub struct AppState {
     // Album cover shown in the playlist overlay's top area.
     pub local_view_album_cover: Option<Vec<u8>>,
     pub local_view_album_cover_hash: Option<u64>,
+    pub ncm_cover_cache_dir: Option<PathBuf>,
 
     pub playlist_album_anim: Option<PlaylistAlbumAnim>,
 
@@ -415,6 +416,7 @@ impl AppState {
             local_view_album_folder: None,
             local_view_album_cover: None,
             local_view_album_cover_hash: None,
+            ncm_cover_cache_dir: None,
 
             playlist_album_anim: None,
 

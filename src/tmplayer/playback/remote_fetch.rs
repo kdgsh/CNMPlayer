@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+const LAST_ATTEMPT_MAX: usize = 2048;
+const LAST_ATTEMPT_PRUNE_TO: usize = 1536;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrackKey {
     pub path: Option<PathBuf>,
@@ -146,10 +149,34 @@ fn worker_loop(rx: Receiver<RemoteFetchRequest>, res_tx: Sender<RemoteFetchResul
             }
         }
         last_attempt.insert(req.key.clone(), now);
+        prune_last_attempt_map(&mut last_attempt);
 
         if let Some(res) = process_request(req) {
             let _ = res_tx.send(res);
         }
+    }
+}
+
+fn prune_last_attempt_map(last_attempt: &mut HashMap<TrackKey, Instant>) {
+    if last_attempt.len() <= LAST_ATTEMPT_MAX {
+        return;
+    }
+
+    let remove_count = last_attempt
+        .len()
+        .saturating_sub(LAST_ATTEMPT_PRUNE_TO.max(1));
+    if remove_count == 0 {
+        return;
+    }
+
+    let mut pairs: Vec<(TrackKey, Instant)> = last_attempt
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    pairs.sort_by_key(|(_, at)| *at);
+
+    for (key, _) in pairs.into_iter().take(remove_count) {
+        last_attempt.remove(&key);
     }
 }
 

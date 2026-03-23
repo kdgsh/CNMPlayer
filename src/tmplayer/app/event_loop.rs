@@ -11,6 +11,7 @@ use crate::tmplayer::{HostConfigSync, HostPlaybackBridge, HostPlaybackSnapshot, 
 use anyhow::Result;
 use crossterm::event::{self, Event};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use std::fs;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -246,6 +247,84 @@ fn hash_cover_bytes(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
+fn ncm_song_id_for_index(app: &AppState, index: usize) -> Option<String> {
+    let item = app.playlist.items.get(index)?;
+    let raw = item.path.to_string_lossy();
+    let id = raw.strip_prefix("ncm://")?.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(id.to_string())
+}
+
+fn ncm_cover_cache_path(dir: &std::path::Path, song_id: &str) -> Option<PathBuf> {
+    let id = song_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(dir.join(format!("{id}.img")))
+}
+
+fn persist_ncm_cover_to_disk(dir: &std::path::Path, song_id: &str, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let Some(path) = ncm_cover_cache_path(dir, song_id) else {
+        return;
+    };
+    let _ = fs::create_dir_all(dir);
+    let _ = fs::write(path, bytes);
+}
+
+fn load_ncm_cover_from_disk(dir: &std::path::Path, song_id: &str) -> Option<(Vec<u8>, u64)> {
+    let path = ncm_cover_cache_path(dir, song_id)?;
+    let bytes = fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    let hash = hash_cover_bytes(&bytes);
+    Some((bytes, hash))
+}
+
+fn enforce_ncm_cover_memory_policy(app: &mut AppState, current_index: usize) {
+    let Some(cache_dir) = app.ncm_cover_cache_dir.clone() else {
+        return;
+    };
+    if app.api_tracks.is_empty() {
+        return;
+    }
+
+    let song_ids: Vec<Option<String>> = (0..app.api_tracks.len())
+        .map(|idx| ncm_song_id_for_index(app, idx))
+        .collect();
+
+    for (idx, track) in app.api_tracks.iter_mut().enumerate() {
+        let song_id = song_ids.get(idx).and_then(|v| v.as_deref());
+
+        if idx == current_index {
+            if track.cover.is_none() {
+                if let Some(song_id) = song_id {
+                    if let Some((bytes, hash)) = load_ncm_cover_from_disk(&cache_dir, song_id) {
+                        track.cover = Some(bytes);
+                        track.cover_hash = Some(hash);
+                    }
+                }
+            }
+            continue;
+        }
+
+        if let (Some(bytes), Some(song_id)) = (track.cover.as_deref(), song_id) {
+            persist_ncm_cover_to_disk(&cache_dir, song_id, bytes);
+        }
+        track.cover = None;
+        track.cover_folder = None;
+    }
+
+    if let Some(cur) = app.api_tracks.get(current_index).cloned() {
+        app.player.track = cur;
+    }
+}
+
 fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
     let queue_len = snapshot.playlist.len();
 
@@ -341,6 +420,8 @@ fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
     app.player.liked = snapshot.current_liked;
     app.player.position = snapshot.position;
     app.player.track = current_track;
+
+    enforce_ncm_cover_memory_policy(app, current);
 }
 
 fn sync_from_host_bridge(app: &mut AppState, host_bridge: &mut Option<&mut dyn HostPlaybackBridge>) {
@@ -665,6 +746,8 @@ fn switch_idle_track(app: &mut AppState, dir: i8) {
         app.player.track = track;
         app.player.position = Duration::from_secs(0);
         app.player.playback = PlaybackState::Playing;
+
+        enforce_ncm_cover_memory_policy(app, i);
 
         let to = CoverSnapshot::from(&app.player.track);
         app.start_cover_anim(from, to, dir, Instant::now());
