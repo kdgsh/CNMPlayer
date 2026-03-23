@@ -13,6 +13,7 @@ use anyhow::{anyhow, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ncm_api::ApiResponse;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use unicode_width::UnicodeWidthChar;
 
@@ -27,11 +28,10 @@ const SETTINGS_ROOT_ITEMS: usize = 8;
 const SETTINGS_PLAYBACK_ITEMS: usize = 8;
 const SETTINGS_KEYBIND_ITEMS: usize = 15;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
+const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
 const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
 const STARTUP_LOADING_FILL_SECS: f32 = 0.62;
-const STARTUP_LOADING_BOUNCE_PERIOD_SECS: f32 = 0.56;
-const STARTUP_LOADING_BOUNCE_GROUP: u32 = 3;
-const STARTUP_LOADING_MAX_RETREAT_CHARS: u16 = 12;
+const STARTUP_LOADING_COMPLETE_RAMP_SECS: f32 = 0.26;
 const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
@@ -370,6 +370,7 @@ pub struct HomeSidebarState {
     pub expanded: bool,
     pub loading: bool,
     pub user_id: Option<String>,
+    pub liked_playlist_id: Option<String>,
     pub user_name: String,
     pub created_playlists: Vec<HomeSidebarPlaylist>,
     pub collected_playlists: Vec<HomeSidebarPlaylist>,
@@ -387,6 +388,7 @@ impl Default for HomeSidebarState {
             expanded: false,
             loading: false,
             user_id: None,
+            liked_playlist_id: None,
             user_name: String::new(),
             created_playlists: Vec::new(),
             collected_playlists: Vec::new(),
@@ -1118,6 +1120,7 @@ pub struct App {
     pub search: SearchState,
     pub now_playing: Option<PlaybackTrack>,
     pub now_playing_liked: bool,
+    pub liked_song_ids: HashSet<String>,
     pub playback_queue: Vec<PlaybackTrack>,
     pub playback_index: Option<usize>,
     pub playback_repeat_mode: PlaybackRepeatMode,
@@ -1148,7 +1151,9 @@ pub struct App {
     playlist_section_return_snapshot: Option<PlaylistState>,
     qr_last_poll_at: Option<Instant>,
     startup_loading_started_at: Option<Instant>,
+    startup_loading_complete_started_at: Option<Instant>,
     startup_loading_complete_requested: bool,
+    last_global_hotkey_at: Option<Instant>,
     last_content_click: Option<(Instant, Page, usize)>,
     main_cava: Option<CavaRunner>,
     main_cava_bars: [f32; 20],
@@ -1175,6 +1180,7 @@ impl App {
             search: SearchState::default(),
             now_playing: None,
             now_playing_liked: false,
+            liked_song_ids: HashSet::new(),
             playback_queue: Vec::new(),
             playback_index: None,
             playback_repeat_mode: PlaybackRepeatMode::Sequence,
@@ -1205,7 +1211,9 @@ impl App {
             playlist_section_return_snapshot: None,
             qr_last_poll_at: None,
             startup_loading_started_at: None,
+            startup_loading_complete_started_at: None,
             startup_loading_complete_requested: false,
+            last_global_hotkey_at: None,
             last_content_click: None,
             main_cava: None,
             main_cava_bars: [0.0; 20],
@@ -1221,6 +1229,7 @@ impl App {
                 Ok(true) => {
                     app.session_cookie = app.api.session_cookie().map(|value| value.to_string());
                     app.refresh_vip_audio_access();
+                    let _ = app.refresh_liked_song_cache();
                     app.home.status_line = "已恢复上次登录，正在加载推荐歌单".to_string();
                     app.begin_startup_loading();
                     if let Err(err) = app.load_home_recommendations() {
@@ -1564,7 +1573,22 @@ impl App {
             return false;
         }
 
+        if !self.can_execute_global_hotkey() {
+            return true;
+        }
+
         self.trigger_keybind_action(action);
+        true
+    }
+
+    fn can_execute_global_hotkey(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(last_at) = self.last_global_hotkey_at {
+            if now.duration_since(last_at) < Duration::from_millis(GLOBAL_HOTKEY_COOLDOWN_MS) {
+                return false;
+            }
+        }
+        self.last_global_hotkey_at = Some(now);
         true
     }
 
@@ -1646,6 +1670,11 @@ impl App {
 
             (playlist_id, item.title.clone())
         };
+
+        if self.is_liked_playlist(&playlist_id, Some(&title)) {
+            let _ = self.refresh_liked_song_cache();
+            self.refresh_now_playing_like_state();
+        }
 
         self.home.status_line = format!(
             "{} {}",
@@ -1929,13 +1958,7 @@ impl App {
             return;
         };
 
-        let ids = format!("[{song_id}]");
-        if let Ok(response) = self.api.song_like_check(&ids) {
-            if let Some(liked) = parse_song_like_check_result(&response.body, &song_id) {
-                self.now_playing_liked = liked;
-                return;
-            }
-        }
+        self.now_playing_liked = self.liked_song_ids.contains(&song_id);
     }
 
     fn toggle_like_hotkey(&mut self) {
@@ -1956,7 +1979,12 @@ impl App {
                     .and_then(|value| value.as_i64())
                     .unwrap_or(response.status);
                 if code == 200 {
-                    self.now_playing_liked = target;
+                    if target {
+                        self.liked_song_ids.insert(song_id.clone());
+                    } else {
+                        self.liked_song_ids.remove(&song_id);
+                    }
+                    self.now_playing_liked = self.liked_song_ids.contains(&song_id);
                     self.set_runtime_status(if target {
                         self.lang_text("已收藏当前歌曲", "Liked current song").to_string()
                     } else {
@@ -3103,11 +3131,15 @@ impl App {
         self.overlay = None;
         self.startup_loading_progress = 0.0;
         self.startup_loading_started_at = Some(Instant::now());
+        self.startup_loading_complete_started_at = None;
         self.startup_loading_complete_requested = false;
     }
 
     fn finish_startup_loading(&mut self) {
         self.startup_loading_complete_requested = true;
+        if self.startup_loading_complete_started_at.is_none() {
+            self.startup_loading_complete_started_at = Some(Instant::now());
+        }
     }
 
     fn tick_startup_loading(&mut self) {
@@ -3123,7 +3155,8 @@ impl App {
         let elapsed = started_at.elapsed().as_secs_f32();
         self.startup_loading_progress = startup_loading_progress_at(
             elapsed,
-            80,
+            self.startup_loading_complete_started_at
+                .map(|completed_at| completed_at.elapsed().as_secs_f32()),
             self.startup_loading_complete_requested,
         );
 
@@ -3131,12 +3164,13 @@ impl App {
             self.page = Page::Home;
             self.startup_loading_progress = 0.0;
             self.startup_loading_started_at = None;
+            self.startup_loading_complete_started_at = None;
             self.startup_loading_complete_requested = false;
             return;
         }
     }
 
-    pub fn startup_loading_progress_for_width(&self, bar_width: u16) -> f32 {
+    pub fn startup_loading_progress_for_width(&self, _bar_width: u16) -> f32 {
         if self.page != Page::Loading {
             return 0.0;
         }
@@ -3147,7 +3181,8 @@ impl App {
 
         startup_loading_progress_at(
             started_at.elapsed().as_secs_f32(),
-            bar_width.max(1),
+            self.startup_loading_complete_started_at
+                .map(|completed_at| completed_at.elapsed().as_secs_f32()),
             self.startup_loading_complete_requested,
         )
     }
@@ -3645,11 +3680,15 @@ impl App {
         self.playlist_section_return_snapshot = None;
         self.startup_loading_progress = 0.0;
         self.startup_loading_started_at = None;
+        self.startup_loading_complete_started_at = None;
+        self.startup_loading_complete_requested = false;
+        self.last_global_hotkey_at = None;
         self.last_content_click = None;
         self.clear_content_hits();
         self.audio_player.stop();
         self.now_playing = None;
         self.now_playing_liked = false;
+        self.liked_song_ids.clear();
         self.playback_queue.clear();
         self.playback_index = None;
         self.playback_state = PlaybackRuntimeState::Stopped;
@@ -3950,6 +3989,7 @@ impl App {
             let collected_playlists = parse_home_sidebar_playlists(&collected_response);
 
             self.home_sidebar.user_id = Some(uid);
+            self.home_sidebar.liked_playlist_id = extract_liked_playlist_id(&account);
             self.home_sidebar.user_name = user_name;
             self.home_sidebar.created_playlists = created_playlists;
             self.home_sidebar.collected_playlists = collected_playlists;
@@ -3974,6 +4014,68 @@ impl App {
         result
     }
 
+    fn resolve_current_user_id(&mut self) -> Result<String> {
+        if let Some(uid) = self.home_sidebar.user_id.as_ref() {
+            return Ok(uid.clone());
+        }
+
+        let account = self.api.user_account().or_else(|_| self.api.login_status())?;
+        let code = response_code(&account);
+        if code != 200 {
+            return Err(anyhow!(
+                "{}({}): {}",
+                self.lang_text("账号信息请求失败", "Failed to fetch account profile"),
+                code,
+                response_message(&account)
+            ));
+        }
+
+        let uid = extract_current_user_id(&account)
+            .ok_or_else(|| anyhow!(self.lang_text("未找到当前用户 ID", "Current user id not found")))?;
+
+        self.home_sidebar.user_id = Some(uid.clone());
+        self.home_sidebar.liked_playlist_id = extract_liked_playlist_id(&account);
+        if let Some(name) = extract_current_user_name(&account) {
+            self.home_sidebar.user_name = name;
+        }
+
+        Ok(uid)
+    }
+
+    fn refresh_liked_song_cache(&mut self) -> Result<()> {
+        let uid = self.resolve_current_user_id()?;
+        let response = self.api.likelist(&uid)?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!(
+                "{}({}): {}",
+                self.lang_text("喜爱列表请求失败", "Failed to fetch liked songs"),
+                code,
+                response_message(&response)
+            ));
+        }
+
+        self.liked_song_ids = parse_likelist_song_ids(&response.body);
+        self.refresh_now_playing_like_state();
+        Ok(())
+    }
+
+    fn is_liked_playlist(&self, playlist_id: &str, title: Option<&str>) -> bool {
+        if self
+            .home_sidebar
+            .liked_playlist_id
+            .as_deref()
+            .map(|id| id == playlist_id)
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        let title = title.unwrap_or_default().trim();
+        !title.is_empty()
+            && (title.contains("我喜欢的音乐") || title.to_ascii_lowercase().contains("liked songs"))
+    }
+
     fn load_playlist_detail(&mut self, playlist_id: &str) -> Result<()> {
         let response = self.api.playlist_detail(playlist_id)?;
         let code = response_code(&response);
@@ -3991,6 +4093,10 @@ impl App {
             .and_then(|value| value.as_str())
             .unwrap_or("未命名歌单")
             .to_string();
+
+        if self.is_liked_playlist(playlist_id, Some(&title)) {
+            let _ = self.refresh_liked_song_cache();
+        }
 
         let artist = playlist
             .pointer("/creator/nickname")
@@ -4404,6 +4510,7 @@ impl App {
             let _ = session::save_cookie(cookie);
         }
         self.refresh_vip_audio_access();
+        let _ = self.refresh_liked_song_cache();
         self.home_sidebar = HomeSidebarState::default();
         self.playlist_section_return_snapshot = None;
         self.home.status_line = text.to_string();
@@ -4415,50 +4522,37 @@ impl App {
     }
 }
 
-fn startup_loading_progress_at(elapsed: f32, bar_width: u16, complete_requested: bool) -> f32 {
+fn startup_loading_progress_at(
+    elapsed: f32,
+    complete_elapsed: Option<f32>,
+    complete_requested: bool,
+) -> f32 {
     if elapsed <= 0.0 {
         return 0.0;
     }
 
-    if elapsed < STARTUP_LOADING_FILL_SECS {
-        let t = (elapsed / STARTUP_LOADING_FILL_SECS).clamp(0.0, 1.0);
-        return 1.0 - (1.0 - t).powf(3.55);
+    // Monotonic non-linear loading using a cubic-bezier-like y curve.
+    let t = (elapsed / STARTUP_LOADING_FILL_SECS).clamp(0.0, 1.0);
+    let eased = cubic_bezier_y(t, 0.08, 0.98);
+    let base = eased.min(0.96);
+
+    if !complete_requested {
+        return base;
     }
 
-    if complete_requested {
-        return 1.0;
-    }
+    let complete_t =
+        (complete_elapsed.unwrap_or(0.0) / STARTUP_LOADING_COMPLETE_RAMP_SECS).clamp(0.0, 1.0);
+    let complete_eased = cubic_bezier_y(complete_t, 0.25, 1.0);
+    (base + (1.0 - base) * complete_eased).clamp(0.0, 1.0)
+}
 
-    let bounce_elapsed = elapsed - STARTUP_LOADING_FILL_SECS;
-    let period = STARTUP_LOADING_BOUNCE_PERIOD_SECS.max(0.12);
-    let cycle = (bounce_elapsed / period).floor() as u32;
-
-    let max_retreat = STARTUP_LOADING_MAX_RETREAT_CHARS.min(bar_width.saturating_sub(1));
-    let retreat_chars = max_retreat.saturating_sub((cycle / STARTUP_LOADING_BOUNCE_GROUP) as u16);
-    if retreat_chars == 0 {
-        return 1.0;
-    }
-
-    let min_ratio = 1.0 - retreat_chars as f32 / bar_width.max(1) as f32;
-    let phase = (bounce_elapsed / period).fract();
-
-    if phase < 0.14 {
-        return 1.0;
-    }
-
-    if phase < 0.56 {
-        let t = ((phase - 0.14) / 0.42).clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - t).powf(3.2);
-        return 1.0 - (1.0 - min_ratio) * eased;
-    }
-
-    if phase < 0.96 {
-        let t = ((phase - 0.56) / 0.40).clamp(0.0, 1.0);
-        let eased = t.powf(3.2);
-        return min_ratio + (1.0 - min_ratio) * eased;
-    }
-
-    1.0
+fn cubic_bezier_y(t: f32, p1y: f32, p2y: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    let a = 3.0 * inv * inv * t * p1y;
+    let b = 3.0 * inv * t * t * p2y;
+    let c = t * t * t;
+    (a + b + c).clamp(0.0, 1.0)
 }
 
 fn map_audio_state(state: AudioPlayerState) -> PlaybackRuntimeState {
@@ -4743,6 +4837,25 @@ fn extract_current_user_id(response: &ApiResponse) -> Option<String> {
     None
 }
 
+fn extract_liked_playlist_id(response: &ApiResponse) -> Option<String> {
+    for pointer in [
+        "/profile/playlistId",
+        "/data/profile/playlistId",
+        "/profile/likesPlaylistId",
+        "/data/profile/likesPlaylistId",
+    ] {
+        if let Some(value) = response.body.pointer(pointer) {
+            if let Some(id) = parse_value_as_string(Some(value)) {
+                if !id.trim().is_empty() {
+                    return Some(id);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn extract_current_user_name(response: &ApiResponse) -> Option<String> {
     for pointer in [
         "/profile/nickname",
@@ -4823,6 +4936,36 @@ fn parse_song_like_check_result(body: &Value, song_id: &str) -> Option<bool> {
     }
 
     None
+}
+
+fn parse_likelist_song_ids(body: &Value) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let arrays = [
+        body.pointer("/ids").and_then(|value| value.as_array()),
+        body.pointer("/data/ids").and_then(|value| value.as_array()),
+        body.pointer("/data").and_then(|value| value.as_array()),
+    ];
+
+    for maybe_arr in arrays {
+        let Some(arr) = maybe_arr else {
+            continue;
+        };
+
+        for item in arr {
+            if let Some(value) = item
+                .as_i64()
+                .map(|value| value.to_string())
+                .or_else(|| item.as_u64().map(|value| value.to_string()))
+                .or_else(|| item.as_str().map(|value| value.trim().to_string()))
+            {
+                if !value.is_empty() {
+                    out.insert(value);
+                }
+            }
+        }
+    }
+
+    out
 }
 
 fn first_non_empty_intro_text(value: &Value) -> Option<String> {

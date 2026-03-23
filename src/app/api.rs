@@ -217,6 +217,12 @@ impl ApiState {
         Ok(response)
     }
 
+    pub fn likelist(&mut self, uid: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("uid", uid);
+        let response = self.runtime.block_on(self.client.likelist(&query))?;
+        Ok(response)
+    }
+
     pub fn song_like_check(&mut self, ids_json: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("ids", ids_json);
         let response = self.runtime.block_on(self.client.song_like_check(&query))?;
