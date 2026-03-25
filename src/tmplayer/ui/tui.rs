@@ -581,7 +581,7 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
             lang_on_off(app, app.config.transparent_background)
         ),
         format!("{}: {}", lang_text(app, "语言", "Language"), language_label),
-        format!("{}...", lang_text(app, "播放页设置", "Playback Settings")),
+        format!("{}...", lang_text(app, "播放设置", "Playback Settings")),
         format!("{}...", lang_text(app, "按键绑定", "Keybinds")),
         format!(
             "{}: {}",
@@ -651,7 +651,7 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
-        .title(lang_text(app, " 播放页设置 ", " Playback Settings "))
+        .title(lang_text(app, " 播放设置 ", " Playback Settings "))
         .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
     f.render_widget(block, area);
 
@@ -703,6 +703,11 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         ),
         format!(
             "{}: {}",
+            lang_text(app, "页面歌词", "Page Lyrics"),
+            lang_on_off(app, app.config.page_lyrics)
+        ),
+        format!(
+            "{}: {}",
             lang_text(app, "音质", "Audio Quality"),
             match app.config.audio_quality {
                 crate::tmplayer::data::config::AudioQuality::Standard => lang_text(app, "标准", "Standard"),
@@ -723,6 +728,11 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
                     lang_text(app, "超清母带", "JYMaster")
                 }
             }
+        ),
+        format!(
+            "{}: {}",
+            lang_text(app, "音频预加载", "Audio Preload"),
+            lang_on_off(app, app.config.audio_preload)
         ),
     ];
 

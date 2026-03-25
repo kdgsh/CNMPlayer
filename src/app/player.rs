@@ -62,6 +62,25 @@ impl AudioPlayer {
         self.ensure_output_stream()?;
 
         let file_path = self.ensure_cached_song(api, song_id, quality_level)?;
+        self.play_from_file(song_id, file_path)
+    }
+
+    pub fn play_cached_song(&mut self, song_id: &str, quality_level: &str) -> Result<bool> {
+        self.ensure_output_stream()?;
+        let file_path = self.cached_song_path(song_id, quality_level);
+        if !is_nonempty_file(&file_path) {
+            return Ok(false);
+        }
+        self.play_from_file(song_id, file_path)?;
+        Ok(true)
+    }
+
+    pub fn cached_song_path(&self, song_id: &str, quality_level: &str) -> PathBuf {
+        let quality = sanitize_cache_key(quality_level);
+        self.cache_dir.join(format!("{}__{}.audio", song_id, quality))
+    }
+
+    fn play_from_file(&mut self, song_id: &str, file_path: PathBuf) -> Result<()> {
         let file = File::open(&file_path)
             .with_context(|| format!("open cached audio failed: {}", file_path.display()))?;
         let decoder = Decoder::new(BufReader::new(file))
@@ -200,31 +219,26 @@ impl AudioPlayer {
     }
 
     fn ensure_cached_song(&self, api: &mut ApiState, song_id: &str, quality_level: &str) -> Result<PathBuf> {
-        let quality = sanitize_cache_key(quality_level);
-        let path = self
-            .cache_dir
-            .join(format!("{}__{}.audio", song_id, quality));
-        if path.is_file() {
-            let size = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-            if size > 0 {
-                return Ok(path);
-            }
+        let path = self.cached_song_path(song_id, quality_level);
+        if is_nonempty_file(&path) {
+            return Ok(path);
         }
 
         fs::create_dir_all(&self.cache_dir)
             .with_context(|| format!("create cache dir failed: {}", self.cache_dir.display()))?;
 
         let stream_url = api.song_stream_url_with_quality(song_id, quality_level)?;
-        let bytes = api.fetch_audio_bytes(&stream_url)?;
-        if bytes.is_empty() {
-            return Err(anyhow!("song audio payload is empty"));
-        }
-
-        fs::write(&path, bytes)
-            .with_context(|| format!("write cached audio failed: {}", path.display()))?;
+        api.fetch_audio_to_path(&stream_url, &path)?;
 
         Ok(path)
     }
+}
+
+fn is_nonempty_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    fs::metadata(path).map(|meta| meta.len()).unwrap_or(0) > 0
 }
 
 fn sanitize_cache_key(raw: &str) -> String {

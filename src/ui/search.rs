@@ -140,17 +140,10 @@ fn render_search_row(
     };
 
     let row_style = if focused {
-        let mut style = Style::default()
-            .fg(if is_now_playing {
-                app.theme.color_accent3()
-            } else {
-                app.theme.color_accent2()
-            })
-            .add_modifier(Modifier::BOLD);
-        if !app.config.transparent_background {
-            style = style.bg(app.theme.color_surface());
-        }
-        style
+        Style::default()
+            .fg(app.theme.color_base())
+            .bg(app.theme.color_accent())
+            .add_modifier(Modifier::BOLD)
     } else {
         let mut style = Style::default().fg(if is_now_playing {
             app.theme.color_accent3()
@@ -180,7 +173,7 @@ fn render_search_row(
     let space = usize::from(row.width).saturating_sub(used).max(1);
 
     let right_style = if focused {
-        row_style.fg(app.theme.color_accent2())
+        row_style
     } else {
         row_style
     };

@@ -194,17 +194,10 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
         };
 
         let style = if focused {
-            let mut style = Style::default()
-                .fg(if is_now_playing {
-                    app.theme.color_accent3()
-                } else {
-                    app.theme.color_accent2()
-                })
-                .add_modifier(Modifier::BOLD);
-            if !app.config.transparent_background {
-                style = style.bg(app.theme.color_surface());
-            }
-            style
+            Style::default()
+                .fg(app.theme.color_base())
+                .bg(app.theme.color_accent())
+                .add_modifier(Modifier::BOLD)
         } else {
             let mut style = Style::default().fg(if is_now_playing {
                 app.theme.color_accent3()
@@ -229,21 +222,17 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
         let used = display_width(&index_label) + 1 + display_width(&clipped_left) + display_width(&duration);
         let space = usize::from(row.width).saturating_sub(used).max(1);
 
-        let index_style = if focused || is_now_playing {
-            style.fg(if is_now_playing {
-                app.theme.color_accent3()
-            } else {
-                app.theme.color_accent2()
-            })
+        let index_style = if focused {
+            style
+        } else if is_now_playing {
+            style.fg(app.theme.color_accent3())
         } else {
             style.fg(app.theme.color_subtext())
         };
-        let duration_style = if focused || is_now_playing {
-            style.fg(if is_now_playing {
-                app.theme.color_accent3()
-            } else {
-                app.theme.color_accent2()
-            })
+        let duration_style = if focused {
+            style
+        } else if is_now_playing {
+            style.fg(app.theme.color_accent3())
         } else {
             style.fg(app.theme.color_subtext())
         };

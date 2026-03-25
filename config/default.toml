@@ -24,6 +24,7 @@ default_opening_title = ""
 language = "zh"
 page_lyrics = false
 audio_quality = "exhigh"
+audio_preload = false
 show_hints = true
 
 [cache]

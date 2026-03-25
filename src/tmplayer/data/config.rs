@@ -28,6 +28,9 @@ pub struct Config {
     #[serde(default)]
     pub kitty_graphics: bool,
 
+    #[serde(default)]
+    pub page_lyrics: bool,
+
     #[serde(default = "default_kitty_cover_scale_percent")]
     pub kitty_cover_scale_percent: u8,
 
@@ -39,6 +42,9 @@ pub struct Config {
 
     #[serde(default = "default_audio_quality")]
     pub audio_quality: AudioQuality,
+
+    #[serde(default)]
+    pub audio_preload: bool,
 
     #[serde(default = "default_show_hints")]
     pub show_hints: bool,
@@ -331,10 +337,12 @@ impl Default for Config {
             transparent_background: false,
             album_border: default_album_border(),
             kitty_graphics: false,
+            page_lyrics: false,
             kitty_cover_scale_percent: default_kitty_cover_scale_percent(),
             super_smooth_bar: false,
             bars_gap: false,
             audio_quality: default_audio_quality(),
+            audio_preload: false,
             show_hints: default_show_hints(),
             bar_number: default_bar_number(),
             bar_channels: default_bar_channels(),
@@ -395,6 +403,8 @@ impl Config {
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")
             || !raw.contains("audio_quality")
+            || !raw.contains("audio_preload")
+            || !raw.contains("page_lyrics")
             || !raw.contains("show_hints")
             || !raw.contains("keybind_search_box")
             || !raw.contains("keybind_fullscreen")

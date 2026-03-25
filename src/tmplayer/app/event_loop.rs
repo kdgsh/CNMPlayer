@@ -134,6 +134,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         theme: app.config.theme.clone(),
         transparent_background: app.config.transparent_background,
         language: app.language,
+        page_lyrics: app.config.page_lyrics,
         audio_quality: match app.config.audio_quality {
             AudioQuality::Standard => crate::data::config::AudioQuality::Standard,
             AudioQuality::Higher => crate::data::config::AudioQuality::Higher,
@@ -145,6 +146,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             AudioQuality::Dolby => crate::data::config::AudioQuality::Dolby,
             AudioQuality::Jymaster => crate::data::config::AudioQuality::Jymaster,
         },
+        audio_preload: app.config.audio_preload,
         vip_audio_unlocked: app.vip_audio_unlocked,
         show_hints: app.config.show_hints,
         visualize: match app.config.visualize {
@@ -181,6 +183,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
 
     app.config.transparent_background = config.transparent_background;
     app.language = config.language;
+    app.config.page_lyrics = config.page_lyrics;
     app.vip_audio_unlocked = config.vip_audio_unlocked;
     app.config.audio_quality = match config.audio_quality {
         crate::data::config::AudioQuality::Standard => AudioQuality::Standard,
@@ -194,6 +197,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
         crate::data::config::AudioQuality::Jymaster => AudioQuality::Jymaster,
     }
     .clamp_for_vip(app.vip_audio_unlocked);
+    app.config.audio_preload = config.audio_preload;
     app.config.show_hints = config.show_hints;
     app.config.visualize = match config.visualize {
         crate::data::config::VisualizeMode::Bars => VisualizeMode::Bars,
@@ -1009,8 +1013,16 @@ fn handle_action(
                             }
                         }
                         6 => {
+                            app.config.page_lyrics = !app.config.page_lyrics;
+                            save_and_sync_host_config(app, host_bridge);
+                        }
+                        7 => {
                             app.config.audio_quality =
                                 app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
+                            save_and_sync_host_config(app, host_bridge);
+                        }
+                        8 => {
+                            app.config.audio_preload = !app.config.audio_preload;
                             save_and_sync_host_config(app, host_bridge);
                         }
                         _ => {}
@@ -1176,7 +1188,7 @@ fn handle_action(
                     app.settings_selected -= 1;
                 }
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 7;
+                let count = 9;
                 if app.bar_settings_selected == 0 {
                     app.bar_settings_selected = count - 1;
                 } else {
@@ -1213,7 +1225,7 @@ fn handle_action(
                 let count = 8;
                 app.settings_selected = (app.settings_selected + 1) % count;
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 7;
+                let count = 9;
                 app.bar_settings_selected = (app.bar_settings_selected + 1) % count;
             } else if app.overlay == Overlay::LocalAudioSettingsModal {
                 let count = 5;
@@ -1268,8 +1280,16 @@ fn handle_action(
                         }
                     }
                     6 => {
+                        app.config.page_lyrics = !app.config.page_lyrics;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    7 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(-1, app.vip_audio_unlocked);
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    8 => {
+                        app.config.audio_preload = !app.config.audio_preload;
                         save_and_sync_host_config(app, host_bridge);
                     }
                     _ => {}
@@ -1320,8 +1340,16 @@ fn handle_action(
                         }
                     }
                     6 => {
+                        app.config.page_lyrics = !app.config.page_lyrics;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    7 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    8 => {
+                        app.config.audio_preload = !app.config.audio_preload;
                         save_and_sync_host_config(app, host_bridge);
                     }
                     _ => {}

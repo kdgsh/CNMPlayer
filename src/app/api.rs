@@ -1,6 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use ncm_api::{create_client, ApiClient, ApiResponse, Query};
 use reqwest::{header, Client};
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::Path;
+use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 
 pub struct ApiState {
@@ -24,7 +28,11 @@ impl ApiState {
             header::REFERER,
             header::HeaderValue::from_static("https://music.163.com/"),
         );
-        let http = Client::builder().default_headers(headers).build()?;
+        let http = Client::builder()
+            .default_headers(headers)
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(12))
+            .build()?;
 
         Ok(Self {
             runtime,
@@ -341,6 +349,64 @@ impl ApiState {
             .with_context(|| format!("download audio failed: {}", url))?;
 
         Ok(bytes)
+    }
+
+    pub fn fetch_audio_to_path(&self, url: &str, path: &Path) -> Result<()> {
+        let url = url.trim();
+        if url.is_empty() {
+            return Err(anyhow!("audio url is empty"));
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create audio cache dir failed: {}", parent.display()))?;
+        }
+
+        let tmp_path = path.with_extension("part");
+        let result = self
+            .runtime
+            .block_on(async {
+                let response = self.http.get(url).send().await?;
+                let mut response = response.error_for_status()?;
+
+                let mut file = File::create(&tmp_path)
+                    .with_context(|| format!("create temp audio file failed: {}", tmp_path.display()))?;
+
+                let mut written = 0u64;
+                while let Some(chunk) = response.chunk().await? {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+                    file.write_all(&chunk).with_context(|| {
+                        format!("write temp audio file failed: {}", tmp_path.display())
+                    })?;
+                    written = written.saturating_add(chunk.len() as u64);
+                }
+
+                file.flush()
+                    .with_context(|| format!("flush temp audio file failed: {}", tmp_path.display()))?;
+
+                if written == 0 {
+                    return Err(anyhow!("song audio payload is empty"));
+                }
+
+                Ok::<(), anyhow::Error>(())
+            })
+            .with_context(|| format!("stream audio to temp file failed: {}", url));
+
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp_path);
+            return result;
+        }
+
+        fs::rename(&tmp_path, path).with_context(|| {
+            format!(
+                "move temp audio cache file failed: {} -> {}",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
+        Ok(())
     }
 
     fn query_with_cookie(&self) -> Query {

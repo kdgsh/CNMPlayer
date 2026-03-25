@@ -453,13 +453,23 @@ fn draw_home_sidebar_section(
         } else {
             0
         };
-        let start = if total <= max_rows {
+        let mut start = if total <= max_rows {
             0
         } else {
-            focus_idx
-                .saturating_sub(max_rows / 2)
+            app.home_sidebar
+                .section_scroll_offset(section)
                 .min(total.saturating_sub(max_rows))
         };
+
+        if total > max_rows {
+            if focus_idx < start {
+                start = focus_idx;
+            } else if focus_idx >= start.saturating_add(max_rows) {
+                start = focus_idx + 1 - max_rows;
+            }
+            start = start.min(total.saturating_sub(max_rows));
+        }
+        app.home_sidebar.set_section_scroll_offset(section, start);
 
         for (visual_idx, item) in items.iter().skip(start).take(max_rows).enumerate() {
             let idx = start + visual_idx;
@@ -492,13 +502,17 @@ fn draw_home_sidebar_section(
 
             let text_style = if is_focused {
                 Style::default()
-                    .fg(app.theme.color_accent2())
+                    .fg(app.theme.color_base())
+                    .bg(app.theme.color_accent())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(app.theme.color_text())
             };
             let right_style = if is_focused {
-                Style::default().fg(app.theme.color_accent())
+                Style::default()
+                    .fg(app.theme.color_base())
+                    .bg(app.theme.color_accent())
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(app.theme.color_subtext())
             };

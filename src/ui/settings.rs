@@ -22,7 +22,7 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
 
     let title = match app.overlay {
         Some(Overlay::Settings) => l(app, " 设置 ", " Settings "),
-        Some(Overlay::SettingsPlayback) => l(app, " 播放页设置 ", " Playback Settings "),
+        Some(Overlay::SettingsPlayback) => l(app, " 播放设置 ", " Playback Settings "),
         Some(Overlay::SettingsKeybinds) => l(app, " 按键绑定 ", " Keybinds "),
         Some(Overlay::SettingsAbout) => " about ",
         _ => l(app, " 设置 ", " Settings "),
@@ -75,7 +75,7 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
                 Language::En => "English",
             }
         ),
-        format!("{}...", l(app, "播放页设置", "Playback Settings")),
+        format!("{}...", l(app, "播放设置", "Playback Settings")),
         format!("{}...", l(app, "按键绑定", "Keybinds")),
         format!(
             "{}: {}",
@@ -168,6 +168,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             "{}: {}",
             l(app, "音质", "Audio Quality"),
             audio_quality_label(app, app.config.audio_quality)
+        ),
+        format!(
+            "{}: {}",
+            l(app, "音频预加载", "Audio Preload"),
+            on_off(app, app.config.audio_preload)
         ),
     ];
 
