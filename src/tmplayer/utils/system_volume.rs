@@ -4,7 +4,6 @@ mod imp {
     use anyhow::{anyhow, Result};
 
     pub struct SystemVolume {
-        mixer: Mixer,
         selem_id: SelemId,
         elem_name: String,
     }
@@ -21,7 +20,6 @@ mod imp {
                 if let Some(selem) = mixer.find_selem(&id) {
                     if selem.has_playback_volume() {
                         return Ok(Self {
-                            mixer,
                             selem_id: id,
                             elem_name: name.to_string(),
                         });
@@ -40,7 +38,6 @@ mod imp {
                 let sid = selem.get_id();
                 let name = sid.get_name().unwrap_or("Unknown").to_string();
                 return Ok(Self {
-                    mixer,
                     selem_id: sid,
                     elem_name: name,
                 });
@@ -50,8 +47,8 @@ mod imp {
         }
 
         pub fn get(&self) -> Result<f32> {
-            let selem = self
-                .mixer
+            let mixer = Mixer::new("default", false)?;
+            let selem = mixer
                 .find_selem(&self.selem_id)
                 .ok_or_else(|| anyhow!("ALSA element not found: {}", self.elem_name))?;
 
@@ -84,8 +81,8 @@ mod imp {
         }
 
         pub fn set(&self, volume: f32) -> Result<()> {
-            let selem = self
-                .mixer
+            let mixer = Mixer::new("default", false)?;
+            let selem = mixer
                 .find_selem(&self.selem_id)
                 .ok_or_else(|| anyhow!("ALSA element not found: {}", self.elem_name))?;
 

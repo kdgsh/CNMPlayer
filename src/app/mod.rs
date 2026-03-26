@@ -1,4 +1,5 @@
 mod api;
+mod mpris_bridge;
 pub(crate) mod player;
 
 use crate::data::config::Config;
@@ -26,6 +27,7 @@ use tokio::runtime::Builder;
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
+use mpris_bridge::{MprisBridge, MprisControlEvent, MprisSyncPayload};
 use player::{AudioPlayer, AudioPlayerState, cleanup_cache_dir, resolve_cache_root};
 
 const MAX_INPUT_LEN: usize = 64;
@@ -1358,6 +1360,10 @@ pub struct App {
     audio_preload_target_song_id: Option<String>,
     audio_preload_last_attempt_at: Option<Instant>,
     audio_prefetch_next_id: u64,
+    mpris_bridge: MprisBridge,
+    mpris_last_sync_at: Instant,
+    mpris_last_signature: Option<String>,
+    mpris_last_playback: PlaybackRuntimeState,
     api: ApiState,
     audio_player: AudioPlayer,
 }
@@ -1368,6 +1374,7 @@ impl App {
         let audio_player = AudioPlayer::new(&config);
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
+        let mpris_bridge = MprisBridge::new(&cache_root);
         if config.cache.clean_on_startup {
             let _ = cleanup_cache_dir(&cover_cache_dir, &config.cache);
         }
@@ -1454,6 +1461,10 @@ impl App {
             audio_preload_target_song_id: None,
             audio_preload_last_attempt_at: None,
             audio_prefetch_next_id: 1,
+            mpris_bridge,
+            mpris_last_sync_at: Instant::now(),
+            mpris_last_signature: None,
+            mpris_last_playback: PlaybackRuntimeState::Stopped,
             api: ApiState::new(saved_cookie.clone())?,
             audio_player,
         };
@@ -1490,6 +1501,8 @@ impl App {
         self.tick_audio();
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
+        self.apply_mpris_control_events();
+        self.sync_mpris_exposure();
         self.tick_main_cava();
         self.tick_search_box_animation();
         self.tick_home_sidebar_animation();
@@ -1745,6 +1758,122 @@ impl App {
         self.tick_audio();
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
+        self.apply_mpris_control_events();
+        self.sync_mpris_exposure();
+    }
+
+    fn apply_mpris_control_events(&mut self) {
+        for event in self.mpris_bridge.drain_control_events() {
+            match event {
+                MprisControlEvent::Play => self.mpris_play(),
+                MprisControlEvent::Pause => self.mpris_pause(),
+                MprisControlEvent::PlayPause => self.toggle_play_pause_hotkey(),
+                MprisControlEvent::Stop => {
+                    self.audio_player.stop();
+                    self.playback_state = PlaybackRuntimeState::Stopped;
+                }
+                MprisControlEvent::Next => self.play_next_hotkey(),
+                MprisControlEvent::Previous => self.play_previous_hotkey(),
+                MprisControlEvent::SeekRelativeMicros(delta) => self.mpris_seek_relative(delta),
+                MprisControlEvent::SeekAbsoluteMicros(pos) => self.mpris_seek_absolute(pos),
+            }
+        }
+    }
+
+    fn mpris_play(&mut self) {
+        if self.now_playing.is_none() {
+            return;
+        }
+        if self.playback_state == PlaybackRuntimeState::Stopped {
+            if let Some(index) = self.playback_index {
+                self.play_queue_index(index, false);
+            }
+            return;
+        }
+        if self.playback_state == PlaybackRuntimeState::Paused {
+            self.audio_player.toggle_play_pause();
+            self.playback_state = map_audio_state(self.audio_player.state());
+        }
+    }
+
+    fn mpris_pause(&mut self) {
+        if self.playback_state == PlaybackRuntimeState::Playing {
+            self.audio_player.toggle_play_pause();
+            self.playback_state = map_audio_state(self.audio_player.state());
+        }
+    }
+
+    fn mpris_seek_relative(&mut self, delta_micros: i64) {
+        let total = self.playback_duration();
+        let total_micros = total.as_micros();
+        if total_micros == 0 {
+            return;
+        }
+
+        let current_micros = self.audio_player.position().as_micros() as i128;
+        let target = (current_micros + delta_micros as i128).clamp(0, total_micros as i128);
+        let ratio = (target as f64 / total_micros as f64) as f32;
+        self.seek_to_ratio(ratio);
+    }
+
+    fn mpris_seek_absolute(&mut self, position_micros: i64) {
+        let total = self.playback_duration();
+        let total_micros = total.as_micros();
+        if total_micros == 0 {
+            return;
+        }
+
+        let target = (position_micros as i128).clamp(0, total_micros as i128);
+        let ratio = (target as f64 / total_micros as f64) as f32;
+        self.seek_to_ratio(ratio);
+    }
+
+    fn sync_mpris_exposure(&mut self) {
+        let now = Instant::now();
+        let signature = self
+            .now_playing
+            .as_ref()
+            .map(|track| {
+                format!(
+                    "{}|{}|{}|{}|{}|{}",
+                    track.song_id,
+                    track.duration_ms,
+                    track.cover.as_ref().map(|b| b.len()).unwrap_or(0),
+                    track.cover_url.as_deref().unwrap_or_default(),
+                    track.lyrics.as_ref().map(|v| v.len()).unwrap_or(0),
+                    track
+                        .lyrics
+                        .as_ref()
+                        .and_then(|v| v.last().map(|line| line.start_ms))
+                        .unwrap_or(0)
+                )
+            })
+            .unwrap_or_else(|| "none".to_string());
+
+        let metadata_changed = self.mpris_last_signature.as_deref() != Some(signature.as_str());
+        let playback_changed = self.mpris_last_playback != self.playback_state;
+        let periodic_tick = now.duration_since(self.mpris_last_sync_at) >= Duration::from_millis(900);
+
+        if !metadata_changed && !playback_changed && !periodic_tick {
+            return;
+        }
+
+        let payload = MprisSyncPayload {
+            playback: self.playback_state,
+            position: self.audio_player.position(),
+            track: if metadata_changed {
+                self.now_playing.clone()
+            } else {
+                None
+            },
+        };
+
+        self.mpris_bridge.update(payload);
+        self.mpris_last_sync_at = now;
+        self.mpris_last_playback = self.playback_state;
+        if metadata_changed {
+            self.mpris_last_signature = Some(signature);
+        }
     }
 
     pub fn fullscreen_playback_snapshot(&self) -> FullscreenPlaybackSnapshot {

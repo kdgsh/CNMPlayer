@@ -36,4 +36,5 @@ chromaprint = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2.0"
 alsa = "0.9"
+mpris-server = "0.9"
 
