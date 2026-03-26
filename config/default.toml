@@ -4,7 +4,7 @@ spectrum_hz = 60
 mpris_poll_ms = 100
 visualize = "bars"
 transparent_background = true
-album_border = false
+album_border = true
 kitty_graphics = false
 kitty_cover_scale_percent = 100
 super_smooth_bar = false
@@ -25,6 +25,7 @@ language = "zh"
 page_lyrics = false
 audio_quality = "exhigh"
 audio_preload = false
+playback_memory = false
 show_hints = true
 
 [cache]

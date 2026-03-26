@@ -156,6 +156,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         format!("{}: {}", l(app, "声道", "Channels"), channels),
         format!(
             "{}: {}",
+            l(app, "封面边框", "Cover Border"),
+            on_off(app, app.config.album_border)
+        ),
+        format!(
+            "{}: {}",
             l(app, "Kitty 图形", "Kitty Graphics"),
             on_off(app, app.config.kitty_graphics)
         ),
@@ -173,6 +178,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             "{}: {}",
             l(app, "音频预加载", "Audio Preload"),
             on_off(app, app.config.audio_preload)
+        ),
+        format!(
+            "{}: {}",
+            l(app, "播放记忆", "Playback Memory"),
+            on_off(app, app.config.playback_memory)
         ),
     ];
 

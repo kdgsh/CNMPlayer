@@ -74,6 +74,9 @@ pub struct Config {
     #[serde(default)]
     pub audio_preload: bool,
 
+    #[serde(default)]
+    pub playback_memory: bool,
+
     #[serde(default = "default_show_hints")]
     pub show_hints: bool,
 
@@ -292,7 +295,7 @@ fn default_visualize() -> VisualizeMode {
 }
 
 fn default_album_border() -> bool {
-    false
+    true
 }
 
 fn default_kitty_cover_scale_percent() -> u8 {
@@ -431,6 +434,7 @@ impl Default for Config {
             page_lyrics: default_page_lyrics(),
             audio_quality: default_audio_quality(),
             audio_preload: false,
+            playback_memory: false,
             show_hints: default_show_hints(),
             cache: CacheConfig::default(),
             keybind_search_box: default_keybind_search_box(),
@@ -488,6 +492,7 @@ impl Config {
             || !raw.contains("page_lyrics")
             || !raw.contains("audio_quality")
             || !raw.contains("audio_preload")
+            || !raw.contains("playback_memory")
             || !raw.contains("show_hints")
             || !raw.contains("[cache]")
             || !raw.contains("default-opening-folder")

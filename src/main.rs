@@ -169,6 +169,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
 
         terminal.draw(|frame| ui::draw(frame, app))?;
         if app.should_quit {
+            app.persist_playback_memory_on_exit();
             break;
         }
 

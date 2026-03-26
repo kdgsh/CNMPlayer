@@ -133,6 +133,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
     HostConfigSync {
         theme: app.config.theme.clone(),
         transparent_background: app.config.transparent_background,
+        album_border: app.config.album_border,
         language: app.language,
         page_lyrics: app.config.page_lyrics,
         audio_quality: match app.config.audio_quality {
@@ -147,6 +148,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             AudioQuality::Jymaster => crate::data::config::AudioQuality::Jymaster,
         },
         audio_preload: app.config.audio_preload,
+        playback_memory: app.config.playback_memory,
         vip_audio_unlocked: app.vip_audio_unlocked,
         show_hints: app.config.show_hints,
         visualize: match app.config.visualize {
@@ -182,6 +184,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     }
 
     app.config.transparent_background = config.transparent_background;
+    app.config.album_border = config.album_border;
     app.language = config.language;
     app.config.page_lyrics = config.page_lyrics;
     app.vip_audio_unlocked = config.vip_audio_unlocked;
@@ -198,6 +201,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     }
     .clamp_for_vip(app.vip_audio_unlocked);
     app.config.audio_preload = config.audio_preload;
+    app.config.playback_memory = config.playback_memory;
     app.config.show_hints = config.show_hints;
     app.config.visualize = match config.visualize {
         crate::data::config::VisualizeMode::Bars => VisualizeMode::Bars,
@@ -1007,22 +1011,30 @@ fn handle_action(
                             save_and_sync_host_config(app, host_bridge);
                         }
                         5 => {
+                            app.config.album_border = !app.config.album_border;
+                            save_and_sync_host_config(app, host_bridge);
+                        }
+                        6 => {
                             if app.kitty_graphics_supported {
                                 app.config.kitty_graphics = !app.config.kitty_graphics;
                                 save_and_sync_host_config(app, host_bridge);
                             }
                         }
-                        6 => {
+                        7 => {
                             app.config.page_lyrics = !app.config.page_lyrics;
                             save_and_sync_host_config(app, host_bridge);
                         }
-                        7 => {
+                        8 => {
                             app.config.audio_quality =
                                 app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
                             save_and_sync_host_config(app, host_bridge);
                         }
-                        8 => {
+                        9 => {
                             app.config.audio_preload = !app.config.audio_preload;
+                            save_and_sync_host_config(app, host_bridge);
+                        }
+                        10 => {
+                            app.config.playback_memory = !app.config.playback_memory;
                             save_and_sync_host_config(app, host_bridge);
                         }
                         _ => {}
@@ -1188,7 +1200,7 @@ fn handle_action(
                     app.settings_selected -= 1;
                 }
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 9;
+                let count = 11;
                 if app.bar_settings_selected == 0 {
                     app.bar_settings_selected = count - 1;
                 } else {
@@ -1225,7 +1237,7 @@ fn handle_action(
                 let count = 8;
                 app.settings_selected = (app.settings_selected + 1) % count;
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 9;
+                let count = 11;
                 app.bar_settings_selected = (app.bar_settings_selected + 1) % count;
             } else if app.overlay == Overlay::LocalAudioSettingsModal {
                 let count = 5;
@@ -1274,22 +1286,30 @@ fn handle_action(
                         save_and_sync_host_config(app, host_bridge);
                     }
                     5 => {
+                        app.config.album_border = !app.config.album_border;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    6 => {
                         if app.kitty_graphics_supported {
                             app.config.kitty_graphics = !app.config.kitty_graphics;
                             save_and_sync_host_config(app, host_bridge);
                         }
                     }
-                    6 => {
+                    7 => {
                         app.config.page_lyrics = !app.config.page_lyrics;
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    7 => {
+                    8 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(-1, app.vip_audio_unlocked);
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    8 => {
+                    9 => {
                         app.config.audio_preload = !app.config.audio_preload;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    10 => {
+                        app.config.playback_memory = !app.config.playback_memory;
                         save_and_sync_host_config(app, host_bridge);
                     }
                     _ => {}
@@ -1334,22 +1354,30 @@ fn handle_action(
                         save_and_sync_host_config(app, host_bridge);
                     }
                     5 => {
+                        app.config.album_border = !app.config.album_border;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    6 => {
                         if app.kitty_graphics_supported {
                             app.config.kitty_graphics = !app.config.kitty_graphics;
                             save_and_sync_host_config(app, host_bridge);
                         }
                     }
-                    6 => {
+                    7 => {
                         app.config.page_lyrics = !app.config.page_lyrics;
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    7 => {
+                    8 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    8 => {
+                    9 => {
                         app.config.audio_preload = !app.config.audio_preload;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                    10 => {
+                        app.config.playback_memory = !app.config.playback_memory;
                         save_and_sync_host_config(app, host_bridge);
                     }
                     _ => {}

@@ -4,6 +4,7 @@ pub(crate) mod player;
 
 use crate::data::config::Config;
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
+use crate::data::playback_session;
 use crate::data::session;
 use crate::data::theme_loader::ThemeLoader;
 use crate::render::cover_renderer::render_cover_ascii;
@@ -35,7 +36,7 @@ const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 8;
-const SETTINGS_PLAYBACK_ITEMS: usize = 9;
+const SETTINGS_PLAYBACK_ITEMS: usize = 11;
 const SETTINGS_KEYBIND_ITEMS: usize = 15;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
@@ -1483,6 +1484,7 @@ impl App {
                         app.home.status_line = format!("已恢复登录，但推荐加载失败: {}", err);
                     }
                     app.finish_startup_loading();
+                    app.try_restore_playback_memory();
                     return Ok(app);
                 }
                 Ok(false) => {
@@ -2321,6 +2323,7 @@ impl App {
                 PlaybackRepeatMode::LoopOne => self.lang_text("单曲循环", "Loop One"),
             }
         ));
+        self.persist_playback_memory();
     }
 
     fn refresh_now_playing_like_state(&mut self) {
@@ -2445,6 +2448,7 @@ impl App {
         self.lyric_fetch_inflight_song_id = None;
         self.lyric_fetch_last_attempt_at = None;
         self.maybe_schedule_now_playing_lyric_fetch();
+        self.persist_playback_memory();
 
         let request_id = self.audio_prefetch_next_id;
         self.audio_prefetch_next_id = self.audio_prefetch_next_id.saturating_add(1);
@@ -3803,23 +3807,36 @@ impl App {
                 let _ = self.config.save();
             }
             5 => {
-                self.config.kitty_graphics = !self.config.kitty_graphics;
+                self.config.album_border = !self.config.album_border;
                 let _ = self.config.save();
             }
             6 => {
-                self.config.page_lyrics = !self.config.page_lyrics;
+                self.config.kitty_graphics = !self.config.kitty_graphics;
                 let _ = self.config.save();
             }
             7 => {
+                self.config.page_lyrics = !self.config.page_lyrics;
+                let _ = self.config.save();
+            }
+            8 => {
                 let next = self
                     .config
                     .audio_quality
                     .cycle(delta, self.vip_audio_unlocked);
                 self.set_audio_quality(next);
             }
-            8 => {
+            9 => {
                 self.config.audio_preload = !self.config.audio_preload;
                 let _ = self.config.save();
+            }
+            10 => {
+                self.config.playback_memory = !self.config.playback_memory;
+                let _ = self.config.save();
+                if self.config.playback_memory {
+                    self.persist_playback_memory();
+                } else {
+                    self.clear_playback_memory();
+                }
             }
             _ => {}
         }
@@ -4228,10 +4245,12 @@ impl App {
         crate::tmplayer::HostConfigSync {
             theme: self.config.theme.clone(),
             transparent_background: self.config.transparent_background,
+            album_border: self.config.album_border,
             language: self.config.language,
             page_lyrics: self.config.page_lyrics,
             audio_quality: self.config.audio_quality,
             audio_preload: self.config.audio_preload,
+            playback_memory: self.config.playback_memory,
             vip_audio_unlocked: self.vip_audio_unlocked,
             show_hints: self.config.show_hints,
             visualize: self.config.visualize,
@@ -4260,6 +4279,11 @@ impl App {
             changed = true;
         }
 
+        if self.config.album_border != sync.album_border {
+            self.config.album_border = sync.album_border;
+            changed = true;
+        }
+
         if self.config.language != sync.language {
             self.config.language = sync.language;
             changed = true;
@@ -4284,6 +4308,16 @@ impl App {
         if self.config.audio_preload != sync.audio_preload {
             self.config.audio_preload = sync.audio_preload;
             changed = true;
+        }
+
+        if self.config.playback_memory != sync.playback_memory {
+            self.config.playback_memory = sync.playback_memory;
+            changed = true;
+            if self.config.playback_memory {
+                self.persist_playback_memory();
+            } else {
+                self.clear_playback_memory();
+            }
         }
 
         if self.config.show_hints != sync.show_hints {
@@ -4485,6 +4519,89 @@ impl App {
         self.search.status_line = text;
     }
 
+    pub fn persist_playback_memory_on_exit(&self) {
+        self.persist_playback_memory();
+    }
+
+    fn clear_playback_memory(&self) {
+        let _ = playback_session::clear();
+    }
+
+    fn persist_playback_memory(&self) {
+        if !self.config.playback_memory || self.playback_queue.is_empty() {
+            return;
+        }
+
+        let queue = self
+            .playback_queue
+            .iter()
+            .map(|track| playback_session::PlaybackSessionTrack {
+                song_id: track.song_id.clone(),
+                title: track.title.clone(),
+                artist: track.artist.clone(),
+                album: track.album.clone(),
+                duration_ms: track.duration_ms,
+                cover_url: track.cover_url.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let record = playback_session::PlaybackSessionRecord {
+            queue,
+            current_index: self.playback_index,
+            repeat_mode: Some(playback_repeat_mode_key(self.playback_repeat_mode).to_string()),
+            updated_at: 0,
+        };
+
+        let _ = playback_session::save(&record);
+    }
+
+    fn try_restore_playback_memory(&mut self) {
+        if !self.config.playback_memory {
+            return;
+        }
+
+        let Ok(Some(record)) = playback_session::load() else {
+            return;
+        };
+
+        let queue = record
+            .queue
+            .into_iter()
+            .filter_map(|track| {
+                let song_id = track.song_id.trim().to_string();
+                if song_id.is_empty() {
+                    return None;
+                }
+                Some(PlaybackTrack {
+                    song_id,
+                    title: track.title,
+                    artist: track.artist,
+                    album: track.album,
+                    duration_ms: track.duration_ms,
+                    cover_url: track.cover_url,
+                    cover: None,
+                    lyrics: None,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        if queue.is_empty() {
+            return;
+        }
+
+        if let Some(mode) = record.repeat_mode.as_deref().and_then(playback_repeat_mode_from_key) {
+            self.playback_repeat_mode = mode;
+        }
+
+        self.playback_queue = queue;
+        let target = record
+            .current_index
+            .unwrap_or(0)
+            .min(self.playback_queue.len().saturating_sub(1));
+        self.play_queue_index(target, false);
+        self.set_runtime_status(self.lang_text("已恢复播放记忆", "Playback memory restored"));
+    }
+
     fn lang_text<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
         match self.config.language {
             Language::Zh => zh,
@@ -4558,6 +4675,7 @@ impl App {
         self.session_cookie = None;
         self.api.clear_cookie();
         let _ = session::clear_cookie();
+        self.clear_playback_memory();
         self.vip_audio_unlocked = false;
         self.config.audio_quality = self.config.audio_quality.clamp_for_vip(false);
 
@@ -5422,6 +5540,26 @@ impl App {
             self.home.status_line = format!("{}，推荐歌单加载失败: {}", text, err);
         }
         self.finish_startup_loading();
+        self.try_restore_playback_memory();
+    }
+}
+
+fn playback_repeat_mode_key(mode: PlaybackRepeatMode) -> &'static str {
+    match mode {
+        PlaybackRepeatMode::Sequence => "sequence",
+        PlaybackRepeatMode::Shuffle => "shuffle",
+        PlaybackRepeatMode::LoopAll => "loop_all",
+        PlaybackRepeatMode::LoopOne => "loop_one",
+    }
+}
+
+fn playback_repeat_mode_from_key(value: &str) -> Option<PlaybackRepeatMode> {
+    match value {
+        "sequence" => Some(PlaybackRepeatMode::Sequence),
+        "shuffle" => Some(PlaybackRepeatMode::Shuffle),
+        "loop_all" => Some(PlaybackRepeatMode::LoopAll),
+        "loop_one" => Some(PlaybackRepeatMode::LoopOne),
+        _ => None,
     }
 }
 

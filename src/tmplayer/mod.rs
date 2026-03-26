@@ -99,10 +99,12 @@ pub struct HostPlaybackSnapshot {
 pub struct HostConfigSync {
     pub theme: String,
     pub transparent_background: bool,
+    pub album_border: bool,
     pub language: HostLanguage,
     pub page_lyrics: bool,
     pub audio_quality: HostAudioQuality,
     pub audio_preload: bool,
+    pub playback_memory: bool,
     pub vip_audio_unlocked: bool,
     pub show_hints: bool,
     pub visualize: HostVisualizeMode,
@@ -185,6 +187,7 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
             HostAudioQuality::Jymaster => data::config::AudioQuality::Jymaster,
         },
         audio_preload: host.audio_preload,
+        playback_memory: host.playback_memory,
         show_hints: host.show_hints,
         bar_number: match host.bar_number {
             HostBarNumber::Auto => data::config::BarNumber::Auto,

@@ -698,6 +698,11 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         format!("{}: {}", lang_text(app, "声道", "Channels"), channels_label),
         format!(
             "{}: {}",
+            lang_text(app, "封面边框", "Cover Border"),
+            lang_on_off(app, app.config.album_border)
+        ),
+        format!(
+            "{}: {}",
             lang_text(app, "Kitty 图形", "Kitty Graphics"),
             lang_on_off(app, app.config.kitty_graphics)
         ),
@@ -733,6 +738,11 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             "{}: {}",
             lang_text(app, "音频预加载", "Audio Preload"),
             lang_on_off(app, app.config.audio_preload)
+        ),
+        format!(
+            "{}: {}",
+            lang_text(app, "播放记忆", "Playback Memory"),
+            lang_on_off(app, app.config.playback_memory)
         ),
     ];
 
