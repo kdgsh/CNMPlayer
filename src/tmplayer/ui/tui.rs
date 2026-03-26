@@ -55,8 +55,8 @@ pub struct Tui {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     pub should_quit: bool,
 
-    kitty_info_last: Option<(u64, u16, u16)>,
-    kitty_playlist_last: Option<(u64, u16, u16)>,
+    kitty_info_last: Option<(u64, u16, u16, u16, u16)>,
+    kitty_playlist_last: Option<(u64, u16, u16, u16, u16)>,
 
     kitty_image_ids: HashMap<u64, u32>,
     kitty_transmitted: HashSet<u64>,
@@ -357,7 +357,7 @@ impl Tui {
         const CELL_H_PX: u32 = 16;
 
         let hide_info = |this: &mut Self| {
-            if let Some((hash, _, _)) = this.kitty_info_last {
+            if let Some((hash, _, _, _, _)) = this.kitty_info_last {
                 if let Some(&image_id) = this.kitty_image_ids.get(&hash) {
                     let _ = crate::tmplayer::render::kitty_graphics::delete_image_placement(image_id, INFO_PLACEMENT_ID, false);
                 } else {
@@ -367,7 +367,7 @@ impl Tui {
             }
         };
         let hide_playlist = |this: &mut Self| {
-            if let Some((hash, _, _)) = this.kitty_playlist_last {
+            if let Some((hash, _, _, _, _)) = this.kitty_playlist_last {
                 if let Some(&image_id) = this.kitty_image_ids.get(&hash) {
                     let _ = crate::tmplayer::render::kitty_graphics::delete_image_placement(image_id, PLAYLIST_PLACEMENT_ID, false);
                 } else {
@@ -421,6 +421,28 @@ impl Tui {
             self.kitty_pending.clear();
             self.kitty_next_image_id = 2000;
         }
+
+        let modal_area = settings_modal_area(layout.full, app.overlay);
+        let clip_by_modal = |rect: Rect| -> Rect {
+            if rect.width == 0 || rect.height == 0 {
+                return rect;
+            }
+            let Some(modal) = modal_area else {
+                return rect;
+            };
+            match subtract_rect_largest(rect, modal) {
+                Some(clipped) => clipped,
+                None => Rect {
+                    x: rect.x,
+                    y: rect.y,
+                    width: 0,
+                    height: 0,
+                },
+            }
+        };
+
+        let info_cover_rect = clip_by_modal(layout.info_cover_image);
+        let playlist_cover_rect = clip_by_modal(layout.playlist_cover_image);
 
         let effective_quality: u8 = if settings_open {
             self.kitty_last_cover_quality
@@ -487,21 +509,27 @@ impl Tui {
 
         // Info panel cover (current track).
         if let (Some(bytes), Some(hash)) = (app.player.track.cover.as_deref(), app.player.track.cover_hash) {
-            enqueue(self, hash, bytes, layout.info_cover_image);
+            enqueue(self, hash, bytes, info_cover_rect);
         }
 
         if playlist_overlay_visible {
             hide_info(self);
         } else if let (Some(_bytes), Some(hash)) = (app.player.track.cover.as_deref(), app.player.track.cover_hash) {
-            let sig = (hash, layout.info_cover_image.width, layout.info_cover_image.height);
+            let sig = (
+                hash,
+                info_cover_rect.x,
+                info_cover_rect.y,
+                info_cover_rect.width,
+                info_cover_rect.height,
+            );
             if self.kitty_info_last != Some(sig) {
                 // When the image id changes (hash changes), kitty treats (image_id, placement_id)
                 // as the unique placement key. Reusing the same placement_id with a new image_id
                 // would leave the old placement behind unless we explicitly delete it.
                 hide_info(self);
-                if self.kitty_transmitted.contains(&hash) {
+                if info_cover_rect.width > 0 && info_cover_rect.height > 0 && self.kitty_transmitted.contains(&hash) {
                     let image_id = self.image_id_for_hash(hash);
-                    let _ = crate::tmplayer::render::kitty_graphics::place_image(layout.info_cover_image, image_id, INFO_PLACEMENT_ID);
+                    let _ = crate::tmplayer::render::kitty_graphics::place_image(info_cover_rect, image_id, INFO_PLACEMENT_ID);
                     self.kitty_info_last = Some(sig);
                 }
             }
@@ -512,21 +540,27 @@ impl Tui {
         // Playlist album cover (local browsing). Only show the real cover once fully expanded.
         if playlist_fully_expanded {
             if let (Some(bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
-                enqueue(self, hash, bytes, layout.playlist_cover_image);
+                enqueue(self, hash, bytes, playlist_cover_rect);
             }
         }
 
-        if !playlist_fully_expanded || layout.playlist_cover_image.width <= 1 || layout.playlist_cover_image.height <= 1 {
+        if !playlist_fully_expanded || playlist_cover_rect.width <= 1 || playlist_cover_rect.height <= 1 {
             hide_playlist(self);
         } else if let (Some(_bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
-            let sig = (hash, layout.playlist_cover_image.width, layout.playlist_cover_image.height);
+            let sig = (
+                hash,
+                playlist_cover_rect.x,
+                playlist_cover_rect.y,
+                playlist_cover_rect.width,
+                playlist_cover_rect.height,
+            );
             if self.kitty_playlist_last != Some(sig) {
                 // Same reasoning as info cover: avoid accumulating multiple placements
                 // for different image ids in the same visual slot.
                 hide_playlist(self);
                 if self.kitty_transmitted.contains(&hash) {
                     let image_id = self.image_id_for_hash(hash);
-                    let _ = crate::tmplayer::render::kitty_graphics::place_image(layout.playlist_cover_image, image_id, PLAYLIST_PLACEMENT_ID);
+                    let _ = crate::tmplayer::render::kitty_graphics::place_image(playlist_cover_rect, image_id, PLAYLIST_PLACEMENT_ID);
                     self.kitty_playlist_last = Some(sig);
                 }
             }
@@ -546,6 +580,93 @@ fn centered_rect(size: Rect, width: u16, height: u16) -> Rect {
         y: size.y + (size.height.saturating_sub(h)) / 2,
         width: w,
         height: h,
+    }
+}
+
+fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let ax2 = a.x.saturating_add(a.width);
+    let ay2 = a.y.saturating_add(a.height);
+    let bx2 = b.x.saturating_add(b.width);
+    let by2 = b.y.saturating_add(b.height);
+
+    let x1 = a.x.max(b.x);
+    let y1 = a.y.max(b.y);
+    let x2 = ax2.min(bx2);
+    let y2 = ay2.min(by2);
+
+    if x2 <= x1 || y2 <= y1 {
+        return None;
+    }
+
+    Some(Rect {
+        x: x1,
+        y: y1,
+        width: x2 - x1,
+        height: y2 - y1,
+    })
+}
+
+fn rect_area(rect: Rect) -> u32 {
+    (rect.width as u32).saturating_mul(rect.height as u32)
+}
+
+fn subtract_rect_largest(base: Rect, cut: Rect) -> Option<Rect> {
+    let overlap = intersect_rect(base, cut)?;
+
+    let base_right = base.x.saturating_add(base.width);
+    let base_bottom = base.y.saturating_add(base.height);
+    let overlap_right = overlap.x.saturating_add(overlap.width);
+    let overlap_bottom = overlap.y.saturating_add(overlap.height);
+
+    let mut candidates: [Option<Rect>; 4] = [None, None, None, None];
+
+    if overlap.y > base.y {
+        candidates[0] = Some(Rect {
+            x: base.x,
+            y: base.y,
+            width: base.width,
+            height: overlap.y - base.y,
+        });
+    }
+    if overlap_bottom < base_bottom {
+        candidates[1] = Some(Rect {
+            x: base.x,
+            y: overlap_bottom,
+            width: base.width,
+            height: base_bottom - overlap_bottom,
+        });
+    }
+    if overlap.x > base.x {
+        candidates[2] = Some(Rect {
+            x: base.x,
+            y: base.y,
+            width: overlap.x - base.x,
+            height: base.height,
+        });
+    }
+    if overlap_right < base_right {
+        candidates[3] = Some(Rect {
+            x: overlap_right,
+            y: base.y,
+            width: base_right - overlap_right,
+            height: base.height,
+        });
+    }
+
+    candidates
+        .into_iter()
+        .flatten()
+        .max_by_key(|rect| rect_area(*rect))
+}
+
+fn settings_modal_area(size: Rect, overlay: Overlay) -> Option<Rect> {
+    match overlay {
+        Overlay::SettingsModal => Some(centered_rect(size, 70, 20)),
+        Overlay::BarSettingsModal => Some(centered_rect(size, 70, 20)),
+        Overlay::LocalAudioSettingsModal => Some(centered_rect(size, 60, 12)),
+        Overlay::AboutModal => Some(centered_rect(size, 70, 22)),
+        Overlay::AcoustIdModal => Some(centered_rect(size, 60, 8)),
+        _ => None,
     }
 }
 
