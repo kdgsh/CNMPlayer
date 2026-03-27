@@ -493,7 +493,7 @@ checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 
 [[package]]
 name = "cnmplayer"
-version = "0.2.1"
+version = "0.2.7"
 dependencies = [
  "alsa",
  "anyhow",

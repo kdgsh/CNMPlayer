@@ -193,3 +193,9 @@ CNMPlayer is licensed under [AGPL-3.0-only](LICENSE).
 Third-party attributions and license notices for vendored code are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 See [CITATION.cff](CITATION.cff) for the standard citation metadata and upstream references.
+
+
+---
+## Star History
+
+[![Star History Chart](https://api.star-history.com/image?repos=professor-lee/CNMPlayer&type=date&legend=top-left)](https://www.star-history.com/?repos=professor-lee%2FCNMPlayer&type=date&legend=top-left)
