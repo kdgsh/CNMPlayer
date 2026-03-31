@@ -263,6 +263,7 @@ pub struct AppState {
     pub playlist_view: Playlist,
     pub spectrum: SpectrumData,
     pub spectrum_bar_smoother: Ema,
+    pub spectrum_render_grid: Vec<Vec<char>>,
 
     pub cover_cache: RefCell<CoverCache>,
     pub cover_dominant_rgb_cache: RefCell<HashMap<u64, (u8, u8, u8)>>,
@@ -387,6 +388,7 @@ impl AppState {
             playlist_view: Playlist::default(),
             spectrum: SpectrumData::default(),
             spectrum_bar_smoother: Ema::new(0.35, 64),
+            spectrum_render_grid: Vec::new(),
             cover_cache: RefCell::new(CoverCache::new(20)),
             cover_dominant_rgb_cache: RefCell::new(HashMap::new()),
             cover_render_tx,
@@ -527,14 +529,16 @@ impl AppState {
     pub fn tick(&mut self, now: Instant) {
         self.last_frame = now;
 
-        loop {
-            match self.cover_render_rx.try_recv() {
-                Ok(msg) => {
-                    self.cover_render_inflight.borrow_mut().remove(&msg.key);
-                    self.cover_cache.borrow_mut().put(msg.key, msg.ascii);
+        if !self.cover_render_inflight.borrow().is_empty() {
+            loop {
+                match self.cover_render_rx.try_recv() {
+                    Ok(msg) => {
+                        self.cover_render_inflight.borrow_mut().remove(&msg.key);
+                        self.cover_cache.borrow_mut().put(msg.key, msg.ascii);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => break,
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
             }
         }
 
@@ -561,6 +565,64 @@ impl AppState {
                 self.toast = None;
             }
         }
+    }
+
+    pub fn should_continuous_redraw(&self) -> bool {
+        if self.player.playback == PlaybackState::Playing {
+            return true;
+        }
+
+        if self.player.playback == PlaybackState::Paused && self.has_spectrum_tail_motion() {
+            return true;
+        }
+
+        if self.cover_anim.is_some() || self.playlist_album_anim.is_some() || self.pending_system_cover_anim.is_some() {
+            return true;
+        }
+
+        if self.toast.is_some() {
+            return true;
+        }
+
+        if self.playlist_slide_x != self.playlist_slide_target_x {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn active_render_fps(&self) -> u32 {
+        let base = self.config.ui_fps.clamp(10, 60);
+        if self.player.playback == PlaybackState::Playing {
+            match self.config.visualize {
+                crate::tmplayer::data::config::VisualizeMode::Bars
+                | crate::tmplayer::data::config::VisualizeMode::Oscilloscope => {
+                    return self.config.spectrum_hz.clamp(base, 60);
+                }
+            }
+        }
+
+        if self.player.playback == PlaybackState::Paused && self.has_spectrum_tail_motion() {
+            match self.config.visualize {
+                crate::tmplayer::data::config::VisualizeMode::Bars
+                | crate::tmplayer::data::config::VisualizeMode::Oscilloscope => {
+                    return self.config.spectrum_hz.clamp(base, 60);
+                }
+            }
+        }
+
+        base
+    }
+
+    pub fn idle_render_fps(&self) -> u32 {
+        self.config.ui_fps.clamp(4, 12)
+    }
+
+    fn has_spectrum_tail_motion(&self) -> bool {
+        const TAIL_EPS: f32 = 0.003;
+        self.spectrum.bars.iter().any(|&v| v > TAIL_EPS)
+            || self.spectrum.bars_left.iter().any(|&v| v > TAIL_EPS)
+            || self.spectrum.bars_right.iter().any(|&v| v > TAIL_EPS)
     }
 
     pub fn start_cover_anim(&mut self, from: CoverSnapshot, to: CoverSnapshot, dir: i8, now: Instant) {

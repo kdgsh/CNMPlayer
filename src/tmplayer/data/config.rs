@@ -52,6 +52,9 @@ pub struct Config {
     #[serde(default = "default_show_hints")]
     pub show_hints: bool,
 
+    #[serde(default)]
+    pub home_more_recommend: bool,
+
     #[serde(default = "default_bar_number")]
     pub bar_number: BarNumber,
 
@@ -332,7 +335,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             theme: "mocha".to_string(),
-            ui_fps: 60,
+            ui_fps: 30,
             spectrum_hz: 60,
             mpris_poll_ms: 100,
             visualize: default_visualize(),
@@ -348,6 +351,7 @@ impl Default for Config {
             audio_preload: false,
             playback_memory: false,
             show_hints: default_show_hints(),
+            home_more_recommend: false,
             bar_number: default_bar_number(),
             bar_channels: default_bar_channels(),
             bar_channel_reverse: false,
@@ -385,13 +389,12 @@ impl Config {
         }
         let raw = fs::read_to_string(path)?;
         let cfg: Config = toml::from_str(&raw).unwrap_or_default();
-
-        // Ensure spectrum rate stays in sync with UI fps (one-time sync on load).
         let mut cfg = cfg;
-        if cfg.spectrum_hz != cfg.ui_fps {
-            let synced = cfg.spectrum_hz.max(cfg.ui_fps);
-            cfg.spectrum_hz = synced;
-            cfg.ui_fps = synced;
+        if cfg.ui_fps == 0 {
+            cfg.ui_fps = 30;
+        }
+        if cfg.spectrum_hz == 0 {
+            cfg.spectrum_hz = 60;
         }
 
         let mut migrated_legacy_sidebar = false;
@@ -411,6 +414,7 @@ impl Config {
             || !raw.contains("playback_memory")
             || !raw.contains("page_lyrics")
             || !raw.contains("show_hints")
+            || !raw.contains("home_more_recommend")
             || !raw.contains("keybind_search_box")
             || !raw.contains("keybind_fullscreen")
             || !raw.contains("keybind_settings")
@@ -426,7 +430,6 @@ impl Config {
             || !raw.contains("keybind_fullscreen_toggle_mode")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("spectrum_hz")
-            || cfg.spectrum_hz != cfg.ui_fps
             || migrated_legacy_sidebar
         {
             let _ = cfg.save();

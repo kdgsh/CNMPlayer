@@ -79,16 +79,20 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
     app.home.set_columns(columns);
 
     let visible_rows = usize::from((inner.height / row_step).max(1));
-    let focused_row = app.home.focused_idx / columns;
-    let row_offset = focused_row.saturating_sub(visible_rows.saturating_sub(1));
+    app.home.set_visible_rows(visible_rows);
+    let row_offset = app.home.effective_scroll_row_offset();
 
     for index in 0..app.home.tiles.len() {
-        let row = index / columns;
+        let virtual_index = home_real_to_virtual_index(index, columns);
+        let row = virtual_index / columns;
         if row < row_offset {
             continue;
         }
         let visual_row = row - row_offset;
-        let col = index % columns;
+        if visual_row >= visible_rows {
+            continue;
+        }
+        let col = virtual_index % columns;
         let x = inner.x + (col as u16) * col_step;
         let y = inner.y + (visual_row as u16) * row_step;
         if x >= inner.x + inner.width || y >= inner.y + inner.height {
@@ -203,6 +207,15 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
 
 }
 
+fn home_real_to_virtual_index(index: usize, columns: usize) -> usize {
+    let cols = columns.max(1);
+    if cols <= 3 || index < 3 {
+        index
+    } else {
+        index.saturating_add(cols - 3)
+    }
+}
+
 fn draw_home_hint(frame: &mut Frame, app: &App, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -241,6 +254,7 @@ fn draw_home_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let max_width = (area.width / 3).max(24).min(area.width);
+    app.set_home_sidebar_anim_span_cells(max_width);
     let progress = app.home_sidebar.anim_progress.clamp(0.0, 1.0);
     let width = ((max_width as f32) * progress).round() as u16;
     if width < 12 {

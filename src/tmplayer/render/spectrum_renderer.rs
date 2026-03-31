@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 
-pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
+pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     let h = area.height as usize;
     let w = area.width as usize;
     if h == 0 || w == 0 {
@@ -21,7 +21,16 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
 
     let bars = &app.spectrum.bars;
     let mono_count = bars.len().max(1);
-    let mut grid: Vec<Vec<char>> = vec![vec![' '; w]; bars_h];
+    if app.spectrum_render_grid.len() != bars_h {
+        app.spectrum_render_grid.resize_with(bars_h, Vec::new);
+    }
+    for row in &mut app.spectrum_render_grid {
+        if row.len() != w {
+            row.resize(w, ' ');
+        } else {
+            row.fill(' ');
+        }
+    }
 
     let (bar_widths, gap_width, draw_total, x_offset) = compute_bar_layout(
         w,
@@ -62,7 +71,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
                 };
                 if ch != ' ' {
                     for x in x_cursor..(x_cursor + bar_width).min(w) {
-                        grid[row][x] = ch;
+                        app.spectrum_render_grid[row][x] = ch;
                     }
                 }
             }
@@ -72,7 +81,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
                 let row = bars_h - 1 - y;
                 let ch = density_char(y, bar_h.max(1));
                 for x in x_cursor..(x_cursor + bar_width).min(w) {
-                    grid[row][x] = ch;
+                    app.spectrum_render_grid[row][x] = ch;
                 }
             }
         }
@@ -85,10 +94,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
 
     // Render per-line vertical gradient using theme colors.
     let mut lines: Vec<Line> = Vec::with_capacity(bars_h + 1);
-    for (row_idx, row) in grid.into_iter().enumerate() {
+    for (row_idx, row) in app.spectrum_render_grid.iter().enumerate() {
         let t = if bars_h <= 1 { 1.0 } else { row_idx as f32 / (bars_h - 1) as f32 };
         let fg = vertical_gradient_color(app, t);
-        let s = row.into_iter().collect::<String>();
+        let s = row.iter().collect::<String>();
         lines.push(Line::from(Span::styled(s, Style::default().fg(fg))));
     }
 

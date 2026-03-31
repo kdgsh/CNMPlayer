@@ -1,5 +1,5 @@
 theme = "frappe"
-ui_fps = 60
+ui_fps = 30
 spectrum_hz = 60
 mpris_poll_ms = 100
 visualize = "bars"
@@ -27,6 +27,7 @@ audio_quality = "exhigh"
 audio_preload = false
 playback_memory = false
 show_hints = true
+home_more_recommend = false
 
 [cache]
 # 缓存根目录 (默认使用系统标准路径)

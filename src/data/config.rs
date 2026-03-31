@@ -81,6 +81,9 @@ pub struct Config {
     pub show_hints: bool,
 
     #[serde(default)]
+    pub home_more_recommend: bool,
+
+    #[serde(default)]
     pub cache: CacheConfig,
 
     #[serde(default = "default_keybind_search_box")]
@@ -410,7 +413,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             theme: "frappe".to_string(),
-            ui_fps: 60,
+            ui_fps: 30,
             spectrum_hz: 60,
             mpris_poll_ms: 100,
             visualize: default_visualize(),
@@ -436,6 +439,7 @@ impl Default for Config {
             audio_preload: false,
             playback_memory: false,
             show_hints: default_show_hints(),
+            home_more_recommend: false,
             cache: CacheConfig::default(),
             keybind_search_box: default_keybind_search_box(),
             keybind_fullscreen: default_keybind_fullscreen(),
@@ -470,15 +474,10 @@ impl Config {
         let mut cfg: Config = toml::from_str(&raw).unwrap_or_default();
 
         if cfg.ui_fps == 0 {
-            cfg.ui_fps = 60;
+            cfg.ui_fps = 30;
         }
         if cfg.spectrum_hz == 0 {
-            cfg.spectrum_hz = cfg.ui_fps;
-        }
-        if cfg.spectrum_hz != cfg.ui_fps {
-            let synced = cfg.spectrum_hz.max(cfg.ui_fps);
-            cfg.spectrum_hz = synced;
-            cfg.ui_fps = synced;
+            cfg.spectrum_hz = 60;
         }
 
         let mut migrated_legacy_sidebar = false;
@@ -494,6 +493,7 @@ impl Config {
             || !raw.contains("audio_preload")
             || !raw.contains("playback_memory")
             || !raw.contains("show_hints")
+            || !raw.contains("home_more_recommend")
             || !raw.contains("[cache]")
             || !raw.contains("default-opening-folder")
             || !raw.contains("bar_number")
@@ -514,7 +514,7 @@ impl Config {
             || !raw.contains("keybind_fullscreen_toggle_mode")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("keybind_toggle_like_collapsed")
-            || migrated_legacy_sidebar
+              || migrated_legacy_sidebar
         {
             let _ = cfg.save();
         }

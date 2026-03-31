@@ -95,6 +95,15 @@ pub struct HostPlaybackSnapshot {
     pub position: Duration,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HostPlaybackRuntimeSnapshot {
+    pub current_index: Option<usize>,
+    pub current_liked: bool,
+    pub state: HostPlaybackState,
+    pub repeat_mode: HostRepeatMode,
+    pub position: Duration,
+}
+
 #[derive(Debug, Clone)]
 pub struct HostConfigSync {
     pub theme: String,
@@ -107,6 +116,7 @@ pub struct HostConfigSync {
     pub playback_memory: bool,
     pub vip_audio_unlocked: bool,
     pub show_hints: bool,
+    pub home_more_recommend: bool,
     pub visualize: HostVisualizeMode,
     pub super_smooth_bar: bool,
     pub bars_gap: bool,
@@ -118,6 +128,8 @@ pub struct HostConfigSync {
 
 pub trait HostPlaybackBridge {
     fn tick(&mut self);
+    fn metadata_signature(&self) -> u64;
+    fn runtime_snapshot(&self) -> HostPlaybackRuntimeSnapshot;
     fn snapshot(&mut self) -> HostPlaybackSnapshot;
     fn config_snapshot(&self) -> HostConfigSync;
     fn apply_config_sync(&mut self, config: HostConfigSync);
@@ -189,6 +201,7 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         audio_preload: host.audio_preload,
         playback_memory: host.playback_memory,
         show_hints: host.show_hints,
+        home_more_recommend: host.home_more_recommend,
         bar_number: match host.bar_number {
             HostBarNumber::Auto => data::config::BarNumber::Auto,
             HostBarNumber::N16 => data::config::BarNumber::N16,

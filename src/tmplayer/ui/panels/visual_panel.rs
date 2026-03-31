@@ -7,7 +7,7 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &AppState) {
+pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut AppState) {
     // Right side: one outer border for both lyrics + spectrum (no divider between them).
     let outer = Rect {
         x: lyric_area.x,
@@ -58,12 +58,12 @@ pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &AppSta
 }
 
 
-fn current_two_lines(app: &AppState) -> (String, String) {
+fn current_two_lines(app: &AppState) -> (&str, &str) {
     let Some(lines) = app.player.track.lyrics.as_ref() else {
-        return (String::new(), String::new());
+        return ("", "");
     };
     if lines.is_empty() {
-        return (String::new(), String::new());
+        return ("", "");
     }
 
     let pos_ms = app.player.position.as_millis() as u64;
@@ -76,7 +76,7 @@ fn current_two_lines(app: &AppState) -> (String, String) {
         }
     }
 
-    let l1 = lines.get(idx).map(|l| l.text.clone()).unwrap_or_default();
-    let l2 = lines.get(idx + 1).map(|l| l.text.clone()).unwrap_or_default();
+    let l1 = lines.get(idx).map(|l| l.text.as_str()).unwrap_or("");
+    let l2 = lines.get(idx + 1).map(|l| l.text.as_str()).unwrap_or("");
     (l1, l2)
 }

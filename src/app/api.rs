@@ -157,6 +157,12 @@ impl ApiState {
         Ok(response)
     }
 
+    pub fn recommend_songs(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.runtime.block_on(self.client.recommend_songs(&query))?;
+        Ok(response)
+    }
+
     pub fn personalized(&mut self, limit: usize) -> Result<ApiResponse> {
         let limit = limit.max(1).to_string();
         let query = self.query_with_cookie().param("limit", &limit);

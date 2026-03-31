@@ -7,7 +7,7 @@ use crate::tmplayer::ui::tui::{Tui, UiLayout};
 use crate::tmplayer::ui::theme::ThemeName;
 use crate::tmplayer::utils::input::{map_key, map_mouse, Action};
 use crate::tmplayer::utils::system_volume::SystemVolume;
-use crate::tmplayer::{HostConfigSync, HostPlaybackBridge, HostPlaybackSnapshot, HostPlaybackState, HostRepeatMode};
+use crate::tmplayer::{HostConfigSync, HostPlaybackBridge, HostPlaybackRuntimeSnapshot, HostPlaybackSnapshot, HostPlaybackState, HostRepeatMode};
 use anyhow::Result;
 use crossterm::event::{self, Event};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -151,6 +151,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         playback_memory: app.config.playback_memory,
         vip_audio_unlocked: app.vip_audio_unlocked,
         show_hints: app.config.show_hints,
+        home_more_recommend: app.config.home_more_recommend,
         visualize: match app.config.visualize {
             VisualizeMode::Bars => crate::data::config::VisualizeMode::Bars,
             VisualizeMode::Oscilloscope => crate::data::config::VisualizeMode::Oscilloscope,
@@ -203,6 +204,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     app.config.audio_preload = config.audio_preload;
     app.config.playback_memory = config.playback_memory;
     app.config.show_hints = config.show_hints;
+    app.config.home_more_recommend = config.home_more_recommend;
     app.config.visualize = match config.visualize {
         crate::data::config::VisualizeMode::Bars => VisualizeMode::Bars,
         crate::data::config::VisualizeMode::Oscilloscope => VisualizeMode::Oscilloscope,
@@ -432,14 +434,77 @@ fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
     enforce_ncm_cover_memory_policy(app, current);
 }
 
-fn sync_from_host_bridge(app: &mut AppState, host_bridge: &mut Option<&mut dyn HostPlaybackBridge>) {
-    if let Some(bridge) = host_bridge.as_mut() {
-        (*bridge).tick();
+fn apply_host_runtime_snapshot(app: &mut AppState, runtime: HostPlaybackRuntimeSnapshot) -> bool {
+    let mut changed = false;
+
+    let playback = map_host_state(runtime.state);
+    if app.player.playback != playback {
+        app.player.playback = playback;
+        changed = true;
+    }
+
+    let repeat = map_host_repeat(runtime.repeat_mode);
+    if app.player.repeat_mode != repeat {
+        app.player.repeat_mode = repeat;
+        changed = true;
+    }
+
+    if app.player.liked != runtime.current_liked {
+        app.player.liked = runtime.current_liked;
+        changed = true;
+    }
+
+    if app.player.position != runtime.position {
+        app.player.position = runtime.position;
+        changed = true;
+    }
+
+    if let Some(index) = runtime.current_index {
+        if !app.playlist.items.is_empty() {
+            let idx = index.min(app.playlist.len().saturating_sub(1));
+            if app.playlist.current != Some(idx) {
+                app.playlist.current = Some(idx);
+                app.playlist.selected = idx;
+                app.playlist.clamp_selected();
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
+fn sync_from_host_bridge(
+    app: &mut AppState,
+    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+    last_metadata_signature: &mut Option<u64>,
+    sync_config: bool,
+) -> bool {
+    let Some(bridge) = host_bridge.as_mut() else {
+        return false;
+    };
+
+    let mut changed = false;
+    (*bridge).tick();
+
+    if sync_config {
         let config = (*bridge).config_snapshot();
         apply_host_config_sync(app, config);
+        changed = true;
+    }
+
+    let runtime = (*bridge).runtime_snapshot();
+    changed |= apply_host_runtime_snapshot(app, runtime);
+
+    let metadata_signature = (*bridge).metadata_signature();
+    if last_metadata_signature.map_or(true, |sig| sig != metadata_signature) {
         let snapshot = (*bridge).snapshot();
         sync_from_host_snapshot(app, snapshot);
+        *last_metadata_signature = Some(metadata_signature);
+        changed = true;
     }
+
+    changed
 }
 
 pub fn run(
@@ -465,24 +530,49 @@ pub fn run(
 
     let mut last_spectrum = Instant::now();
     let mut last_mpris = Instant::now();
+    let mut last_host_config_sync = Instant::now()
+        .checked_sub(Duration::from_millis(400))
+        .unwrap_or_else(Instant::now);
+    let mut last_host_metadata_signature: Option<u64> = None;
+    let mut needs_redraw = true;
+    let mut last_draw_at = Instant::now()
+        .checked_sub(Duration::from_millis(250))
+        .unwrap_or_else(Instant::now);
 
     let mut last_layout = UiLayout::default();
 
     // Initialize cava with the current desired config (best-effort).
     ensure_cava(&mut cava, &mut cava_cfg, desired_cava_config(app, &last_layout));
 
-    sync_from_host_bridge(app, &mut host_bridge);
+    let _ = sync_from_host_bridge(
+        app,
+        &mut host_bridge,
+        &mut last_host_metadata_signature,
+        true,
+    );
 
     loop {
         let frame_start = Instant::now();
+        let mut state_changed = false;
 
-        sync_from_host_bridge(app, &mut host_bridge);
+        let sync_config = frame_start.duration_since(last_host_config_sync) >= Duration::from_millis(250);
+        if sync_config {
+            last_host_config_sync = frame_start;
+        }
+
+        state_changed |= sync_from_host_bridge(
+            app,
+            &mut host_bridge,
+            &mut last_host_metadata_signature,
+            sync_config,
+        );
 
         // poll input (non-blocking-ish)
         // apply async remote metadata results (lyrics/cover/fingerprint)
         let results = app.drain_remote_fetch_results();
         if !results.is_empty() {
             apply_remote_fetch_results(app, &mut mode_manager, results);
+            state_changed = true;
         }
         while event::poll(Duration::from_millis(0))? {
             match event::read()? {
@@ -496,6 +586,7 @@ pub fn run(
                         action,
                         &last_layout,
                     )?;
+                    state_changed = true;
                 }
                 Event::Mouse(m) => {
                     let action = map_mouse(m);
@@ -507,10 +598,12 @@ pub fn run(
                         action,
                         &last_layout,
                     )?;
+                    state_changed = true;
                 }
                 Event::Resize(_, _) => {
                     // Kitty graphics placements may get cleared on terminal resize.
                     tui.on_resize();
+                    state_changed = true;
                 }
                 _ => {}
             }
@@ -551,6 +644,7 @@ pub fn run(
                     || before_track.cover_hash != app.player.track.cover_hash;
                 if changed_any {
                     app.queue_remote_fetch(None);
+                    state_changed = true;
                 }
 
                 // If user requested next/prev in SystemMonitor, animate when the track actually changes.
@@ -563,6 +657,7 @@ pub fn run(
                         let to = CoverSnapshot::from(&app.player.track);
                         app.start_cover_anim(from, to, dir, frame_start);
                         app.queue_remote_fetch(None);
+                        state_changed = true;
                     }
                 }
             }
@@ -573,6 +668,7 @@ pub fn run(
             >= Duration::from_millis((1000 / app.config.spectrum_hz.max(1)) as u64)
         {
             last_spectrum = frame_start;
+            state_changed = true;
 
             match app.config.visualize {
                 VisualizeMode::Bars => {
@@ -605,6 +701,7 @@ pub fn run(
 
         // local player position update
         if app.player.mode == PlayMode::LocalPlayback {
+            state_changed = true;
             // Detect end-of-track and stop position accumulation.
             let just_finished = mode_manager.local.poll_end();
             if just_finished {
@@ -629,6 +726,7 @@ pub fn run(
                 } else {
                     next
                 };
+                state_changed = true;
             }
         }
 
@@ -640,11 +738,32 @@ pub fn run(
 
         app.tick(frame_start);
 
-        // draw
-        last_layout = tui.draw(app)?;
+        if app.should_continuous_redraw() {
+            state_changed = true;
+        }
+
+        let target_fps = if app.should_continuous_redraw() {
+            app.active_render_fps()
+        } else {
+            app.idle_render_fps()
+        };
+        let frame_dt = fps_to_dt(target_fps);
+
+        if state_changed {
+            needs_redraw = true;
+        }
+
+        if app.should_continuous_redraw() && last_draw_at.elapsed() >= frame_dt {
+            needs_redraw = true;
+        }
+
+        if needs_redraw {
+            last_layout = tui.draw(app)?;
+            last_draw_at = Instant::now();
+            needs_redraw = false;
+        }
 
         // frame pacing
-        let frame_dt = fps_to_dt(app.config.ui_fps);
         let elapsed = frame_start.elapsed();
         if elapsed < frame_dt {
             std::thread::sleep(frame_dt - elapsed);
@@ -667,7 +786,7 @@ pub fn run(
 }
 
 fn fps_to_dt(fps: u32) -> Duration {
-    let fps = fps.clamp(30, 60);
+    let fps = fps.clamp(4, 60);
     Duration::from_millis((1000 / fps) as u64)
 }
 
@@ -785,7 +904,7 @@ fn handle_action(
             app.set_toast("Local audio is disabled in CNMPlayer");
         }
         Action::OpenSettingsModal => {
-            app.settings_selected = app.settings_selected.min(7);
+            app.settings_selected = app.settings_selected.min(8);
             app.overlay = Overlay::SettingsModal;
         }
         Action::OpenHelpModal => {
@@ -977,9 +1096,12 @@ fn handle_action(
                             apply_settings_delta(app, host_bridge, 1);
                         }
                         6 => {
-                            app.set_toast("Logout is unavailable in fullscreen");
+                            apply_settings_delta(app, host_bridge, 1);
                         }
                         7 => {
+                            app.set_toast("Logout is unavailable in fullscreen");
+                        }
+                        8 => {
                             app.overlay = Overlay::AboutModal;
                         }
                         _ => {}
@@ -1193,7 +1315,7 @@ fn handle_action(
         }
         Action::ModalUp => {
             if app.overlay == Overlay::SettingsModal {
-                let count = 8;
+                let count = 9;
                 if app.settings_selected == 0 {
                     app.settings_selected = count - 1;
                 } else {
@@ -1234,7 +1356,7 @@ fn handle_action(
         }
         Action::ModalDown => {
             if app.overlay == Overlay::SettingsModal {
-                let count = 8;
+                let count = 9;
                 app.settings_selected = (app.settings_selected + 1) % count;
             } else if app.overlay == Overlay::BarSettingsModal {
                 let count = 11;
@@ -1773,6 +1895,13 @@ fn apply_settings_delta(
                 save_and_sync_host_config(app, host_bridge);
             }
         }
+        // Home more recommendations
+        6 => {
+            if delta != 0 {
+                app.config.home_more_recommend = !app.config.home_more_recommend;
+                save_and_sync_host_config(app, host_bridge);
+            }
+        }
         _ => {}
     }
 }
@@ -1905,6 +2034,10 @@ fn ensure_cava(cava: &mut Option<CavaRunner>, cfg: &mut Option<CavaConfig>, desi
     if cfg.as_ref() == Some(&desired) {
         return;
     }
+
+    // Drop old process first to avoid short-lived overlap when recreating cava.
+    *cava = None;
+    *cfg = None;
 
     match CavaRunner::start(desired) {
         Ok(c) => {

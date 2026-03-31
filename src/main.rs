@@ -11,13 +11,14 @@ use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use data::config::Config;
 use data::theme_loader::ThemeLoader;
+use render::main_kitty_overlay::MainKittyOverlay;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
 use ratatui::Terminal;
 use std::io::{self, Stdout};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct AppFullscreenBridge<'a> {
     app: &'a mut App,
@@ -26,6 +27,30 @@ struct AppFullscreenBridge<'a> {
 impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
     fn tick(&mut self) {
         self.app.fullscreen_tick_playback();
+    }
+
+    fn metadata_signature(&self) -> u64 {
+        self.app.fullscreen_metadata_signature()
+    }
+
+    fn runtime_snapshot(&self) -> tmplayer::HostPlaybackRuntimeSnapshot {
+        let runtime = self.app.fullscreen_runtime_snapshot();
+        tmplayer::HostPlaybackRuntimeSnapshot {
+            current_index: runtime.current_index,
+            current_liked: runtime.now_playing_liked,
+            state: match runtime.state {
+                app::PlaybackRuntimeState::Playing => tmplayer::HostPlaybackState::Playing,
+                app::PlaybackRuntimeState::Paused => tmplayer::HostPlaybackState::Paused,
+                app::PlaybackRuntimeState::Stopped => tmplayer::HostPlaybackState::Stopped,
+            },
+            repeat_mode: match runtime.repeat_mode {
+                app::PlaybackRepeatMode::Sequence => tmplayer::HostRepeatMode::Sequence,
+                app::PlaybackRepeatMode::Shuffle => tmplayer::HostRepeatMode::Shuffle,
+                app::PlaybackRepeatMode::LoopAll => tmplayer::HostRepeatMode::LoopAll,
+                app::PlaybackRepeatMode::LoopOne => tmplayer::HostRepeatMode::LoopOne,
+            },
+            position: runtime.position,
+        }
     }
 
     fn snapshot(&mut self) -> tmplayer::HostPlaybackSnapshot {
@@ -155,8 +180,11 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 }
 
 fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
-    let fps = app.config.ui_fps.max(1);
-    let frame_ms = (1000_u64 / u64::from(fps)).max(8);
+    let mut needs_redraw = true;
+    let mut kitty_overlay = MainKittyOverlay::new();
+    let mut last_draw_at = Instant::now()
+        .checked_sub(Duration::from_millis(250))
+        .unwrap_or_else(Instant::now);
 
     loop {
         app.tick();
@@ -164,19 +192,60 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
         if app.consume_fullscreen_launch_request() {
             let bootstrap = app.build_fullscreen_bootstrap();
             launch_tmplayer_fullscreen(terminal, app, bootstrap)?;
+            kitty_overlay.on_terminal_reset();
+            needs_redraw = true;
             continue;
         }
 
-        terminal.draw(|frame| ui::draw(frame, app))?;
-        if app.should_quit {
-            app.persist_playback_memory_on_exit();
-            break;
+        let animating = app.main_should_continuous_redraw();
+        let target_fps = if animating {
+            app.main_active_fps()
+        } else {
+            app.main_idle_fps()
+        };
+        let frame_dt = Duration::from_millis((1000_u64 / u64::from(target_fps.max(1))).max(8));
+
+        if needs_redraw || last_draw_at.elapsed() >= frame_dt {
+            terminal.draw(|frame| ui::draw(frame, app))?;
+            let size = terminal.size()?;
+            kitty_overlay.paint(
+                app,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.width,
+                    height: size.height,
+                },
+            );
+            last_draw_at = Instant::now();
+            needs_redraw = false;
+            if app.should_quit {
+                app.persist_playback_memory_on_exit();
+                break;
+            }
         }
 
-        if event::poll(Duration::from_millis(frame_ms))? {
+        let wait_timeout = if animating {
+            frame_dt.saturating_sub(last_draw_at.elapsed())
+        } else {
+            Duration::from_millis(160)
+        };
+
+        if event::poll(wait_timeout)? {
             match event::read()? {
-                Event::Key(key) => app.handle_key(key),
-                Event::Mouse(mouse) => app.handle_mouse(mouse),
+                Event::Key(key) => {
+                    app.handle_key(key);
+                    needs_redraw = true;
+                }
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse);
+                    needs_redraw = true;
+                }
+                Event::Resize(_, _) => {
+                    // Resize can invalidate kitty image placements/cache; force re-transmit.
+                    kitty_overlay.on_terminal_reset();
+                    needs_redraw = true;
+                }
                 _ => {}
             }
         }
@@ -191,6 +260,7 @@ fn launch_tmplayer_fullscreen(
     bootstrap: tmplayer::FullscreenBootstrap,
 ) -> Result<()> {
     play_fullscreen_transition(terminal, app, true)?;
+    app.suspend_main_cava_for_fullscreen();
     restore_terminal(terminal)?;
 
     let config = app.config.clone();
@@ -205,6 +275,7 @@ fn launch_tmplayer_fullscreen(
     };
 
     *terminal = init_terminal()?;
+    app.resume_main_cava_after_fullscreen();
     play_fullscreen_transition(terminal, app, false)?;
     if !status_text.is_empty() {
         app.set_runtime_status(status_text);

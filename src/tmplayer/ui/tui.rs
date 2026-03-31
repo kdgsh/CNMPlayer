@@ -49,16 +49,26 @@ struct KittyRenderRequest {
 struct KittyRenderResponse {
     hash: u64,
     b64: String,
+    width: u32,
+    height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KittyPlacementState {
+    hash: u64,
+    image_id: u32,
+    segments: Vec<(u16, u16, u16, u16)>,
 }
 
 pub struct Tui {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     pub should_quit: bool,
 
-    kitty_info_last: Option<(u64, u16, u16, u16, u16)>,
-    kitty_playlist_last: Option<(u64, u16, u16, u16, u16)>,
+    kitty_info_last: Option<KittyPlacementState>,
+    kitty_playlist_last: Option<KittyPlacementState>,
 
     kitty_image_ids: HashMap<u64, u32>,
+    kitty_image_sizes: HashMap<u64, (u32, u32)>,
     kitty_transmitted: HashSet<u64>,
     kitty_next_image_id: u32,
 
@@ -76,8 +86,13 @@ impl Tui {
 
         thread::spawn(move || {
             while let Ok(req) = rx.recv() {
-                if let Some(b64) = crate::tmplayer::render::kitty_graphics::encode_image_bytes_to_png_base64(&req.bytes, req.max_w, req.max_h) {
-                    let _ = res_tx.send(KittyRenderResponse { hash: req.hash, b64 });
+                if let Some((b64, width, height)) = crate::tmplayer::render::kitty_graphics::encode_image_bytes_to_png_base64(&req.bytes, req.max_w, req.max_h) {
+                    let _ = res_tx.send(KittyRenderResponse {
+                        hash: req.hash,
+                        b64,
+                        width,
+                        height,
+                    });
                 }
             }
         });
@@ -91,6 +106,7 @@ impl Tui {
             kitty_info_last: None,
             kitty_playlist_last: None,
             kitty_image_ids: HashMap::new(),
+            kitty_image_sizes: HashMap::new(),
             kitty_transmitted: HashSet::new(),
             kitty_next_image_id: 2000,
             kitty_tx: tx,
@@ -222,6 +238,9 @@ impl Tui {
 
             // playlist overlay slides in/out over left
             if app.overlay == Overlay::Playlist || app.playlist_slide_x != app.playlist_slide_target_x {
+                let collapsing = app.overlay != Overlay::Playlist
+                    && app.playlist_slide_x > app.playlist_slide_target_x;
+
                 // advance animation
                 let step: i16 = 4;
                 if app.playlist_slide_x < app.playlist_slide_target_x {
@@ -241,11 +260,24 @@ impl Tui {
                         height: cols[0].height,
                     };
                     layout_out.playlist_rect = r;
-                    let pl_layout = playlist_panel::compute_layout(r, app);
-                    layout_out.playlist_inner = pl_layout.inner;
-                    layout_out.playlist_list_inner = pl_layout.list_inner;
-                    layout_out.playlist_cover_image = pl_layout.cover_rect;
-                    playlist_panel::render(f, r, app);
+
+                    if collapsing {
+                        // Closing animation only needs the panel shell; skip expensive list/cover rendering.
+                        f.render_widget(ratatui::widgets::Clear, r);
+                        f.render_widget(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
+                                .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())),
+                            r,
+                        );
+                    } else {
+                        let pl_layout = playlist_panel::compute_layout(r, app);
+                        layout_out.playlist_inner = pl_layout.inner;
+                        layout_out.playlist_list_inner = pl_layout.list_inner;
+                        layout_out.playlist_cover_image = pl_layout.cover_rect;
+                        playlist_panel::render(f, r, app);
+                    }
                 }
             }
 
@@ -333,8 +365,8 @@ impl Tui {
     }
 
     fn paint_kitty_images(&mut self, app: &mut AppState, layout: &UiLayout) -> Result<()> {
-        const INFO_PLACEMENT_ID: u32 = 1;
-        const PLAYLIST_PLACEMENT_ID: u32 = 2;
+        const INFO_PLACEMENT_IDS: [u32; 4] = [1, 3, 4, 5];
+        const PLAYLIST_PLACEMENT_IDS: [u32; 4] = [2, 6, 7, 8];
 
         // While Settings modal is open, do NOT refresh/re-transmit covers; keep using
         // the last applied quality so the cover doesn't constantly churn while tweaking.
@@ -357,23 +389,25 @@ impl Tui {
         const CELL_H_PX: u32 = 16;
 
         let hide_info = |this: &mut Self| {
-            if let Some((hash, _, _, _, _)) = this.kitty_info_last {
-                if let Some(&image_id) = this.kitty_image_ids.get(&hash) {
-                    let _ = crate::tmplayer::render::kitty_graphics::delete_image_placement(image_id, INFO_PLACEMENT_ID, false);
-                } else {
-                    let _ = crate::tmplayer::render::kitty_graphics::delete_placement(INFO_PLACEMENT_ID);
+            if let Some(state) = this.kitty_info_last.take() {
+                for placement_id in INFO_PLACEMENT_IDS {
+                    let _ = crate::tmplayer::render::kitty_graphics::delete_image_placement(
+                        state.image_id,
+                        placement_id,
+                        false,
+                    );
                 }
-                this.kitty_info_last = None;
             }
         };
         let hide_playlist = |this: &mut Self| {
-            if let Some((hash, _, _, _, _)) = this.kitty_playlist_last {
-                if let Some(&image_id) = this.kitty_image_ids.get(&hash) {
-                    let _ = crate::tmplayer::render::kitty_graphics::delete_image_placement(image_id, PLAYLIST_PLACEMENT_ID, false);
-                } else {
-                    let _ = crate::tmplayer::render::kitty_graphics::delete_placement(PLAYLIST_PLACEMENT_ID);
+            if let Some(state) = this.kitty_playlist_last.take() {
+                for placement_id in PLAYLIST_PLACEMENT_IDS {
+                    let _ = crate::tmplayer::render::kitty_graphics::delete_image_placement(
+                        state.image_id,
+                        placement_id,
+                        false,
+                    );
                 }
-                this.kitty_playlist_last = None;
             }
         };
 
@@ -395,6 +429,7 @@ impl Tui {
                 let _ = crate::tmplayer::render::kitty_graphics::delete_image(image_id, true);
             }
             self.kitty_image_ids.clear();
+            self.kitty_image_sizes.clear();
             self.kitty_transmitted.clear();
             self.kitty_pending.clear();
             self.kitty_next_image_id = 2000;
@@ -417,32 +452,15 @@ impl Tui {
                 let _ = crate::tmplayer::render::kitty_graphics::delete_image(image_id, true);
             }
             self.kitty_image_ids.clear();
+            self.kitty_image_sizes.clear();
             self.kitty_transmitted.clear();
             self.kitty_pending.clear();
             self.kitty_next_image_id = 2000;
         }
 
         let modal_area = settings_modal_area(layout.full, app.overlay);
-        let clip_by_modal = |rect: Rect| -> Rect {
-            if rect.width == 0 || rect.height == 0 {
-                return rect;
-            }
-            let Some(modal) = modal_area else {
-                return rect;
-            };
-            match subtract_rect_largest(rect, modal) {
-                Some(clipped) => clipped,
-                None => Rect {
-                    x: rect.x,
-                    y: rect.y,
-                    width: 0,
-                    height: 0,
-                },
-            }
-        };
-
-        let info_cover_rect = clip_by_modal(layout.info_cover_image);
-        let playlist_cover_rect = clip_by_modal(layout.playlist_cover_image);
+        let info_cover_segments = cover_visible_segments(layout.info_cover_image, modal_area);
+        let playlist_cover_segments = cover_visible_segments(layout.playlist_cover_image, modal_area);
 
         let effective_quality: u8 = if settings_open {
             self.kitty_last_cover_quality
@@ -476,17 +494,18 @@ impl Tui {
             let image_id = self.image_id_for_hash(res.hash);
             let _ = crate::tmplayer::render::kitty_graphics::transmit_png_base64(image_id, &res.b64);
             self.kitty_transmitted.insert(res.hash);
+            self.kitty_image_sizes.insert(res.hash, (res.width, res.height));
             self.kitty_pending.remove(&res.hash);
         }
 
-        let enqueue = |this: &mut Self, hash: u64, bytes: &[u8], rect: Rect| {
-            if rect.width == 0 || rect.height == 0 {
+        let enqueue = |this: &mut Self, hash: u64, bytes: &[u8], cover_rect: Rect| {
+            if cover_rect.width == 0 || cover_rect.height == 0 {
                 return;
             }
             if this.kitty_transmitted.contains(&hash) || this.kitty_pending.contains(&hash) {
                 return;
             }
-            let (max_w, max_h) = target_px(rect.width, rect.height);
+            let (max_w, max_h) = target_px(cover_rect.width, cover_rect.height);
             let _ = this.kitty_tx.send(KittyRenderRequest {
                 hash,
                 bytes: bytes.to_vec(),
@@ -509,28 +528,53 @@ impl Tui {
 
         // Info panel cover (current track).
         if let (Some(bytes), Some(hash)) = (app.player.track.cover.as_deref(), app.player.track.cover_hash) {
-            enqueue(self, hash, bytes, info_cover_rect);
+            enqueue(self, hash, bytes, layout.info_cover_image);
         }
 
         if playlist_overlay_visible {
             hide_info(self);
         } else if let (Some(_bytes), Some(hash)) = (app.player.track.cover.as_deref(), app.player.track.cover_hash) {
-            let sig = (
-                hash,
-                info_cover_rect.x,
-                info_cover_rect.y,
-                info_cover_rect.width,
-                info_cover_rect.height,
-            );
-            if self.kitty_info_last != Some(sig) {
-                // When the image id changes (hash changes), kitty treats (image_id, placement_id)
-                // as the unique placement key. Reusing the same placement_id with a new image_id
-                // would leave the old placement behind unless we explicitly delete it.
+            if info_cover_segments.is_empty() {
                 hide_info(self);
-                if info_cover_rect.width > 0 && info_cover_rect.height > 0 && self.kitty_transmitted.contains(&hash) {
-                    let image_id = self.image_id_for_hash(hash);
-                    let _ = crate::tmplayer::render::kitty_graphics::place_image(info_cover_rect, image_id, INFO_PLACEMENT_ID);
-                    self.kitty_info_last = Some(sig);
+            } else {
+                let image_id = self.image_id_for_hash(hash);
+                let new_state = KittyPlacementState {
+                    hash,
+                    image_id,
+                    segments: rect_segments_signature(&info_cover_segments),
+                };
+
+                if self.kitty_info_last.as_ref() != Some(&new_state) {
+                    // When image hash or visible segments change, clear old placements first
+                    // to avoid stale fragments left behind in terminal cache.
+                    hide_info(self);
+                    if self.kitty_transmitted.contains(&hash) {
+                        if let Some(&(img_w, img_h)) = self.kitty_image_sizes.get(&hash) {
+                            for (idx, segment) in info_cover_segments
+                                .iter()
+                                .take(INFO_PLACEMENT_IDS.len())
+                                .enumerate()
+                            {
+                                if let Some((src_x, src_y, src_w, src_h)) = map_segment_to_image_crop(
+                                    layout.info_cover_image,
+                                    *segment,
+                                    img_w,
+                                    img_h,
+                                ) {
+                                    let _ = crate::tmplayer::render::kitty_graphics::place_image_cropped(
+                                        *segment,
+                                        image_id,
+                                        INFO_PLACEMENT_IDS[idx],
+                                        src_x,
+                                        src_y,
+                                        src_w,
+                                        src_h,
+                                    );
+                                }
+                            }
+                            self.kitty_info_last = Some(new_state);
+                        }
+                    }
                 }
             }
         } else if self.kitty_info_last.is_some() {
@@ -540,28 +584,50 @@ impl Tui {
         // Playlist album cover (local browsing). Only show the real cover once fully expanded.
         if playlist_fully_expanded {
             if let (Some(bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
-                enqueue(self, hash, bytes, playlist_cover_rect);
+                enqueue(self, hash, bytes, layout.playlist_cover_image);
             }
         }
 
-        if !playlist_fully_expanded || playlist_cover_rect.width <= 1 || playlist_cover_rect.height <= 1 {
+        if !playlist_fully_expanded || playlist_cover_segments.is_empty() {
             hide_playlist(self);
         } else if let (Some(_bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
-            let sig = (
+            let image_id = self.image_id_for_hash(hash);
+            let new_state = KittyPlacementState {
                 hash,
-                playlist_cover_rect.x,
-                playlist_cover_rect.y,
-                playlist_cover_rect.width,
-                playlist_cover_rect.height,
-            );
-            if self.kitty_playlist_last != Some(sig) {
-                // Same reasoning as info cover: avoid accumulating multiple placements
-                // for different image ids in the same visual slot.
+                image_id,
+                segments: rect_segments_signature(&playlist_cover_segments),
+            };
+
+            if self.kitty_playlist_last.as_ref() != Some(&new_state) {
+                // Same reasoning as info cover: avoid accumulating stale fragments
+                // for different image ids or clipping regions in the same slot.
                 hide_playlist(self);
                 if self.kitty_transmitted.contains(&hash) {
-                    let image_id = self.image_id_for_hash(hash);
-                    let _ = crate::tmplayer::render::kitty_graphics::place_image(playlist_cover_rect, image_id, PLAYLIST_PLACEMENT_ID);
-                    self.kitty_playlist_last = Some(sig);
+                    if let Some(&(img_w, img_h)) = self.kitty_image_sizes.get(&hash) {
+                        for (idx, segment) in playlist_cover_segments
+                            .iter()
+                            .take(PLAYLIST_PLACEMENT_IDS.len())
+                            .enumerate()
+                        {
+                            if let Some((src_x, src_y, src_w, src_h)) = map_segment_to_image_crop(
+                                layout.playlist_cover_image,
+                                *segment,
+                                img_w,
+                                img_h,
+                            ) {
+                                let _ = crate::tmplayer::render::kitty_graphics::place_image_cropped(
+                                    *segment,
+                                    image_id,
+                                    PLAYLIST_PLACEMENT_IDS[idx],
+                                    src_x,
+                                    src_y,
+                                    src_w,
+                                    src_h,
+                                );
+                            }
+                        }
+                        self.kitty_playlist_last = Some(new_state);
+                    }
                 }
             }
         } else if self.kitty_playlist_last.is_some() {
@@ -606,22 +672,39 @@ fn intersect_rect(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
-fn rect_area(rect: Rect) -> u32 {
-    (rect.width as u32).saturating_mul(rect.height as u32)
+fn rect_segments_signature(rects: &[Rect]) -> Vec<(u16, u16, u16, u16)> {
+    rects
+        .iter()
+        .map(|rect| (rect.x, rect.y, rect.width, rect.height))
+        .collect()
 }
 
-fn subtract_rect_largest(base: Rect, cut: Rect) -> Option<Rect> {
-    let overlap = intersect_rect(base, cut)?;
+fn cover_visible_segments(base: Rect, modal: Option<Rect>) -> Vec<Rect> {
+    if base.width == 0 || base.height == 0 {
+        return Vec::new();
+    }
+
+    let Some(modal_rect) = modal else {
+        return vec![base];
+    };
+
+    subtract_rect_segments(base, modal_rect)
+}
+
+fn subtract_rect_segments(base: Rect, cut: Rect) -> Vec<Rect> {
+    let Some(overlap) = intersect_rect(base, cut) else {
+        return vec![base];
+    };
 
     let base_right = base.x.saturating_add(base.width);
     let base_bottom = base.y.saturating_add(base.height);
     let overlap_right = overlap.x.saturating_add(overlap.width);
     let overlap_bottom = overlap.y.saturating_add(overlap.height);
 
-    let mut candidates: [Option<Rect>; 4] = [None, None, None, None];
+    let mut segments = Vec::with_capacity(4);
 
     if overlap.y > base.y {
-        candidates[0] = Some(Rect {
+        segments.push(Rect {
             x: base.x,
             y: base.y,
             width: base.width,
@@ -629,34 +712,88 @@ fn subtract_rect_largest(base: Rect, cut: Rect) -> Option<Rect> {
         });
     }
     if overlap_bottom < base_bottom {
-        candidates[1] = Some(Rect {
+        segments.push(Rect {
             x: base.x,
             y: overlap_bottom,
             width: base.width,
             height: base_bottom - overlap_bottom,
         });
     }
-    if overlap.x > base.x {
-        candidates[2] = Some(Rect {
-            x: base.x,
-            y: base.y,
-            width: overlap.x - base.x,
-            height: base.height,
-        });
-    }
-    if overlap_right < base_right {
-        candidates[3] = Some(Rect {
-            x: overlap_right,
-            y: base.y,
-            width: base_right - overlap_right,
-            height: base.height,
-        });
+
+    if overlap.height > 0 {
+        if overlap.x > base.x {
+            segments.push(Rect {
+                x: base.x,
+                y: overlap.y,
+                width: overlap.x - base.x,
+                height: overlap.height,
+            });
+        }
+        if overlap_right < base_right {
+            segments.push(Rect {
+                x: overlap_right,
+                y: overlap.y,
+                width: base_right - overlap_right,
+                height: overlap.height,
+            });
+        }
     }
 
-    candidates
+    segments
         .into_iter()
-        .flatten()
-        .max_by_key(|rect| rect_area(*rect))
+        .filter(|rect| rect.width > 0 && rect.height > 0)
+        .collect()
+}
+
+fn map_segment_to_image_crop(
+    base: Rect,
+    segment: Rect,
+    image_w: u32,
+    image_h: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    if base.width == 0 || base.height == 0 || segment.width == 0 || segment.height == 0 {
+        return None;
+    }
+
+    if image_w == 0 || image_h == 0 {
+        return None;
+    }
+
+    let base_w = base.width as u64;
+    let base_h = base.height as u64;
+
+    let rel_x0 = segment.x.saturating_sub(base.x) as u64;
+    let rel_y0 = segment.y.saturating_sub(base.y) as u64;
+    let rel_x1 = rel_x0.saturating_add(segment.width as u64);
+    let rel_y1 = rel_y0.saturating_add(segment.height as u64);
+
+    let img_w = image_w as u64;
+    let img_h = image_h as u64;
+
+    let src_x = (rel_x0.saturating_mul(img_w) / base_w) as u32;
+    let src_y = (rel_y0.saturating_mul(img_h) / base_h) as u32;
+
+    let src_x_end = ((rel_x1.saturating_mul(img_w) + base_w.saturating_sub(1)) / base_w).min(img_w) as u32;
+    let src_y_end = ((rel_y1.saturating_mul(img_h) + base_h.saturating_sub(1)) / base_h).min(img_h) as u32;
+
+    if src_x >= image_w || src_y >= image_h {
+        return None;
+    }
+
+    let src_w = src_x_end
+        .saturating_sub(src_x)
+        .max(1)
+        .min(image_w.saturating_sub(src_x));
+    let src_h = src_y_end
+        .saturating_sub(src_y)
+        .max(1)
+        .min(image_h.saturating_sub(src_y));
+
+    if src_w == 0 || src_h == 0 {
+        return None;
+    }
+
+    Some((src_x, src_y, src_w, src_h))
 }
 
 fn settings_modal_area(size: Rect, overlay: Overlay) -> Option<Rect> {
@@ -666,6 +803,7 @@ fn settings_modal_area(size: Rect, overlay: Overlay) -> Option<Rect> {
         Overlay::LocalAudioSettingsModal => Some(centered_rect(size, 60, 12)),
         Overlay::AboutModal => Some(centered_rect(size, 70, 22)),
         Overlay::AcoustIdModal => Some(centered_rect(size, 60, 8)),
+        Overlay::HelpModal => Some(centered_rect(size, 70, 20)),
         _ => None,
     }
 }
@@ -708,6 +846,11 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
             "{}: {}",
             lang_text(app, "显示提示", "Show Hints"),
             lang_on_off(app, app.config.show_hints)
+        ),
+        format!(
+            "{}: {}",
+            lang_text(app, "主页更多推荐", "More Home Recommendations"),
+            lang_on_off(app, app.config.home_more_recommend)
         ),
         lang_text(app, "退出登录", "Logout").to_string(),
         "about".to_string(),

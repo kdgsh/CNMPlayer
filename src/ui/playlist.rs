@@ -80,8 +80,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(app.theme.color_surface()))
-            .style(surface_bg_style(app)),
+            .border_style(Style::default().fg(app.theme.color_surface())),
         cols[0],
     );
 
@@ -90,6 +89,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
         vertical: 1,
     });
     if cover_area.width > 0 && cover_area.height > 0 {
+        frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
         let cover_ascii = app.playlist.cover_ascii(cover_area.width, cover_area.height);
         frame.render_widget(
             Paragraph::new(cover_ascii)

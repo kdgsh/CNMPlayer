@@ -35,7 +35,7 @@ const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
-const SETTINGS_ROOT_ITEMS: usize = 8;
+const SETTINGS_ROOT_ITEMS: usize = 9;
 const SETTINGS_PLAYBACK_ITEMS: usize = 11;
 const SETTINGS_KEYBIND_ITEMS: usize = 15;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
@@ -48,6 +48,7 @@ const COVER_CACHE_SUBDIR: &str = "cover";
 const COVER_FETCH_RETRY_MS: u64 = 1500;
 const LYRICS_FETCH_RETRY_MS: u64 = 1500;
 const AUDIO_PREFETCH_RETRY_MS: u64 = 2000;
+const SIDEBAR_SLIDE_STEP_CELLS: f32 = 4.0;
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
 const DEFAULT_KEYBIND_FULLSCREEN: &str = "Ctrl+F";
@@ -232,9 +233,9 @@ pub struct HomeTile {
 impl HomeTile {
     fn placeholder_daily() -> Self {
         Self {
-            id: None,
+            id: Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string()),
             title: "每日推荐".to_string(),
-            subtitle: "Daily Mix".to_string(),
+            subtitle: String::new(),
             cover_url: None,
             cover_bytes: None,
             cover_ascii: String::new(),
@@ -282,6 +283,8 @@ pub struct HomeState {
     pub columns: usize,
     pub tiles: Vec<HomeTile>,
     pub status_line: String,
+    pub scroll_row_offset: usize,
+    pub visible_rows: usize,
 }
 
 impl Default for HomeState {
@@ -291,18 +294,72 @@ impl Default for HomeState {
             columns: 1,
             tiles: vec![HomeTile::placeholder_daily()],
             status_line: "方向键/Tab 切换，Enter 进入".to_string(),
+            scroll_row_offset: 0,
+            visible_rows: 1,
         }
     }
 }
 
 impl HomeState {
-    pub fn set_columns(&mut self, columns: usize) {
-        self.columns = columns.max(1);
+    fn total_virtual_rows(&self) -> usize {
+        if self.tiles.is_empty() {
+            return 0;
+        }
+
+        let columns = self.columns.max(1);
+        let last_virtual = home_tile_real_to_virtual_index(self.tiles.len() - 1, columns);
+        last_virtual / columns + 1
+    }
+
+    fn max_scroll_row_offset(&self) -> usize {
+        self.total_virtual_rows()
+            .saturating_sub(self.visible_rows.max(1))
+    }
+
+    fn clamp_scroll_row_offset(&mut self) {
+        self.scroll_row_offset = self.scroll_row_offset.min(self.max_scroll_row_offset());
+    }
+
+    fn ensure_focus_visible(&mut self) {
         if self.tiles.is_empty() {
             self.focused_idx = 0;
-        } else {
-            self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
+            self.scroll_row_offset = 0;
+            return;
         }
+
+        self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
+        let columns = self.columns.max(1);
+        let focused_row = home_tile_real_to_virtual_index(self.focused_idx, columns) / columns;
+        let visible_rows = self.visible_rows.max(1);
+
+        if focused_row < self.scroll_row_offset {
+            self.scroll_row_offset = focused_row;
+        } else {
+            let bottom_row = self
+                .scroll_row_offset
+                .saturating_add(visible_rows.saturating_sub(1));
+            if focused_row > bottom_row {
+                self.scroll_row_offset = focused_row
+                    .saturating_add(1)
+                    .saturating_sub(visible_rows);
+            }
+        }
+
+        self.clamp_scroll_row_offset();
+    }
+
+    pub fn set_columns(&mut self, columns: usize) {
+        self.columns = columns.max(1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn set_visible_rows(&mut self, visible_rows: usize) {
+        self.visible_rows = visible_rows.max(1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn effective_scroll_row_offset(&self) -> usize {
+        self.scroll_row_offset.min(self.max_scroll_row_offset())
     }
 
     pub fn set_tiles(&mut self, mut tiles: Vec<HomeTile>) {
@@ -311,6 +368,8 @@ impl HomeState {
         }
         self.tiles = tiles;
         self.focused_idx = 0;
+        self.scroll_row_offset = 0;
+        self.ensure_focus_visible();
     }
 
     pub fn focus_next(&mut self) {
@@ -318,6 +377,7 @@ impl HomeState {
             return;
         }
         self.focused_idx = (self.focused_idx + 1) % self.tiles.len();
+        self.ensure_focus_visible();
     }
 
     pub fn focus_prev(&mut self) {
@@ -329,6 +389,7 @@ impl HomeState {
         } else {
             self.focused_idx - 1
         };
+        self.ensure_focus_visible();
     }
 
     pub fn focus_left(&mut self) {
@@ -343,9 +404,22 @@ impl HomeState {
         if self.tiles.is_empty() {
             return;
         }
+
         let step = self.columns.max(1);
-        if self.focused_idx >= step {
-            self.focused_idx -= step;
+        let focused_virtual = home_tile_real_to_virtual_index(self.focused_idx, step);
+        if focused_virtual < step {
+            return;
+        }
+
+        let focused_row = focused_virtual / step;
+        let target_virtual = focused_virtual - step;
+        if let Some(target) = home_tile_virtual_to_real_index(target_virtual, step, self.tiles.len()) {
+            let is_top_edge = focused_row == self.scroll_row_offset;
+            self.focused_idx = target;
+            if is_top_edge && self.scroll_row_offset > 0 {
+                self.scroll_row_offset -= 1;
+            }
+            self.ensure_focus_visible();
         }
     }
 
@@ -353,12 +427,62 @@ impl HomeState {
         if self.tiles.is_empty() {
             return;
         }
+
         let step = self.columns.max(1);
-        let target = self.focused_idx + step;
-        if target < self.tiles.len() {
+        let focused_virtual = home_tile_real_to_virtual_index(self.focused_idx, step);
+        let focused_row = focused_virtual / step;
+        let target_virtual = focused_virtual.saturating_add(step);
+
+        if let Some(target) = home_tile_virtual_to_real_index(target_virtual, step, self.tiles.len()) {
+            let bottom_edge_row = self
+                .scroll_row_offset
+                .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+            let is_bottom_edge = focused_row >= bottom_edge_row;
             self.focused_idx = target;
+            if is_bottom_edge {
+                self.scroll_row_offset = self
+                    .scroll_row_offset
+                    .saturating_add(1)
+                    .min(self.max_scroll_row_offset());
+            }
+            self.ensure_focus_visible();
         }
     }
+}
+
+const HOME_DAILY_RECOMMEND_TILE_ID: &str = "__cnm_daily_recommend_songs__";
+const HOME_PINNED_TITLES: [&str; 3] = ["每日推荐", "私人雷达", "欧美私人雷达"];
+
+fn home_tile_real_to_virtual_index(index: usize, columns: usize) -> usize {
+    let cols = columns.max(1);
+    if cols <= 3 || index < 3 {
+        index
+    } else {
+        index.saturating_add(cols - 3)
+    }
+}
+
+fn home_tile_virtual_to_real_index(
+    virtual_index: usize,
+    columns: usize,
+    tile_len: usize,
+) -> Option<usize> {
+    let cols = columns.max(1);
+
+    if cols <= 3 {
+        return (virtual_index < tile_len).then_some(virtual_index);
+    }
+
+    if virtual_index < 3 {
+        return (virtual_index < tile_len).then_some(virtual_index);
+    }
+
+    if virtual_index < cols {
+        return None;
+    }
+
+    let real_index = virtual_index.saturating_sub(cols - 3);
+    (real_index < tile_len).then_some(real_index)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1151,6 +1275,15 @@ pub struct FullscreenPlaybackSnapshot {
     pub position: Duration,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FullscreenRuntimeSnapshot {
+    pub current_index: Option<usize>,
+    pub now_playing_liked: bool,
+    pub state: PlaybackRuntimeState,
+    pub repeat_mode: PlaybackRepeatMode,
+    pub position: Duration,
+}
+
 #[derive(Debug, Clone)]
 struct CoverFetchRequest {
     song_id: String,
@@ -1300,6 +1433,7 @@ pub struct App {
     pub login: LoginState,
     pub home: HomeState,
     pub home_sidebar: HomeSidebarState,
+    home_sidebar_anim_span_cells: u16,
     pub playlist: PlaylistState,
     pub author: AuthorState,
     pub search: SearchState,
@@ -1363,7 +1497,7 @@ pub struct App {
     audio_prefetch_next_id: u64,
     mpris_bridge: MprisBridge,
     mpris_last_sync_at: Instant,
-    mpris_last_signature: Option<String>,
+    mpris_last_signature: Option<u64>,
     mpris_last_playback: PlaybackRuntimeState,
     api: ApiState,
     audio_player: AudioPlayer,
@@ -1401,6 +1535,7 @@ impl App {
             login: LoginState::default(),
             home: HomeState::default(),
             home_sidebar: HomeSidebarState::default(),
+            home_sidebar_anim_span_cells: 24,
             playlist: PlaylistState::default(),
             author: AuthorState::default(),
             search: SearchState::default(),
@@ -1527,6 +1662,53 @@ impl App {
         }
     }
 
+    pub fn main_should_continuous_redraw(&self) -> bool {
+        if self.page == Page::Loading {
+            return true;
+        }
+
+        if self.playback_state == PlaybackRuntimeState::Playing {
+            return true;
+        }
+
+        if self.playback_state == PlaybackRuntimeState::Paused && self.main_has_spectrum_tail() {
+            return true;
+        }
+
+        if matches!(self.overlay, Some(Overlay::SearchBox)) || self.search_box_anim_height > 0 {
+            return true;
+        }
+
+        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
+        if (self.home_sidebar.anim_progress - target).abs() > 0.001 {
+            return true;
+        }
+
+        false
+    }
+
+    pub fn main_active_fps(&self) -> u32 {
+        let base = self.config.ui_fps.clamp(10, 60);
+        if self.playback_state == PlaybackRuntimeState::Playing {
+            return self.config.spectrum_hz.clamp(base, 60);
+        }
+
+        if self.playback_state == PlaybackRuntimeState::Paused && self.main_has_spectrum_tail() {
+            return self.config.spectrum_hz.clamp(base, 60);
+        }
+
+        base
+    }
+
+    pub fn main_idle_fps(&self) -> u32 {
+        self.config.ui_fps.clamp(4, 12)
+    }
+
+    fn main_has_spectrum_tail(&self) -> bool {
+        const TAIL_EPS: f32 = 0.003;
+        self.main_cava_bars.iter().any(|&v| v > TAIL_EPS)
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
@@ -1648,6 +1830,10 @@ impl App {
         self.home_sidebar_panel_hit = rect;
     }
 
+    pub fn set_home_sidebar_anim_span_cells(&mut self, span_cells: u16) {
+        self.home_sidebar_anim_span_cells = span_cells.max(1);
+    }
+
     pub fn push_home_sidebar_playlist_hit(&mut self, rect: HitRect, hit: HomeSidebarHit) {
         self.home_sidebar_playlist_hits.push((rect, hit));
     }
@@ -1716,6 +1902,15 @@ impl App {
         };
 
         self.main_cava = CavaRunner::start(cfg).ok();
+    }
+
+    pub fn suspend_main_cava_for_fullscreen(&mut self) {
+        self.main_cava = None;
+        self.main_cava_bars.fill(0.0);
+    }
+
+    pub fn resume_main_cava_after_fullscreen(&mut self) {
+        self.ensure_main_cava();
     }
 
     fn tick_main_cava(&mut self) {
@@ -1835,24 +2030,10 @@ impl App {
         let signature = self
             .now_playing
             .as_ref()
-            .map(|track| {
-                format!(
-                    "{}|{}|{}|{}|{}|{}",
-                    track.song_id,
-                    track.duration_ms,
-                    track.cover.as_ref().map(|b| b.len()).unwrap_or(0),
-                    track.cover_url.as_deref().unwrap_or_default(),
-                    track.lyrics.as_ref().map(|v| v.len()).unwrap_or(0),
-                    track
-                        .lyrics
-                        .as_ref()
-                        .and_then(|v| v.last().map(|line| line.start_ms))
-                        .unwrap_or(0)
-                )
-            })
-            .unwrap_or_else(|| "none".to_string());
+            .map(mpris_metadata_signature)
+            .unwrap_or(0);
 
-        let metadata_changed = self.mpris_last_signature.as_deref() != Some(signature.as_str());
+        let metadata_changed = self.mpris_last_signature != Some(signature);
         let playback_changed = self.mpris_last_playback != self.playback_state;
         let periodic_tick = now.duration_since(self.mpris_last_sync_at) >= Duration::from_millis(900);
 
@@ -1888,6 +2069,42 @@ impl App {
             repeat_mode: self.playback_repeat_mode,
             position: self.audio_player.position(),
         }
+    }
+
+    pub fn fullscreen_runtime_snapshot(&self) -> FullscreenRuntimeSnapshot {
+        FullscreenRuntimeSnapshot {
+            current_index: self.playback_index,
+            now_playing_liked: self.now_playing_liked,
+            state: self.playback_state,
+            repeat_mode: self.playback_repeat_mode,
+            position: self.audio_player.position(),
+        }
+    }
+
+    pub fn fullscreen_metadata_signature(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.playback_queue.len().hash(&mut hasher);
+        self.playback_index.hash(&mut hasher);
+
+        for track in &self.playback_queue {
+            track.song_id.hash(&mut hasher);
+            track.duration_ms.hash(&mut hasher);
+        }
+
+        if let Some(track) = self.now_playing.as_ref() {
+            track.song_id.hash(&mut hasher);
+            track.duration_ms.hash(&mut hasher);
+            track.cover.as_ref().map(|v| v.len()).unwrap_or(0).hash(&mut hasher);
+            track.lyrics.as_ref().map(|v| v.len()).unwrap_or(0).hash(&mut hasher);
+            track
+                .lyrics
+                .as_ref()
+                .and_then(|v| v.last().map(|line| line.start_ms))
+                .unwrap_or(0)
+                .hash(&mut hasher);
+        }
+
+        hasher.finish()
     }
 
     pub fn fullscreen_toggle_play_pause(&mut self) {
@@ -2674,6 +2891,14 @@ impl App {
     }
 
     fn tick_audio_prefetch(&mut self) {
+        if self.audio_prefetch_pending.is_none()
+            && self.audio_prefetch_inflight_id.is_none()
+            && self.audio_preload_inflight_id.is_none()
+            && !self.config.audio_preload
+        {
+            return;
+        }
+
         loop {
             match self.audio_prefetch_rx.try_recv() {
                 Ok(result) => {
@@ -2844,6 +3069,15 @@ impl App {
     }
 
     fn tick_cover_fetch(&mut self) {
+        let needs_schedule = self
+            .now_playing
+            .as_ref()
+            .map(|now| now.cover.is_none() && now.cover_url.is_some())
+            .unwrap_or(false);
+        if self.cover_fetch_inflight_url.is_none() && !needs_schedule {
+            return;
+        }
+
         loop {
             match self.cover_fetch_rx.try_recv() {
                 Ok(result) => self.apply_cover_fetch_result(result),
@@ -2922,6 +3156,15 @@ impl App {
     }
 
     fn tick_lyric_fetch(&mut self) {
+        let needs_schedule = self
+            .now_playing
+            .as_ref()
+            .map(|now| now.lyrics.is_none())
+            .unwrap_or(false);
+        if self.lyric_fetch_inflight_song_id.is_none() && !needs_schedule {
+            return;
+        }
+
         loop {
             match self.lyric_fetch_rx.try_recv() {
                 Ok(result) => self.apply_lyric_fetch_result(result),
@@ -3580,8 +3823,9 @@ impl App {
                     self.open_keybind_settings();
                 }
                 5 => self.apply_settings_root_delta(1),
-                6 => self.logout_to_login(),
-                7 => {
+                6 => self.apply_settings_root_delta(1),
+                7 => self.logout_to_login(),
+                8 => {
                     self.overlay = Some(Overlay::SettingsAbout);
                 }
                 _ => {}
@@ -3768,6 +4012,24 @@ impl App {
                 if delta != 0 {
                     self.config.show_hints = !self.config.show_hints;
                     let _ = self.config.save();
+                }
+            }
+            6 => {
+                if delta != 0 {
+                    self.config.home_more_recommend = !self.config.home_more_recommend;
+                    let _ = self.config.save();
+                    if self.page == Page::Home {
+                        if let Err(err) = self.load_home_recommendations() {
+                            self.home.status_line = format!(
+                                "{}: {}",
+                                self.lang_text(
+                                    "推荐歌单刷新失败",
+                                    "Failed to refresh home recommendations",
+                                ),
+                                err
+                            );
+                        }
+                    }
                 }
             }
             _ => {}
@@ -4000,7 +4262,9 @@ impl App {
 
     fn tick_home_sidebar_animation(&mut self) {
         let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
-        let step = 0.16;
+        // Keep home sidebar speed in sync with TMPlayer sidebar (4 cells per frame).
+        let span = self.home_sidebar_anim_span_cells.max(1) as f32;
+        let step = (SIDEBAR_SLIDE_STEP_CELLS / span).clamp(0.01, 1.0);
 
         if self.home_sidebar.anim_progress < target {
             self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress + step).min(target);
@@ -4253,6 +4517,7 @@ impl App {
             playback_memory: self.config.playback_memory,
             vip_audio_unlocked: self.vip_audio_unlocked,
             show_hints: self.config.show_hints,
+            home_more_recommend: self.config.home_more_recommend,
             visualize: self.config.visualize,
             super_smooth_bar: self.config.super_smooth_bar,
             bars_gap: self.config.bars_gap,
@@ -4265,6 +4530,7 @@ impl App {
 
     pub fn fullscreen_apply_config_sync(&mut self, sync: crate::tmplayer::HostConfigSync) {
         let mut changed = false;
+        let mut home_more_recommend_changed = false;
 
         if self.config.theme != sync.theme {
             if let Ok(theme) = ThemeLoader::load(&sync.theme) {
@@ -4325,6 +4591,12 @@ impl App {
             changed = true;
         }
 
+        if self.config.home_more_recommend != sync.home_more_recommend {
+            self.config.home_more_recommend = sync.home_more_recommend;
+            changed = true;
+            home_more_recommend_changed = true;
+        }
+
         if self.config.visualize != sync.visualize {
             self.config.visualize = sync.visualize;
             changed = true;
@@ -4363,6 +4635,19 @@ impl App {
         if changed {
             let _ = self.config.save();
         }
+
+        if home_more_recommend_changed && self.page != Page::Login {
+            if let Err(err) = self.load_home_recommendations() {
+                self.home.status_line = format!(
+                    "{}: {}",
+                    self.lang_text(
+                        "推荐歌单刷新失败",
+                        "Failed to refresh home recommendations",
+                    ),
+                    err
+                );
+            }
+        }
     }
 
     pub fn build_fullscreen_bootstrap(&mut self) -> crate::tmplayer::FullscreenBootstrap {
@@ -4370,6 +4655,14 @@ impl App {
 
         if self.now_playing.is_none() {
             return bootstrap;
+        }
+
+        let mut playlist_cover = self.playlist.cover_bytes.clone();
+
+        if playlist_cover.is_none() {
+            if let Some(cover_url) = self.playlist.cover_url.clone() {
+                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url);
+            }
         }
 
         // Prefer persistent now-playing queue so fullscreen follows actual playback state.
@@ -4504,9 +4797,42 @@ impl App {
                 }
             }
 
-            if bootstrap.playlist_cover.is_none() {
-                bootstrap.playlist_cover = seed.cover.clone();
+            if playlist_cover.is_none() {
+                let first_track = self
+                    .playback_queue
+                    .first()
+                    .cloned()
+                    .or_else(|| self.now_playing.clone());
+
+                if let Some(first_track) = first_track {
+                    playlist_cover = first_track.cover.clone();
+
+                    if playlist_cover.is_none() {
+                        if let Some(cover_url) = first_track.cover_url.as_deref() {
+                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url);
+                        }
+                    }
+
+                    if playlist_cover.is_none() {
+                        if let Ok(detail) = self.api.song_detail(&first_track.song_id) {
+                            if let Some(song) = detail
+                                .body
+                                .get("songs")
+                                .and_then(|value| value.as_array())
+                                .and_then(|items| items.first())
+                            {
+                                if let Some(cover_url) =
+                                    song.pointer("/al/picUrl").and_then(|value| value.as_str())
+                                {
+                                    playlist_cover = self.fetch_cover_with_disk_cache(cover_url);
+                                }
+                            }
+                        }
+                    }
+                }
             }
+
+            bootstrap.playlist_cover = playlist_cover;
             bootstrap.current_track = Some(seed);
         }
 
@@ -4718,7 +5044,13 @@ impl App {
         };
 
         self.home.status_line = format!("正在加载 {}", title);
-        match self.load_playlist_detail(&playlist_id) {
+        let result = if playlist_id == HOME_DAILY_RECOMMEND_TILE_ID {
+            self.load_daily_recommend_playlist()
+        } else {
+            self.load_playlist_detail(&playlist_id)
+        };
+
+        match result {
             Ok(()) => {
                 self.playlist_return_page = Page::Home;
                 self.playlist_section_return_snapshot = None;
@@ -4898,24 +5230,45 @@ impl App {
     }
 
     fn load_home_recommendations(&mut self) -> Result<()> {
-        let mut cards = Vec::new();
-
-        if let Ok(response) = self.api.recommend_resource() {
-            cards = parse_recommend_cards(&response, 8);
-        }
-
-        if cards.is_empty() {
-            if let Ok(response) = self.api.personalized(8) {
-                cards = parse_personalized_cards(&response, 8);
+        let mut daily_tile = HomeTile::placeholder_daily();
+        if let Ok(response) = self.api.recommend_songs() {
+            if response_code(&response) == 200 {
+                if let Some(songs) = home_daily_song_items(&response.body) {
+                    if let Some(cover_url) = songs
+                        .iter()
+                        .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
+                    {
+                        daily_tile.cover_url = Some(cover_url.clone());
+                        if let Ok(bytes) = self.api.fetch_cover_bytes(&cover_url) {
+                            if !bytes.is_empty() {
+                                daily_tile.cover_bytes = Some(bytes);
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        if cards.is_empty() {
-            return Err(anyhow!("推荐歌单为空"));
+        let mut cards = Vec::new();
+
+        if let Ok(response) = self.api.recommend_resource() {
+            cards = parse_recommend_cards(&response, 24);
         }
 
-        let mut tiles = Vec::with_capacity(cards.len());
+        if cards.is_empty() {
+            if let Ok(response) = self.api.personalized(24) {
+                cards = parse_personalized_cards(&response, 24);
+            }
+        }
+
+        let mut tiles = Vec::with_capacity(cards.len().saturating_add(1));
+        tiles.push(daily_tile);
+
         for card in cards {
+            if normalize_home_pinned_title(&card.title) == Some("每日推荐") {
+                continue;
+            }
+
             let mut tile = HomeTile::from_recommendation(
                 card.id,
                 card.title,
@@ -4934,7 +5287,8 @@ impl App {
             tiles.push(tile);
         }
 
-        self.home.set_tiles(tiles);
+        self.home
+            .set_tiles(prioritize_home_tiles(tiles, self.config.home_more_recommend));
         self.home.status_line = self
             .lang_text(
                 "方向键/Tab 切换，Enter 打开歌单",
@@ -5130,6 +5484,52 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
+        self.playlist.cover_url = cover_url.clone();
+        self.playlist.tracks = tracks;
+        self.playlist.focused_idx = 0;
+
+        let cover_bytes = if let Some(url) = cover_url {
+            self.api
+                .fetch_cover_bytes(&url)
+                .ok()
+                .filter(|bytes| !bytes.is_empty())
+        } else {
+            None
+        };
+        self.playlist.set_cover_bytes(cover_bytes);
+
+        Ok(())
+    }
+
+    fn load_daily_recommend_playlist(&mut self) -> Result<()> {
+        let response = self.api.recommend_songs()?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
+        }
+
+        let songs = home_daily_song_items(&response.body).ok_or_else(|| {
+            anyhow!(self.lang_text("每日推荐数据缺失", "Daily recommendations are missing"))
+        })?;
+
+        let tracks = parse_tracks(songs);
+        if tracks.is_empty() {
+            return Err(anyhow!(self.lang_text("每日推荐为空", "Daily recommendations are empty")));
+        }
+
+        let cover_url = tracks.iter().find_map(|track| track.cover_url.clone());
+
+        self.playlist.id = Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string());
+        self.playlist.title = self.lang_text("每日推荐", "Daily Recommendations").to_string();
+        self.playlist.artist = self
+            .lang_text("网易云音乐", "Netease Cloud Music")
+            .to_string();
+        self.playlist.description = self
+            .lang_text(
+                "来自网易云每日推荐歌曲，按 Enter 播放",
+                "Daily songs from Netease. Press Enter to play",
+            )
+            .to_string();
         self.playlist.cover_url = cover_url.clone();
         self.playlist.tracks = tracks;
         self.playlist.focused_idx = 0;
@@ -5596,6 +5996,22 @@ fn cubic_bezier_y(t: f32, p1y: f32, p2y: f32) -> f32 {
     (a + b + c).clamp(0.0, 1.0)
 }
 
+fn mpris_metadata_signature(track: &PlaybackTrack) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    track.song_id.hash(&mut hasher);
+    track.duration_ms.hash(&mut hasher);
+    track.cover.as_ref().map(|bytes| bytes.len()).unwrap_or(0).hash(&mut hasher);
+    track.cover_url.as_deref().unwrap_or_default().hash(&mut hasher);
+    track.lyrics.as_ref().map(|lines| lines.len()).unwrap_or(0).hash(&mut hasher);
+    track
+        .lyrics
+        .as_ref()
+        .and_then(|lines| lines.last().map(|line| line.start_ms))
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
 fn map_audio_state(state: AudioPlayerState) -> PlaybackRuntimeState {
     match state {
         AudioPlayerState::Playing => PlaybackRuntimeState::Playing,
@@ -5754,6 +6170,79 @@ struct RecommendCard {
     title: String,
     subtitle: String,
     cover_url: Option<String>,
+}
+
+fn home_daily_song_items<'a>(body: &'a Value) -> Option<&'a [Value]> {
+    body.pointer("/data/dailySongs")
+        .and_then(|value| value.as_array().map(Vec::as_slice))
+        .or_else(|| {
+            body.get("dailySongs")
+                .and_then(|value| value.as_array().map(Vec::as_slice))
+        })
+        .or_else(|| {
+            body.pointer("/recommend")
+                .and_then(|value| value.as_array().map(Vec::as_slice))
+        })
+        .or_else(|| {
+            body.pointer("/data/recommend")
+                .and_then(|value| value.as_array().map(Vec::as_slice))
+        })
+}
+
+fn normalize_home_pinned_title(title: &str) -> Option<&'static str> {
+    let compact: String = title.chars().filter(|ch| !ch.is_whitespace()).collect();
+
+    if compact.contains("欧美私人雷达") {
+        return Some("欧美私人雷达");
+    }
+    if compact.contains("私人雷达") {
+        return Some("私人雷达");
+    }
+    if compact.contains("每日推荐") {
+        return Some("每日推荐");
+    }
+
+    None
+}
+
+fn prioritize_home_tiles(mut tiles: Vec<HomeTile>, show_more: bool) -> Vec<HomeTile> {
+    let mut pinned = Vec::with_capacity(HOME_PINNED_TITLES.len());
+
+    for target in HOME_PINNED_TITLES {
+        if let Some(index) = tiles
+            .iter()
+            .position(|tile| normalize_home_pinned_title(&tile.title) == Some(target))
+        {
+            let mut tile = tiles.remove(index);
+            tile.title = target.to_string();
+            tile.subtitle.clear();
+            pinned.push(tile);
+            continue;
+        }
+
+        if target == "每日推荐" {
+            pinned.push(HomeTile::placeholder_daily());
+        } else {
+            pinned.push(HomeTile::from_recommendation(
+                None,
+                target.to_string(),
+                String::new(),
+                None,
+            ));
+        }
+    }
+
+    pinned.extend(tiles);
+
+    if !show_more && pinned.len() > HOME_PINNED_TITLES.len() {
+        pinned.truncate(HOME_PINNED_TITLES.len());
+    }
+
+    if pinned.is_empty() {
+        pinned.push(HomeTile::placeholder_daily());
+    }
+
+    pinned
 }
 
 fn parse_recommend_cards(response: &ApiResponse, limit: usize) -> Vec<RecommendCard> {

@@ -82,6 +82,11 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
             l(app, "显示提示", "Show Hints"),
             on_off(app, app.config.show_hints)
         ),
+        format!(
+            "{}: {}",
+            l(app, "主页更多推荐", "More Home Recommendations"),
+            on_off(app, app.config.home_more_recommend)
+        ),
         l(app, "退出登录", "Logout").to_string(),
         "about".to_string(),
     ];

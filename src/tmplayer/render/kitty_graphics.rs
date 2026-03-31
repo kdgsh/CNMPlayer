@@ -45,7 +45,11 @@ pub fn delete_image(image_id: u32, free_data: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn encode_image_bytes_to_png_base64(image_bytes: &[u8], max_w_px: u32, max_h_px: u32) -> Option<String> {
+pub fn encode_image_bytes_to_png_base64(
+    image_bytes: &[u8],
+    max_w_px: u32,
+    max_h_px: u32,
+) -> Option<(String, u32, u32)> {
     // Normalize to PNG, as kitty supports f=100 and reads dimensions from PNG header.
     let img = image::load_from_memory(image_bytes).ok()?;
 
@@ -75,7 +79,11 @@ pub fn encode_image_bytes_to_png_base64(image_bytes: &[u8], max_w_px: u32, max_h
         }
     }
 
-    Some(base64::engine::general_purpose::STANDARD.encode(png))
+    Some((
+        base64::engine::general_purpose::STANDARD.encode(png),
+        w,
+        h,
+    ))
 }
 
 pub fn transmit_png_base64(image_id: u32, b64: &str) -> Result<()> {
@@ -90,16 +98,53 @@ pub fn transmit_png_base64(image_id: u32, b64: &str) -> Result<()> {
 }
 
 pub fn place_image(rect: Rect, image_id: u32, placement_id: u32) -> Result<()> {
+    place_image_impl(rect, image_id, placement_id, None)
+}
+
+pub fn place_image_cropped(
+    rect: Rect,
+    image_id: u32,
+    placement_id: u32,
+    src_x: u32,
+    src_y: u32,
+    src_w: u32,
+    src_h: u32,
+) -> Result<()> {
+    if src_w == 0 || src_h == 0 {
+        return Ok(());
+    }
+
+    place_image_impl(
+        rect,
+        image_id,
+        placement_id,
+        Some((src_x, src_y, src_w, src_h)),
+    )
+}
+
+fn place_image_impl(
+    rect: Rect,
+    image_id: u32,
+    placement_id: u32,
+    src_crop: Option<(u32, u32, u32, u32)>,
+) -> Result<()> {
     if rect.width == 0 || rect.height == 0 {
         return Ok(());
     }
     let mut out = io::stdout();
     queue!(out, cursor::MoveTo(rect.x, rect.y))?;
     // a=p: place a previously transmitted image
-    let esc = format!(
-        "\x1b_Ga=p,i={image_id},p={placement_id},c={},r={},C=1,q=2;\x1b\\",
-        rect.width, rect.height
-    );
+    let esc = if let Some((src_x, src_y, src_w, src_h)) = src_crop {
+        format!(
+            "\x1b_Ga=p,i={image_id},p={placement_id},x={src_x},y={src_y},w={src_w},h={src_h},c={},r={},C=1,q=2;\x1b\\",
+            rect.width, rect.height
+        )
+    } else {
+        format!(
+            "\x1b_Ga=p,i={image_id},p={placement_id},c={},r={},C=1,q=2;\x1b\\",
+            rect.width, rect.height
+        )
+    };
     queue!(out, Print(esc))?;
     out.flush()?;
     Ok(())
