@@ -75,6 +75,11 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
                 Language::En => "English",
             }
         ),
+        format!(
+            "{}: {}",
+            l(app, "Kitty 图形", "Kitty Graphics"),
+            on_off(app, app.config.kitty_graphics)
+        ),
         format!("{}...", l(app, "播放设置", "Playback Settings")),
         format!("{}...", l(app, "按键绑定", "Keybinds")),
         format!(
@@ -163,11 +168,6 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             "{}: {}",
             l(app, "封面边框", "Cover Border"),
             on_off(app, app.config.album_border)
-        ),
-        format!(
-            "{}: {}",
-            l(app, "Kitty 图形", "Kitty Graphics"),
-            on_off(app, app.config.kitty_graphics)
         ),
         format!(
             "{}: {}",

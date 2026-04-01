@@ -35,8 +35,8 @@ const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
-const SETTINGS_ROOT_ITEMS: usize = 9;
-const SETTINGS_PLAYBACK_ITEMS: usize = 11;
+const SETTINGS_ROOT_ITEMS: usize = 10;
+const SETTINGS_PLAYBACK_ITEMS: usize = 10;
 const SETTINGS_KEYBIND_ITEMS: usize = 15;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
@@ -3814,18 +3814,18 @@ impl App {
             KeyCode::Left => self.apply_settings_root_delta(-1),
             KeyCode::Right => self.apply_settings_root_delta(1),
             KeyCode::Enter => match self.settings_selected {
-                0..=2 => self.apply_settings_root_delta(1),
-                3 => {
+                0..=3 => self.apply_settings_root_delta(1),
+                4 => {
                     self.settings_playback_selected = 0;
                     self.overlay = Some(Overlay::SettingsPlayback);
                 }
-                4 => {
+                5 => {
                     self.open_keybind_settings();
                 }
-                5 => self.apply_settings_root_delta(1),
                 6 => self.apply_settings_root_delta(1),
-                7 => self.logout_to_login(),
-                8 => {
+                7 => self.apply_settings_root_delta(1),
+                8 => self.logout_to_login(),
+                9 => {
                     self.overlay = Some(Overlay::SettingsAbout);
                 }
                 _ => {}
@@ -4008,13 +4008,19 @@ impl App {
                     let _ = self.config.save();
                 }
             }
-            5 => {
+            3 => {
+                if delta != 0 {
+                    self.config.kitty_graphics = !self.config.kitty_graphics;
+                    let _ = self.config.save();
+                }
+            }
+            6 => {
                 if delta != 0 {
                     self.config.show_hints = !self.config.show_hints;
                     let _ = self.config.save();
                 }
             }
-            6 => {
+            7 => {
                 if delta != 0 {
                     self.config.home_more_recommend = !self.config.home_more_recommend;
                     let _ = self.config.save();
@@ -4073,25 +4079,21 @@ impl App {
                 let _ = self.config.save();
             }
             6 => {
-                self.config.kitty_graphics = !self.config.kitty_graphics;
-                let _ = self.config.save();
-            }
-            7 => {
                 self.config.page_lyrics = !self.config.page_lyrics;
                 let _ = self.config.save();
             }
-            8 => {
+            7 => {
                 let next = self
                     .config
                     .audio_quality
                     .cycle(delta, self.vip_audio_unlocked);
                 self.set_audio_quality(next);
             }
-            9 => {
+            8 => {
                 self.config.audio_preload = !self.config.audio_preload;
                 let _ = self.config.save();
             }
-            10 => {
+            9 => {
                 self.config.playback_memory = !self.config.playback_memory;
                 let _ = self.config.save();
                 if self.config.playback_memory {
@@ -4477,8 +4479,8 @@ impl App {
 
     fn execute_search_from_box(&mut self) {
         let raw_query = self.search_box_input.trim().to_string();
-        let (keywords, _) = parse_search_input(&raw_query);
-        if keywords.is_empty() {
+        let (keywords, filter) = parse_search_input(&raw_query);
+        if keywords.is_empty() && !is_followed_author_query(&keywords, filter) {
             self.search.status_line = self
                 .lang_text("请输入搜索关键词", "Please enter search keywords")
                 .to_string();
@@ -5229,6 +5231,28 @@ impl App {
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
+    fn fetch_playlist_first_song_cover(&mut self, playlist_id: &str) -> Option<(String, Vec<u8>)> {
+        let response = self.api.playlist_detail(playlist_id).ok()?;
+        if response_code(&response) != 200 {
+            return None;
+        }
+
+        let cover_url = response
+            .body
+            .pointer("/playlist/tracks")
+            .and_then(|value| value.as_array())
+            .and_then(|items| items.first())
+            .and_then(|track| first_non_empty(track, &["/al/picUrl", "/album/picUrl"]))?;
+
+        let cover_bytes = self
+            .api
+            .fetch_cover_bytes(&cover_url)
+            .ok()
+            .filter(|bytes| !bytes.is_empty())?;
+
+        Some((cover_url, cover_bytes))
+    }
+
     fn load_home_recommendations(&mut self) -> Result<()> {
         let mut daily_tile = HomeTile::placeholder_daily();
         if let Ok(response) = self.api.recommend_songs() {
@@ -5265,7 +5289,8 @@ impl App {
         tiles.push(daily_tile);
 
         for card in cards {
-            if normalize_home_pinned_title(&card.title) == Some("每日推荐") {
+            let pinned_title = normalize_home_pinned_title(&card.title);
+            if pinned_title == Some("每日推荐") {
                 continue;
             }
 
@@ -5276,10 +5301,22 @@ impl App {
                 card.cover_url,
             );
 
-            if let Some(url) = tile.cover_url.clone() {
-                if let Ok(bytes) = self.api.fetch_cover_bytes(&url) {
-                    if !bytes.is_empty() {
-                        tile.cover_bytes = Some(bytes);
+            if pinned_title == Some("私人雷达") {
+                if let Some(playlist_id) = tile.id.clone() {
+                    if let Some((cover_url, cover_bytes)) = self.fetch_playlist_first_song_cover(&playlist_id)
+                    {
+                        tile.cover_url = Some(cover_url);
+                        tile.cover_bytes = Some(cover_bytes);
+                    }
+                }
+            }
+
+            if tile.cover_bytes.is_none() {
+                if let Some(url) = tile.cover_url.clone() {
+                    if let Ok(bytes) = self.api.fetch_cover_bytes(&url) {
+                        if !bytes.is_empty() {
+                            tile.cover_bytes = Some(bytes);
+                        }
                     }
                 }
             }
@@ -5858,7 +5895,8 @@ impl App {
 
     fn execute_search(&mut self) -> Result<()> {
         let (keywords, filter) = parse_search_input(&self.search.query);
-        if keywords.is_empty() {
+        let followed_author_query = is_followed_author_query(&keywords, filter);
+        if keywords.is_empty() && !followed_author_query {
             self.search.status_line = "请输入搜索关键词".to_string();
             self.search.set_results(Vec::new());
             return Ok(());
@@ -5868,15 +5906,30 @@ impl App {
         self.search.next_offset = 0;
         self.search.has_more = true;
 
-        let response = self
-            .api
-            .search(&keywords, filter.search_type(), SEARCH_RESULT_PAGE_SIZE, 0)?;
+        let response = if followed_author_query {
+            self.api.artist_sublist(SEARCH_RESULT_PAGE_SIZE, 0)?
+        } else {
+            self.api
+                .search(&keywords, filter.search_type(), SEARCH_RESULT_PAGE_SIZE, 0)?
+        };
         let code = response_code(&response);
         if code != 200 {
             return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
         }
 
-        let items = parse_search_items(&response, filter);
+        let items = if followed_author_query {
+            let page = parse_followed_author_page(&response);
+            let count = page.items.len();
+            let next_offset = page.fetched_count;
+            let has_more = followed_author_has_more(&page, next_offset);
+            self.search.set_results(page.items);
+            self.search.next_offset = next_offset;
+            self.search.has_more = has_more;
+            self.search.status_line = format!("{} 搜索完成，共 {} 条", filter.display_name(), count);
+            return Ok(());
+        } else {
+            parse_search_items(&response, filter)
+        };
         let count = items.len();
         self.search.set_results(items);
         self.search.status_line = format!("{} 搜索完成，共 {} 条", filter.display_name(), count);
@@ -5889,19 +5942,58 @@ impl App {
         }
 
         let (keywords, filter) = parse_search_input(&self.search.query);
-        if keywords.is_empty() {
+        let followed_author_query = is_followed_author_query(&keywords, filter);
+        if keywords.is_empty() && !followed_author_query {
             return Ok(0);
         }
 
-        let response = self.api.search(
-            &keywords,
-            filter.search_type(),
-            SEARCH_RESULT_PAGE_SIZE,
-            self.search.next_offset,
-        )?;
+        let response = if followed_author_query {
+            self.api
+                .artist_sublist(SEARCH_RESULT_PAGE_SIZE, self.search.next_offset)?
+        } else {
+            self.api.search(
+                &keywords,
+                filter.search_type(),
+                SEARCH_RESULT_PAGE_SIZE,
+                self.search.next_offset,
+            )?
+        };
         let code = response_code(&response);
         if code != 200 {
             return Err(anyhow!("请求失败({}): {}", code, response_message(&response)));
+        }
+
+        if followed_author_query {
+            let mut page = parse_followed_author_page(&response);
+            let fetched_count = page.fetched_count;
+            let added = page.items.len();
+            self.search.results.append(&mut page.items);
+            self.search.next_offset = self.search.next_offset.saturating_add(fetched_count);
+            self.search.has_more = followed_author_has_more(&page, self.search.next_offset);
+
+            if added == 0 {
+                if self.search.has_more {
+                    self.search.status_line = format!(
+                        "{} 已加载 {} 条",
+                        filter.display_name(),
+                        self.search.results.len()
+                    );
+                } else {
+                    self.search.status_line = format!(
+                        "{} 搜索结果已全部加载，共 {} 条",
+                        filter.display_name(),
+                        self.search.results.len()
+                    );
+                }
+                return Ok(0);
+            }
+
+            self.search.status_line = format!(
+                "{} 已加载 {} 条",
+                filter.display_name(),
+                self.search.results.len()
+            );
+            return Ok(added);
         }
 
         let items = parse_search_items(&response, filter);
@@ -6561,6 +6653,80 @@ fn parse_search_input(raw: &str) -> (String, SearchFilter) {
     }
 
     (trimmed.to_string(), SearchFilter::Single)
+}
+
+fn is_followed_author_query(keywords: &str, filter: SearchFilter) -> bool {
+    filter == SearchFilter::Author && keywords.trim().is_empty()
+}
+
+struct FollowedAuthorPage {
+    items: Vec<SearchItem>,
+    fetched_count: usize,
+    has_more: Option<bool>,
+    total_count: Option<usize>,
+}
+
+fn parse_followed_author_page(response: &ApiResponse) -> FollowedAuthorPage {
+    let items = response
+        .body
+        .get("data")
+        .and_then(|value| value.as_array())
+        .or_else(|| response.body.get("artists").and_then(|value| value.as_array()))
+        .or_else(|| {
+            response
+                .body
+                .pointer("/result/artists")
+                .and_then(|value| value.as_array())
+        });
+
+    let fetched_count = items.map(|values| values.len()).unwrap_or_default();
+    let parsed_items = items.map(|values| parse_author_items(values)).unwrap_or_default();
+
+    let has_more = ["/hasMore", "/more", "/data/hasMore", "/result/hasMore"]
+        .iter()
+        .find_map(|pointer| response.body.pointer(pointer).and_then(|value| value.as_bool()));
+    let total_count = ["/count", "/data/count", "/result/count"]
+        .iter()
+        .find_map(|pointer| parse_usize_value(response.body.pointer(pointer)));
+
+    FollowedAuthorPage {
+        items: parsed_items,
+        fetched_count,
+        has_more,
+        total_count,
+    }
+}
+
+fn followed_author_has_more(page: &FollowedAuthorPage, next_offset: usize) -> bool {
+    if page.fetched_count == 0 {
+        return false;
+    }
+
+    if let Some(has_more) = page.has_more {
+        return has_more;
+    }
+
+    if let Some(total_count) = page.total_count {
+        return next_offset < total_count;
+    }
+
+    page.fetched_count >= SEARCH_RESULT_PAGE_SIZE
+}
+
+fn parse_usize_value(value: Option<&Value>) -> Option<usize> {
+    let value = value?;
+    if let Some(number) = value.as_u64() {
+        return Some(number as usize);
+    }
+    if let Some(number) = value.as_i64() {
+        if number >= 0 {
+            return Some(number as usize);
+        }
+    }
+    if let Some(text) = value.as_str() {
+        return text.trim().parse::<usize>().ok();
+    }
+    None
 }
 
 fn parse_search_items(response: &ApiResponse, filter: SearchFilter) -> Vec<SearchItem> {

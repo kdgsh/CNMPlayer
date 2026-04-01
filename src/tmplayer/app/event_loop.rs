@@ -904,7 +904,7 @@ fn handle_action(
             app.set_toast("Local audio is disabled in CNMPlayer");
         }
         Action::OpenSettingsModal => {
-            app.settings_selected = app.settings_selected.min(8);
+            app.settings_selected = app.settings_selected.min(9);
             app.overlay = Overlay::SettingsModal;
         }
         Action::OpenHelpModal => {
@@ -1082,26 +1082,26 @@ fn handle_action(
                 }
                 Overlay::SettingsModal => {
                     match app.settings_selected {
-                        0 | 1 | 2 => {
+                        0 | 1 | 2 | 3 => {
                             apply_settings_delta(app, host_bridge, 1);
                         }
-                        3 => {
+                        4 => {
                             app.bar_settings_selected = 0;
                             app.overlay = Overlay::BarSettingsModal;
                         }
-                        4 => {
-                            app.overlay = Overlay::HelpModal;
-                        }
                         5 => {
-                            apply_settings_delta(app, host_bridge, 1);
+                            app.overlay = Overlay::HelpModal;
                         }
                         6 => {
                             apply_settings_delta(app, host_bridge, 1);
                         }
                         7 => {
-                            app.set_toast("Logout is unavailable in fullscreen");
+                            apply_settings_delta(app, host_bridge, 1);
                         }
                         8 => {
+                            app.set_toast("Logout is unavailable in fullscreen");
+                        }
+                        9 => {
                             app.overlay = Overlay::AboutModal;
                         }
                         _ => {}
@@ -1137,25 +1137,19 @@ fn handle_action(
                             save_and_sync_host_config(app, host_bridge);
                         }
                         6 => {
-                            if app.kitty_graphics_supported {
-                                app.config.kitty_graphics = !app.config.kitty_graphics;
-                                save_and_sync_host_config(app, host_bridge);
-                            }
-                        }
-                        7 => {
                             app.config.page_lyrics = !app.config.page_lyrics;
                             save_and_sync_host_config(app, host_bridge);
                         }
-                        8 => {
+                        7 => {
                             app.config.audio_quality =
                                 app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
                             save_and_sync_host_config(app, host_bridge);
                         }
-                        9 => {
+                        8 => {
                             app.config.audio_preload = !app.config.audio_preload;
                             save_and_sync_host_config(app, host_bridge);
                         }
-                        10 => {
+                        9 => {
                             app.config.playback_memory = !app.config.playback_memory;
                             save_and_sync_host_config(app, host_bridge);
                         }
@@ -1315,14 +1309,14 @@ fn handle_action(
         }
         Action::ModalUp => {
             if app.overlay == Overlay::SettingsModal {
-                let count = 9;
+                let count = 10;
                 if app.settings_selected == 0 {
                     app.settings_selected = count - 1;
                 } else {
                     app.settings_selected -= 1;
                 }
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 11;
+                let count = 10;
                 if app.bar_settings_selected == 0 {
                     app.bar_settings_selected = count - 1;
                 } else {
@@ -1356,10 +1350,10 @@ fn handle_action(
         }
         Action::ModalDown => {
             if app.overlay == Overlay::SettingsModal {
-                let count = 9;
+                let count = 10;
                 app.settings_selected = (app.settings_selected + 1) % count;
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 11;
+                let count = 10;
                 app.bar_settings_selected = (app.bar_settings_selected + 1) % count;
             } else if app.overlay == Overlay::LocalAudioSettingsModal {
                 let count = 5;
@@ -1412,25 +1406,19 @@ fn handle_action(
                         save_and_sync_host_config(app, host_bridge);
                     }
                     6 => {
-                        if app.kitty_graphics_supported {
-                            app.config.kitty_graphics = !app.config.kitty_graphics;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                    }
-                    7 => {
                         app.config.page_lyrics = !app.config.page_lyrics;
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    8 => {
+                    7 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(-1, app.vip_audio_unlocked);
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    9 => {
+                    8 => {
                         app.config.audio_preload = !app.config.audio_preload;
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    10 => {
+                    9 => {
                         app.config.playback_memory = !app.config.playback_memory;
                         save_and_sync_host_config(app, host_bridge);
                     }
@@ -1480,25 +1468,19 @@ fn handle_action(
                         save_and_sync_host_config(app, host_bridge);
                     }
                     6 => {
-                        if app.kitty_graphics_supported {
-                            app.config.kitty_graphics = !app.config.kitty_graphics;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                    }
-                    7 => {
                         app.config.page_lyrics = !app.config.page_lyrics;
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    8 => {
+                    7 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    9 => {
+                    8 => {
                         app.config.audio_preload = !app.config.audio_preload;
                         save_and_sync_host_config(app, host_bridge);
                     }
-                    10 => {
+                    9 => {
                         app.config.playback_memory = !app.config.playback_memory;
                         save_and_sync_host_config(app, host_bridge);
                     }
@@ -1888,15 +1870,22 @@ fn apply_settings_delta(
                 save_and_sync_host_config(app, host_bridge);
             }
         }
+        // Kitty graphics
+        3 => {
+            if delta != 0 && app.kitty_graphics_supported {
+                app.config.kitty_graphics = !app.config.kitty_graphics;
+                save_and_sync_host_config(app, host_bridge);
+            }
+        }
         // Show hints
-        5 => {
+        6 => {
             if delta != 0 {
                 app.config.show_hints = !app.config.show_hints;
                 save_and_sync_host_config(app, host_bridge);
             }
         }
         // Home more recommendations
-        6 => {
+        7 => {
             if delta != 0 {
                 app.config.home_more_recommend = !app.config.home_more_recommend;
                 save_and_sync_host_config(app, host_bridge);

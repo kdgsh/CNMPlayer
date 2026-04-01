@@ -53,8 +53,10 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
     let input = app.search_box_input.clone();
     let content = if input.trim().is_empty() {
         match app.config.language {
-            Language::Zh => "请输入搜索内容（@single/@album/@list/@author）".to_string(),
-            Language::En => "Type to search (@single/@album/@list/@author)".to_string(),
+            Language::Zh => "请输入搜索内容（后缀 @single/@album/@list，或仅输入 @author）".to_string(),
+            Language::En => {
+                "Type to search (suffix @single/@album/@list, or only @author)".to_string()
+            }
         }
     } else {
         input.clone()

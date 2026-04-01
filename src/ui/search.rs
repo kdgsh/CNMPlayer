@@ -109,10 +109,10 @@ fn draw_result_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.config.show_hints && list_height < inner.height {
         let hint = match app.config.language {
             Language::Zh => {
-                "Enter 打开/播放  Esc 返回  后缀: @single 单曲 | @album 专辑 | @list 歌单 | @author 作者"
+                "Enter 打开/播放  Esc 返回  后缀: @single 单曲 | @album 专辑 | @list 歌单 | 仅 @author: 关注作者"
             }
             Language::En => {
-                "Enter open/play  Esc back  Suffix: @single | @album | @list | @author"
+                "Enter open/play  Esc back  Suffix: @single | @album | @list | only @author: followed authors"
             }
         };
         frame.render_widget(

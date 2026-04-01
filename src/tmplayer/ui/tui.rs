@@ -840,6 +840,11 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
             lang_on_off(app, app.config.transparent_background)
         ),
         format!("{}: {}", lang_text(app, "语言", "Language"), language_label),
+        format!(
+            "{}: {}",
+            lang_text(app, "Kitty 图形", "Kitty Graphics"),
+            lang_on_off(app, app.config.kitty_graphics)
+        ),
         format!("{}...", lang_text(app, "播放设置", "Playback Settings")),
         format!("{}...", lang_text(app, "按键绑定", "Keybinds")),
         format!(
@@ -964,11 +969,6 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             "{}: {}",
             lang_text(app, "封面边框", "Cover Border"),
             lang_on_off(app, app.config.album_border)
-        ),
-        format!(
-            "{}: {}",
-            lang_text(app, "Kitty 图形", "Kitty Graphics"),
-            lang_on_off(app, app.config.kitty_graphics)
         ),
         format!(
             "{}: {}",

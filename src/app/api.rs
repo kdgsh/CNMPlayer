@@ -210,6 +210,15 @@ impl ApiState {
         Ok(response)
     }
 
+    pub fn artist_sublist(&mut self, limit: usize, offset: usize) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("limit", &limit.max(1).to_string())
+            .param("offset", &offset.to_string());
+        let response = self.runtime.block_on(self.client.artist_sublist(&query))?;
+        Ok(response)
+    }
+
     pub fn song_detail(&mut self, song_id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("ids", song_id);
         let response = self.runtime.block_on(self.client.song_detail(&query))?;
