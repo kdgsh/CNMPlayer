@@ -56,7 +56,7 @@ pub struct Config {
     #[serde(default)]
     pub resume_last_position: bool,
 
-    #[serde(default, rename = "default-opening-folder")]
+    #[serde(default, rename = "default-opening-folder", skip_serializing_if = "String::is_empty")]
     pub default_opening_folder: String,
 
     #[serde(default)]
@@ -495,7 +495,6 @@ impl Config {
             || !raw.contains("show_hints")
             || !raw.contains("home_more_recommend")
             || !raw.contains("[cache]")
-            || !raw.contains("default-opening-folder")
             || !raw.contains("bar_number")
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")

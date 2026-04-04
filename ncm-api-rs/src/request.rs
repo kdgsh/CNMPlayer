@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 /// 特殊状态码集合（视为 200）
 static SPECIAL_STATUS_CODES: LazyLock<std::collections::HashSet<i64>> =
@@ -26,6 +27,9 @@ static WNMCID: LazyLock<String> = LazyLock::new(generate_wnmcid);
 static DOMAIN_REGEX: LazyLock<regex_lite::Regex> =
     LazyLock::new(|| regex_lite::Regex::new(r"\s*Domain=[^;]+;?").unwrap());
 
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
+
 /// 安全创建 HeaderValue，无效字符会被过滤
 fn header_value(s: &str) -> HeaderValue {
     HeaderValue::from_str(s).unwrap_or_else(|_| {
@@ -36,6 +40,18 @@ fn header_value(s: &str) -> HeaderValue {
             .collect();
         HeaderValue::from_str(&safe).unwrap_or_else(|_| HeaderValue::from_static(""))
     })
+}
+
+fn build_http_client(proxy: Option<reqwest::Proxy>) -> std::result::Result<reqwest::Client, reqwest::Error> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+        .timeout(DEFAULT_REQUEST_TIMEOUT);
+
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(proxy);
+    }
+
+    builder.build()
 }
 
 /// 加密类型
@@ -106,9 +122,7 @@ pub struct ApiClient {
 impl ApiClient {
     /// 创建新的 API 客户端
     pub fn new(cookie: Option<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .build()
-            .expect("Failed to create HTTP client");
+        let client = build_http_client(None).expect("Failed to create HTTP client");
 
         Self {
             client,
@@ -122,10 +136,7 @@ impl ApiClient {
     pub fn with_proxy(cookie: Option<String>, proxy_url: &str) -> Result<Self> {
         let proxy = reqwest::Proxy::all(proxy_url)
             .map_err(|e| NcmError::Unknown(format!("Invalid proxy URL: {}", e)))?;
-        let client = reqwest::Client::builder()
-            .proxy(proxy)
-            .build()
-            .map_err(NcmError::Http)?;
+        let client = build_http_client(Some(proxy)).map_err(NcmError::Http)?;
 
         Ok(Self {
             client,
@@ -426,10 +437,7 @@ impl ApiClient {
         let response = if let Some(ref proxy_url) = options.proxy {
             let proxy = reqwest::Proxy::all(proxy_url)
                 .map_err(|e| NcmError::Unknown(format!("Invalid proxy URL: {}", e)))?;
-            let proxy_client = reqwest::Client::builder()
-                .proxy(proxy)
-                .build()
-                .map_err(NcmError::Http)?;
+            let proxy_client = build_http_client(Some(proxy)).map_err(NcmError::Http)?;
             proxy_client
                 .post(&url)
                 .headers(headers)

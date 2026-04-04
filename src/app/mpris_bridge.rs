@@ -1,4 +1,5 @@
 use super::{PlaybackRuntimeState, PlaybackTrack};
+use crate::data::config::CacheConfig;
 use std::path::Path;
 use std::time::Duration;
 
@@ -23,7 +24,8 @@ pub enum MprisControlEvent {
 
 #[cfg(target_os = "linux")]
 mod imp {
-    use super::{MprisControlEvent, MprisSyncPayload, Path};
+    use super::{CacheConfig, MprisControlEvent, MprisSyncPayload, Path};
+    use crate::app::player::cleanup_cache_dir;
     use mpris_server::{Metadata, PlaybackStatus, Player, Time, zbus};
     use std::collections::hash_map::DefaultHasher;
     use std::fs;
@@ -31,26 +33,23 @@ mod imp {
     use std::sync::mpsc::{self as std_mpsc, Receiver, Sender};
     use std::thread;
     use tokio::runtime::Builder;
-    use tokio::sync::mpsc as tokio_mpsc;
+    use tokio::sync::watch;
     use tokio::task::LocalSet;
 
-    #[derive(Debug)]
-    enum Command {
-        Sync(MprisSyncPayload),
-    }
-
     pub struct MprisBridge {
-        tx: tokio_mpsc::UnboundedSender<Command>,
+        tx: watch::Sender<Option<MprisSyncPayload>>,
         event_rx: Receiver<MprisControlEvent>,
     }
 
     impl MprisBridge {
-        pub fn new(cache_root: &Path) -> Self {
+        pub fn new(cache_root: &Path, cache_policy: &CacheConfig) -> Self {
             let art_dir = cache_root.join("mpris_art");
             let _ = fs::create_dir_all(&art_dir);
+            let _ = cleanup_cache_dir(&art_dir, cache_policy);
 
-            let (tx, mut rx) = tokio_mpsc::unbounded_channel::<Command>();
+            let (tx, mut rx) = watch::channel::<Option<MprisSyncPayload>>(None);
             let (event_tx, event_rx) = std_mpsc::channel::<MprisControlEvent>();
+            let cache_policy = cache_policy.clone();
 
             thread::spawn(move || {
                 let rt = match Builder::new_current_thread().enable_all().build() {
@@ -83,13 +82,13 @@ mod imp {
 
                     tokio::task::spawn_local(player.run());
 
-                    while let Some(cmd) = rx.recv().await {
-                        match cmd {
-                            Command::Sync(payload) => {
-                                if let Err(err) = apply_snapshot(&player, &art_dir, payload).await {
-                                    log::debug!("mpris sync failed: {err}");
-                                }
-                            }
+                    while rx.changed().await.is_ok() {
+                        let Some(payload) = rx.borrow_and_update().clone() else {
+                            continue;
+                        };
+
+                        if let Err(err) = apply_snapshot(&player, &art_dir, &cache_policy, payload).await {
+                            log::debug!("mpris sync failed: {err}");
                         }
                     }
                 });
@@ -99,7 +98,7 @@ mod imp {
         }
 
         pub fn update(&self, payload: MprisSyncPayload) {
-            let _ = self.tx.send(Command::Sync(payload));
+            self.tx.send_replace(Some(payload));
         }
 
         pub fn drain_control_events(&self) -> Vec<MprisControlEvent> {
@@ -153,7 +152,12 @@ mod imp {
         });
     }
 
-    async fn apply_snapshot(player: &Player, art_dir: &Path, payload: MprisSyncPayload) -> zbus::Result<()> {
+    async fn apply_snapshot(
+        player: &Player,
+        art_dir: &Path,
+        cache_policy: &CacheConfig,
+        payload: MprisSyncPayload,
+    ) -> zbus::Result<()> {
         player
             .set_playback_status(match payload.playback {
                 super::PlaybackRuntimeState::Playing => PlaybackStatus::Playing,
@@ -165,13 +169,15 @@ mod imp {
         player.set_position(time_from_duration(payload.position));
 
         if let Some(track) = payload.track {
-            player.set_metadata(build_metadata(art_dir, &track)).await?;
+            player
+                .set_metadata(build_metadata(art_dir, cache_policy, &track))
+                .await?;
         }
 
         Ok(())
     }
 
-    fn build_metadata(art_dir: &Path, track: &super::PlaybackTrack) -> Metadata {
+    fn build_metadata(art_dir: &Path, cache_policy: &CacheConfig, track: &super::PlaybackTrack) -> Metadata {
         let mut metadata = Metadata::new();
 
         if !track.title.trim().is_empty() {
@@ -214,7 +220,7 @@ mod imp {
 
         if let Some(bytes) = track.cover.as_deref() {
             if !bytes.is_empty() {
-                if let Some(art_url) = persist_cover_as_file_url(art_dir, &track.song_id, bytes) {
+                if let Some(art_url) = persist_cover_as_file_url(art_dir, cache_policy, &track.song_id, bytes) {
                     metadata.set_art_url(Some(art_url));
                 }
             }
@@ -223,7 +229,12 @@ mod imp {
         metadata
     }
 
-    fn persist_cover_as_file_url(art_dir: &Path, song_id: &str, bytes: &[u8]) -> Option<String> {
+    fn persist_cover_as_file_url(
+        art_dir: &Path,
+        cache_policy: &CacheConfig,
+        song_id: &str,
+        bytes: &[u8],
+    ) -> Option<String> {
         let mut hasher = DefaultHasher::new();
         bytes.hash(&mut hasher);
         let hash = hasher.finish();
@@ -234,6 +245,10 @@ mod imp {
 
         if !path.is_file() {
             fs::write(&path, bytes).ok()?;
+            let _ = cleanup_cache_dir(art_dir, cache_policy);
+            if !path.is_file() {
+                fs::write(&path, bytes).ok()?;
+            }
         }
 
         Some(format!("file://{}", path.to_string_lossy()))
@@ -266,12 +281,12 @@ mod imp {
 
 #[cfg(not(target_os = "linux"))]
 mod imp {
-    use super::{MprisControlEvent, MprisSyncPayload, Path};
+    use super::{CacheConfig, MprisControlEvent, MprisSyncPayload, Path};
 
     pub struct MprisBridge;
 
     impl MprisBridge {
-        pub fn new(_cache_root: &Path) -> Self {
+        pub fn new(_cache_root: &Path, _cache_policy: &CacheConfig) -> Self {
             Self
         }
 

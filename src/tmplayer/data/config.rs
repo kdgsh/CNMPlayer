@@ -121,7 +121,7 @@ pub struct Config {
     #[serde(default = "default_keybind_toggle_like_fullscreen")]
     pub keybind_toggle_like_fullscreen: String,
 
-    #[serde(default, rename = "default-opening-folder")]
+    #[serde(default, rename = "default-opening-folder", skip_serializing_if = "String::is_empty")]
     pub default_opening_folder: String,
 }
 
@@ -404,8 +404,7 @@ impl Config {
         }
 
         // Auto-migrate missing fields into the config file.
-        if !raw.contains("default-opening-folder")
-            || !raw.contains("resume_last_position")
+        if !raw.contains("resume_last_position")
             || !raw.contains("bar_number")
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")

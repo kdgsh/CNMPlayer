@@ -6,6 +6,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
+const MAX_LOCAL_COVER_BYTES: u64 = 8 * 1024 * 1024;
+
 pub fn read_metadata(path: &Path) -> Result<TrackMetadata> {
     let mut meta = TrackMetadata::default();
 
@@ -84,9 +86,12 @@ fn read_embedded_cover(tagged: &lofty::TaggedFile) -> Option<(Vec<u8>, u64)> {
 
 fn read_cover_from_tag(tag: &Tag) -> Option<(Vec<u8>, u64)> {
     let pic = tag.pictures().first()?;
-    let bytes = pic.data().to_vec();
-    let hash = hash_bytes(&bytes);
-    Some((bytes, hash))
+    let bytes = pic.data();
+    if bytes.is_empty() || bytes.len() as u64 > MAX_LOCAL_COVER_BYTES {
+        return None;
+    }
+    let hash = hash_bytes(bytes);
+    Some((bytes.to_vec(), hash))
 }
 
 pub fn read_cover_from_folder(dir: &Path) -> Option<(Vec<u8>, u64)> {
@@ -108,11 +113,8 @@ pub fn read_cover_from_folder(dir: &Path) -> Option<(Vec<u8>, u64)> {
     for base in candidates {
         for ext in exts {
             let p = dir.join(format!("{base}.{ext}"));
-            if let Ok(bytes) = fs::read(&p) {
-                if !bytes.is_empty() {
-                    let hash = hash_bytes(&bytes);
-                    return Some((bytes, hash));
-                }
+            if let Some(cover) = read_cover_file(&p) {
+                return Some(cover);
             }
         }
     }
@@ -130,14 +132,31 @@ fn read_cover_for_audio(audio_path: &Path) -> Option<(Vec<u8>, u64)> {
     let cover_dir = folder.join("cover");
     for ext in exts {
         let p = cover_dir.join(format!("{stem}.{ext}"));
-        if let Ok(bytes) = fs::read(&p) {
-            if !bytes.is_empty() {
-                let hash = hash_bytes(&bytes);
-                return Some((bytes, hash));
-            }
+        if let Some(cover) = read_cover_file(&p) {
+            return Some(cover);
         }
     }
     None
+}
+
+fn read_cover_file(path: &Path) -> Option<(Vec<u8>, u64)> {
+    let metadata = fs::metadata(path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+
+    let len = metadata.len();
+    if len == 0 || len > MAX_LOCAL_COVER_BYTES {
+        return None;
+    }
+
+    let bytes = fs::read(path).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let hash = hash_bytes(&bytes);
+    Some((bytes, hash))
 }
 
 fn read_embedded_lyrics(tagged: &lofty::TaggedFile) -> Option<Vec<LyricLine>> {

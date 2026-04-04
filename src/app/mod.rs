@@ -1509,7 +1509,7 @@ impl App {
         let audio_player = AudioPlayer::new(&config);
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
-        let mpris_bridge = MprisBridge::new(&cache_root);
+        let mpris_bridge = MprisBridge::new(&cache_root, &config.cache);
         if config.cache.clean_on_startup {
             let _ = cleanup_cache_dir(&cover_cache_dir, &config.cache);
         }

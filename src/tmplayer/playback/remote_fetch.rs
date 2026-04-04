@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 const LAST_ATTEMPT_MAX: usize = 2048;
 const LAST_ATTEMPT_PRUNE_TO: usize = 1536;
+const MAX_REMOTE_COVER_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TrackKey {
@@ -258,8 +259,7 @@ fn process_request(req: RemoteFetchRequest) -> Option<RemoteFetchResult> {
     if need_cover {
         if let Some(mbid) = release_mbid.clone().or_else(|| musicbrainz_release_id(&title, &artist, &album)) {
             if let Some((bytes, content_type)) = cover_art_archive_fetch(&mbid) {
-                out.cover_hash = Some(hash_bytes(&bytes));
-                out.cover = Some(bytes.clone());
+                let cover_hash = hash_bytes(&bytes);
                 if let Some(path) = req.path.as_deref() {
                     if let Some(folder) = path.parent() {
                         out.cover_folder = Some(folder.to_path_buf());
@@ -271,6 +271,9 @@ fn process_request(req: RemoteFetchRequest) -> Option<RemoteFetchResult> {
                         let _ = save_cover(path, &bytes, content_type.as_deref());
                     }
                 }
+
+                out.cover_hash = Some(cover_hash);
+                out.cover = Some(bytes);
             }
         }
     }
@@ -384,16 +387,16 @@ fn cover_art_archive_fetch(release_id: &str) -> Option<(Vec<u8>, Option<String>)
     }
     if let Some(len) = resp.header("Content-Length") {
         if let Ok(n) = len.parse::<u64>() {
-            if n > 5 * 1024 * 1024 {
+            if n > MAX_REMOTE_COVER_BYTES as u64 {
                 return None;
             }
         }
     }
     let content_type = resp.header("Content-Type").map(|s| s.to_string());
-    let mut reader = resp.into_reader();
-    let mut bytes = Vec::new();
+    let mut reader = resp.into_reader().take(MAX_REMOTE_COVER_BYTES as u64 + 1);
+    let mut bytes = Vec::with_capacity(64 * 1024);
     reader.read_to_end(&mut bytes).ok()?;
-    if bytes.is_empty() {
+    if bytes.is_empty() || bytes.len() > MAX_REMOTE_COVER_BYTES {
         return None;
     }
     Some((bytes, content_type))

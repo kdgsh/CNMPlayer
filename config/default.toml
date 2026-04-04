@@ -18,8 +18,7 @@ lyrics_cover_download = false
 audio_fingerprint = false
 acoustid_api_key = ""
 resume_last_position = false
-default-opening-folder = ""
-# Custom title block for login header. Supports escaped newlines like "Line1\nLine2".
+# 自定义启动标题。支持换行，格式如： "Line1\nLine2".
 default_opening_title = ""
 language = "zh"
 page_lyrics = false

@@ -10,6 +10,9 @@ use ratatui::Frame;
 use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+const MIN_COVER_LAYOUT_WIDTH: u16 = 2;
+const MIN_COVER_LAYOUT_HEIGHT: u16 = 7;
+
 #[derive(Debug, Clone, Copy)]
 pub struct PlaylistPanelLayout {
     pub inner: Rect,
@@ -20,6 +23,17 @@ pub struct PlaylistPanelLayout {
     pub list_inner: Rect,
 }
 
+fn list_only_layout(inner: Rect) -> PlaylistPanelLayout {
+    PlaylistPanelLayout {
+        inner,
+        cover_area: Rect { x: inner.x, y: inner.y, width: inner.width, height: 0 },
+        cover_rect: Rect { x: inner.x, y: inner.y, width: 0, height: 0 },
+        separator_area: Rect { x: inner.x, y: inner.y, width: inner.width, height: 0 },
+        list_area: inner,
+        list_inner: inner,
+    }
+}
+
 pub fn compute_layout(area: Rect, app: &AppState) -> PlaylistPanelLayout {
     let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
 
@@ -27,15 +41,8 @@ pub fn compute_layout(area: Rect, app: &AppState) -> PlaylistPanelLayout {
         || (app.player.mode == PlayMode::LocalPlayback
             && (app.local_folder_kind == LocalFolderKind::Album || app.local_folder_kind == LocalFolderKind::MultiAlbum));
 
-    if !show_cover {
-        return PlaylistPanelLayout {
-            inner,
-            cover_area: Rect { x: inner.x, y: inner.y, width: inner.width, height: 0 },
-            cover_rect: Rect { x: inner.x, y: inner.y, width: 0, height: 0 },
-            separator_area: Rect { x: inner.x, y: inner.y, width: inner.width, height: 0 },
-            list_area: inner,
-            list_inner: inner,
-        };
+    if !show_cover || inner.width < MIN_COVER_LAYOUT_WIDTH || inner.height < MIN_COVER_LAYOUT_HEIGHT {
+        return list_only_layout(inner);
     }
 
     // Layout: cover (1/3) + 1-line separator + list (rest)
@@ -480,5 +487,61 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     render_album_cover(f, l.cover_area, app);
     render_separator(f, l.separator_area, app);
     render_playlist_list(f, l.list_area, app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::config::Language;
+    use crate::tmplayer::data::config::Config;
+    use crate::tmplayer::ui::theme::{ColorCapability, Theme, ThemeName, ThemePalette};
+
+    fn test_app_state() -> AppState {
+        AppState::new(
+            Config::default(),
+            Theme {
+                name: ThemeName::System,
+                palette: ThemePalette {
+                    text: (0, 0, 0),
+                    subtext: (0, 0, 0),
+                    base: (0, 0, 0),
+                    surface: (0, 0, 0),
+                    accent: (0, 0, 0),
+                    accent2: (0, 0, 0),
+                    accent3: (0, 0, 0),
+                },
+                capability: ColorCapability::NoColor,
+            },
+            Language::Zh,
+        )
+    }
+
+    #[test]
+    fn compute_layout_falls_back_to_list_for_zero_inner_rect() {
+        let mut app = test_app_state();
+        app.player.mode = PlayMode::LocalPlayback;
+        app.local_folder_kind = LocalFolderKind::MultiAlbum;
+
+        let layout = compute_layout(Rect { x: 0, y: 0, width: 1, height: 8 }, &app);
+
+        assert_eq!(layout.cover_area.height, 0);
+        assert_eq!(layout.list_area.width, 0);
+        assert_eq!(layout.list_area.height, 0);
+    }
+
+    #[test]
+    fn compute_layout_falls_back_to_list_for_short_inner_height() {
+        let mut app = test_app_state();
+        app.player.mode = PlayMode::LocalPlayback;
+        app.local_folder_kind = LocalFolderKind::Album;
+
+        let area = Rect { x: 0, y: 0, width: 16, height: 6 };
+        let layout = compute_layout(area, &app);
+        let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+
+        assert_eq!(layout.cover_area.height, 0);
+        assert_eq!(layout.list_area, inner);
+        assert_eq!(layout.list_inner, inner);
+    }
 }
 

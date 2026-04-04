@@ -7,6 +7,8 @@ use std::path::Path;
 use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 
+const MAX_COVER_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
 pub struct ApiState {
     runtime: Runtime,
     client: ApiClient,
@@ -338,9 +340,34 @@ impl ApiState {
             .runtime
             .block_on(async {
                 let response = self.http.get(url).send().await?;
-                let response = response.error_for_status()?;
-                let bytes = response.bytes().await?;
-                Ok::<Vec<u8>, reqwest::Error>(bytes.to_vec())
+                let mut response = response.error_for_status()?;
+
+                if let Some(content_len) = response.content_length() {
+                    if content_len > MAX_COVER_IMAGE_BYTES as u64 {
+                        return Err(anyhow!(
+                            "cover image exceeds {} byte limit",
+                            MAX_COVER_IMAGE_BYTES
+                        ));
+                    }
+                }
+
+                let mut bytes = Vec::with_capacity(64 * 1024);
+                while let Some(chunk) = response.chunk().await? {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+
+                    if bytes.len().saturating_add(chunk.len()) > MAX_COVER_IMAGE_BYTES {
+                        return Err(anyhow!(
+                            "cover image exceeds {} byte limit",
+                            MAX_COVER_IMAGE_BYTES
+                        ));
+                    }
+
+                    bytes.extend_from_slice(&chunk);
+                }
+
+                Ok::<Vec<u8>, anyhow::Error>(bytes)
             })
             .with_context(|| format!("download cover image failed: {}", url))?;
 
