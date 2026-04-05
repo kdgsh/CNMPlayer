@@ -3,10 +3,11 @@ use crate::tmplayer::data::playlist::{Playlist, PlaylistItem};
 use crate::tmplayer::playback::metadata::read_metadata;
 use crate::tmplayer::playback::metadata::read_cover_from_folder;
 use anyhow::{anyhow, Result};
-use rodio::{OutputStream, Sink, Source};
+use rodio::{MixerDeviceSink, Player, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
@@ -332,8 +333,8 @@ fn detect_folder_kind(folder: &Path) -> (LocalFolderKind, Vec<PathBuf>) {
 }
 
 pub struct LocalPlayer {
-    _stream: OutputStream,
-    sink: Sink,
+    device_sink: MixerDeviceSink,
+    player: Player,
 
     current_path: Option<PathBuf>,
     duration: Option<Duration>,
@@ -359,12 +360,12 @@ pub struct LocalPlayer {
 
 impl LocalPlayer {
     pub fn new() -> Self {
-        let (_stream, handle) = OutputStream::try_default().expect("no output device");
-        let sink = Sink::try_new(&handle).expect("sink");
+        let device_sink = rodio::DeviceSinkBuilder::open_default_sink().expect("no output device");
+        let player = Player::connect_new(device_sink.mixer());
         let eq_params = Arc::new(EqParams::new());
         Self {
-            _stream,
-            sink,
+            device_sink,
+            player,
             current_path: None,
             duration: None,
             volume: 0.0,
@@ -565,7 +566,7 @@ impl LocalPlayer {
 
     pub fn play_file(&mut self, path: &Path) -> Result<TrackMetadata> {
         // stop current (avoid blocking rebuilds; keep the sink and just clear sources)
-        self.sink.clear();
+        self.player.clear();
 
         // metadata
         let meta = self.cached_metadata(path);
@@ -578,7 +579,7 @@ impl LocalPlayer {
         self.started_at = Some(Instant::now());
 
         // apply volume
-        self.sink.set_volume(self.volume);
+        self.player.set_volume(self.volume);
 
         self.viz_samples.clear();
         let src = SymphoniaSource::open(path, Duration::from_secs(0), Some(meta.duration))?;
@@ -586,8 +587,8 @@ impl LocalPlayer {
         self.eq_params.set_from(self.eq);
         let eqd = EqSource::new(src, Arc::clone(&self.eq_params));
         let tapped = TapSource::new(eqd, Arc::clone(&self.viz_samples));
-        self.sink.append(tapped);
-        self.sink.play();
+        self.player.append(tapped);
+        self.player.play();
         Ok(meta)
     }
 
@@ -600,13 +601,13 @@ impl LocalPlayer {
             self.paused_acc = pos.saturating_sub(self.base_seek);
             self.started_at = None;
         }
-        self.sink.pause();
+        self.player.pause();
         Ok(())
     }
 
     pub fn toggle_play_pause(&mut self) -> Result<()> {
-        if self.sink.is_paused() {
-            self.sink.play();
+        if self.player.is_paused() {
+            self.player.play();
             self.started_at = Some(Instant::now());
         } else {
             self.pause()?;
@@ -616,7 +617,7 @@ impl LocalPlayer {
 
     pub fn set_volume(&mut self, v: f32) {
         self.volume = v.clamp(0.0, 1.0);
-        self.sink.set_volume(self.volume);
+        self.player.set_volume(self.volume);
     }
 
     pub fn volume(&self) -> f32 {
@@ -628,10 +629,10 @@ impl LocalPlayer {
             return PlaybackState::Stopped;
         }
         // When the sink has no more sources (track finished), treat as stopped.
-        if self.sink.empty() {
+        if self.player.empty() {
             return PlaybackState::Stopped;
         }
-        if self.sink.is_paused() {
+        if self.player.is_paused() {
             PlaybackState::Paused
         } else {
             PlaybackState::Playing
@@ -664,7 +665,7 @@ impl LocalPlayer {
         // Only transition once: when we were "playing" (started_at exists)
         // and the sink becomes empty OR we reached the known duration.
         if self.started_at.is_some() {
-            let mut finished = self.sink.empty();
+            let mut finished = self.player.empty();
             if !finished {
                 if let Some(dur) = self.duration {
                     // Some formats may not flip sink.empty reliably; use duration as fallback.
@@ -703,23 +704,23 @@ impl LocalPlayer {
             return Ok(());
         };
 
-        let was_paused = self.sink.is_paused();
+        let was_paused = self.player.is_paused();
 
         // Replace source without rebuilding the output sink (prevents UI stalls on some systems).
-        self.sink.clear();
-        self.sink.set_volume(self.volume);
+        self.player.clear();
+        self.player.set_volume(self.volume);
 
         self.viz_samples.clear();
         let src = SymphoniaSource::open(&path, pos, self.duration)?;
         self.eq_params.set_from(self.eq);
         let eqd = EqSource::new(src, Arc::clone(&self.eq_params));
         let tapped = TapSource::new(eqd, Arc::clone(&self.viz_samples));
-        self.sink.append(tapped);
+        self.player.append(tapped);
 
         if was_paused {
-            self.sink.pause();
+            self.player.pause();
         } else {
-            self.sink.play();
+            self.player.play();
         }
 
         self.base_seek = pos;
@@ -898,16 +899,16 @@ impl Iterator for SymphoniaSource {
 }
 
 impl Source for SymphoniaSource {
-    fn current_frame_len(&self) -> Option<usize> {
+    fn current_span_len(&self) -> Option<usize> {
         None
     }
 
-    fn channels(&self) -> u16 {
-        self.channels
+    fn channels(&self) -> NonZero<u16> {
+        NonZero::new(self.channels).unwrap()
     }
 
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    fn sample_rate(&self) -> NonZero<u32> {
+        NonZero::new(self.sample_rate).unwrap()
     }
 
     fn total_duration(&self) -> Option<Duration> {
@@ -949,15 +950,15 @@ impl<S> Source for TapSource<S>
 where
     S: Source<Item = f32>,
 {
-    fn current_frame_len(&self) -> Option<usize> {
-        self.inner.current_frame_len()
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
     }
 
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> NonZero<u16> {
         self.inner.channels()
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> NonZero<u32> {
         self.inner.sample_rate()
     }
 
@@ -1023,7 +1024,7 @@ where
     S: Source<Item = f32>,
 {
     inner: S,
-    channels: u16,
+    channels: NonZero<u16>,
     idx: usize,
     params: Arc<EqParams>,
     last_db_x10: [i32; EQ_BANDS],
@@ -1036,14 +1037,14 @@ where
     S: Source<Item = f32>,
 {
     fn new(inner: S, params: Arc<EqParams>) -> Self {
-        let channels = inner.channels().max(1);
-        let fs = inner.sample_rate() as f32;
+        let channels = inner.channels();
+        let fs = inner.sample_rate().get() as f32;
         let eq_db = params.load_db();
         let last_db_x10 = params.load_db_x10();
 
         let coeffs = std::array::from_fn(|i| biquad_peaking(fs, EQ_FREQS_HZ[i], 1.0, eq_db[i]));
 
-        let states = vec![BiquadState::default(); (channels as usize) * EQ_BANDS];
+        let states = vec![BiquadState::default(); (channels.get() as usize) * EQ_BANDS];
 
         Self {
             inner,
@@ -1071,14 +1072,14 @@ where
         // 如果 EQ 参数变化，重算系数（无需重建播放链路）
         let cur = self.params.load_db_x10();
         if cur != self.last_db_x10 {
-            let fs = self.inner.sample_rate() as f32;
+            let fs = self.inner.sample_rate().get() as f32;
             let eq_db = self.params.load_db();
             self.coeffs = std::array::from_fn(|i| biquad_peaking(fs, EQ_FREQS_HZ[i], 1.0, eq_db[i]));
             self.last_db_x10 = cur;
         }
 
         let x = self.inner.next()?;
-        let ch = (self.idx % (self.channels as usize)).min(self.channels as usize - 1);
+        let ch = (self.idx % (self.channels.get() as usize)).min(self.channels.get() as usize - 1);
         self.idx = self.idx.wrapping_add(1);
 
         let mut y = x;
@@ -1094,15 +1095,15 @@ impl<S> Source for EqSource<S>
 where
     S: Source<Item = f32>,
 {
-    fn current_frame_len(&self) -> Option<usize> {
-        self.inner.current_frame_len()
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
     }
 
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> NonZero<u16> {
         self.inner.channels()
     }
 
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> NonZero<u32> {
         self.inner.sample_rate()
     }
 
