@@ -8,22 +8,6 @@ use std::io::{self, Write};
 
 const CHUNK_SIZE: usize = 4096;
 
-pub fn delete_placement(placement_id: u32) -> Result<()> {
-    let mut out = io::stdout();
-    // NOTE: Kitty protocol does not support deleting by placement id alone.
-    // Kept only as a best-effort fallback (delete all visible placements).
-    // Prefer `delete_image_placement()`.
-    let esc = if placement_id == 0 {
-        "\x1b_Ga=d,d=a,q=2;\x1b\\".to_string()
-    } else {
-        // Best-effort: clear all visible placements rather than leaving stale images.
-        "\x1b_Ga=d,d=a,q=2;\x1b\\".to_string()
-    };
-    queue!(out, Print(esc))?;
-    out.flush()?;
-    Ok(())
-}
-
 pub fn delete_image_placement(image_id: u32, placement_id: u32, free_data: bool) -> Result<()> {
     let mut out = io::stdout();
     // d=i deletes placements for image id; with p also specified, deletes only that placement.
@@ -95,10 +79,6 @@ pub fn transmit_png_base64(image_id: u32, b64: &str) -> Result<()> {
             format!("m={more},q=2")
         }
     })
-}
-
-pub fn place_image(rect: Rect, image_id: u32, placement_id: u32) -> Result<()> {
-    place_image_impl(rect, image_id, placement_id, None)
 }
 
 pub fn place_image_cropped(

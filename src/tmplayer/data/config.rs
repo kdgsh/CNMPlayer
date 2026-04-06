@@ -118,6 +118,12 @@ pub struct Config {
     #[serde(default = "default_keybind_fullscreen_toggle_mode")]
     pub keybind_fullscreen_toggle_mode: String,
 
+    #[serde(default = "default_keybind_fullscreen_eq")]
+    pub keybind_fullscreen_eq: String,
+
+    #[serde(default = "default_keybind_fullscreen_eq_reset")]
+    pub keybind_fullscreen_eq_reset: String,
+
     #[serde(default = "default_keybind_toggle_like_fullscreen")]
     pub keybind_toggle_like_fullscreen: String,
 
@@ -192,20 +198,6 @@ impl AudioQuality {
         Self::Dolby,
         Self::Jymaster,
     ];
-
-    pub fn as_api_level(self) -> &'static str {
-        match self {
-            Self::Standard => "standard",
-            Self::Higher => "higher",
-            Self::Exhigh => "exhigh",
-            Self::Lossless => "lossless",
-            Self::Hires => "hires",
-            Self::Jyeffect => "jyeffect",
-            Self::Sky => "sky",
-            Self::Dolby => "dolby",
-            Self::Jymaster => "jymaster",
-        }
-    }
 
     pub fn clamp_for_vip(self, vip_unlocked: bool) -> Self {
         if vip_unlocked {
@@ -283,6 +275,7 @@ fn default_keybind_sidebar() -> String {
     "P".to_string()
 }
 
+#[allow(dead_code)]
 fn is_legacy_sidebar_default(value: &str) -> bool {
     let normalized = value
         .trim()
@@ -325,6 +318,14 @@ fn default_keybind_fullscreen_toggle_play_pause() -> String {
 
 fn default_keybind_fullscreen_toggle_mode() -> String {
     "M".to_string()
+}
+
+fn default_keybind_fullscreen_eq() -> String {
+    "E".to_string()
+}
+
+fn default_keybind_fullscreen_eq_reset() -> String {
+    "Alt+R".to_string()
 }
 
 fn default_keybind_toggle_like_fullscreen() -> String {
@@ -373,6 +374,8 @@ impl Default for Config {
             keybind_fullscreen_next: default_keybind_fullscreen_next(),
             keybind_fullscreen_toggle_play_pause: default_keybind_fullscreen_toggle_play_pause(),
             keybind_fullscreen_toggle_mode: default_keybind_fullscreen_toggle_mode(),
+            keybind_fullscreen_eq: default_keybind_fullscreen_eq(),
+            keybind_fullscreen_eq_reset: default_keybind_fullscreen_eq_reset(),
             keybind_toggle_like_fullscreen: default_keybind_toggle_like_fullscreen(),
             default_opening_folder: String::new(),
         }
@@ -380,6 +383,7 @@ impl Default for Config {
 }
 
 impl Config {
+    #[allow(dead_code)]
     pub fn load_or_default() -> Result<Self> {
         // Ensure assets exist according to the required resolution rules.
         let _ = assets::ensure_assets_ready();
@@ -427,6 +431,8 @@ impl Config {
             || !raw.contains("keybind_fullscreen_next")
             || !raw.contains("keybind_fullscreen_toggle_play_pause")
             || !raw.contains("keybind_fullscreen_toggle_mode")
+            || !raw.contains("keybind_fullscreen_eq")
+            || !raw.contains("keybind_fullscreen_eq_reset")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("spectrum_hz")
             || migrated_legacy_sidebar

@@ -22,7 +22,6 @@ pub struct InfoPanelLayout {
     pub controls: Rect,
     pub volume_label: Rect,
     pub time_line: Rect,
-    pub sr_hint: Rect,
 }
 
 pub fn layout(area: Rect) -> InfoPanelLayout {
@@ -129,13 +128,6 @@ pub fn layout(area: Rect) -> InfoPanelLayout {
         height: CONTROLS_H,
     };
 
-    let sr_hint = Rect {
-        x: inner.x,
-        y: controls.y.saturating_add(1),
-        width: inner.width,
-        height: 0,
-    };
-
     InfoPanelLayout {
         inner,
         cover,
@@ -145,7 +137,6 @@ pub fn layout(area: Rect) -> InfoPanelLayout {
         controls,
         volume_label,
         time_line,
-        sr_hint,
     }
 }
 
@@ -447,14 +438,6 @@ fn cover_box_ascii_for_snapshot(
         out.push('\n');
     }
     (out, fg)
-}
-
-fn hash_track_seed(app: &AppState) -> u64 {
-    let mut h = DefaultHasher::new();
-    app.player.track.title.hash(&mut h);
-    app.player.track.artist.hash(&mut h);
-    app.player.track.album.hash(&mut h);
-    h.finish()
 }
 
 fn hash_snapshot_seed(s: &CoverSnapshot) -> u64 {

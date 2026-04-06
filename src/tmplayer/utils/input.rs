@@ -16,7 +16,6 @@ pub enum Action {
     TogglePlaylist,
     Confirm,
     CloseOverlay,
-    OpenFolder,
 
     OpenSettingsModal,
     OpenHelpModal,
@@ -127,16 +126,16 @@ pub fn map_key(ev: KeyEvent, overlay: Overlay, config: &Config) -> Action {
     }
 
     if overlay == Overlay::EqModal {
-        // Alt+R: reset EQ to default
-        if ev.modifiers.contains(KeyModifiers::ALT) {
-            if matches!(ev.code, KeyCode::Char('r') | KeyCode::Char('R')) {
-                return Action::EqResetDefault;
-            }
+        if keybind_matches(&config.keybind_fullscreen_eq_reset, ev) {
+            return Action::EqResetDefault;
+        }
+
+        if keybind_matches(&config.keybind_fullscreen_eq, ev) {
+            return Action::CloseOverlay;
         }
 
         return match ev.code {
             KeyCode::Esc => Action::CloseOverlay,
-            KeyCode::Char('e') | KeyCode::Char('E') => Action::CloseOverlay,
             KeyCode::Enter => Action::Confirm,
             KeyCode::Up => Action::ModalUp,
             KeyCode::Down => Action::ModalDown,
@@ -170,8 +169,11 @@ pub fn map_key(ev: KeyEvent, overlay: Overlay, config: &Config) -> Action {
     // global shortcuts (except folder input)
     match ev.code {
         KeyCode::Char('t') | KeyCode::Char('T') => return Action::OpenSettingsModal,
-        KeyCode::Char('e') | KeyCode::Char('E') => return Action::OpenEqModal,
         _ => {}
+    }
+
+    if keybind_matches(&config.keybind_fullscreen_eq, ev) {
+        return Action::OpenEqModal;
     }
 
     if ev.modifiers.contains(KeyModifiers::CONTROL) {
@@ -190,10 +192,34 @@ pub fn map_key(ev: KeyEvent, overlay: Overlay, config: &Config) -> Action {
         return match ev.code {
             KeyCode::Esc => Action::CloseOverlay,
             KeyCode::Enter => Action::Confirm,
-            KeyCode::Left => Action::None,
-            KeyCode::Right => Action::None,
-            KeyCode::Up => Action::PlaylistUp,
-            KeyCode::Down => Action::PlaylistDown,
+            KeyCode::Left => {
+                if ev.modifiers.contains(KeyModifiers::CONTROL) {
+                    Action::PrevAlbum
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Right => {
+                if ev.modifiers.contains(KeyModifiers::CONTROL) {
+                    Action::NextAlbum
+                } else {
+                    Action::None
+                }
+            }
+            KeyCode::Up => {
+                if ev.modifiers.contains(KeyModifiers::CONTROL) {
+                    Action::PlaylistMoveItemUp
+                } else {
+                    Action::PlaylistUp
+                }
+            }
+            KeyCode::Down => {
+                if ev.modifiers.contains(KeyModifiers::CONTROL) {
+                    Action::PlaylistMoveItemDown
+                } else {
+                    Action::PlaylistDown
+                }
+            }
             _ => Action::None,
         };
     }

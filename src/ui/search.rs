@@ -77,10 +77,8 @@ fn draw_result_panel(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let visible = list_area.height as usize;
-    let offset = app
-        .search
-        .focused_idx
-        .saturating_sub(visible.saturating_sub(1));
+    app.search.set_visible_rows(visible);
+    let offset = app.search.effective_scroll_offset();
 
     for (line_idx, item_idx) in (offset..app.search.results.len()).take(visible).enumerate() {
         let row_y = list_area.y + line_idx as u16;

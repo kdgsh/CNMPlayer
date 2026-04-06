@@ -1419,6 +1419,14 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
             app.config.keybind_fullscreen_toggle_mode.as_str(),
         ),
         (
+            lang_text(app, "EQ均衡器", "EQ Equalizer"),
+            app.config.keybind_fullscreen_eq.as_str(),
+        ),
+        (
+            lang_text(app, "EQ重置", "EQ Reset"),
+            app.config.keybind_fullscreen_eq_reset.as_str(),
+        ),
+        (
             lang_text(app, "收藏/取消收藏", "Like/Unlike"),
             app.config.keybind_toggle_like_fullscreen.as_str(),
         ),
@@ -1486,7 +1494,7 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
             .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
-        .title("Equalizer (Local)")
+        .title(lang_text(app, "均衡器", "Equalizer"))
         .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
     f.render_widget(block, area);
 

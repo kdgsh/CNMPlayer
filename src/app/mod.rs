@@ -37,7 +37,7 @@ const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 10;
 const SETTINGS_PLAYBACK_ITEMS: usize = 10;
-const SETTINGS_KEYBIND_ITEMS: usize = 15;
+pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 17;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
 const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
@@ -63,6 +63,8 @@ const DEFAULT_KEYBIND_FULLSCREEN_PREV: &str = "Left";
 const DEFAULT_KEYBIND_FULLSCREEN_NEXT: &str = "Right";
 const DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_PLAY_PAUSE: &str = "Space";
 const DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_MODE: &str = "M";
+const DEFAULT_KEYBIND_FULLSCREEN_EQ: &str = "E";
+const DEFAULT_KEYBIND_FULLSCREEN_EQ_RESET: &str = "Alt+R";
 const DEFAULT_KEYBIND_TOGGLE_LIKE_FULLSCREEN: &str = "L";
 const DEFAULT_KEYBIND_TOGGLE_LIKE_COLLAPSED: &str = "Alt+L";
 
@@ -81,6 +83,8 @@ enum KeybindAction {
     FullscreenNext,
     FullscreenTogglePlayPause,
     FullscreenToggleMode,
+    FullscreenEq,
+    FullscreenEqReset,
     ToggleLikeFullscreen,
     ToggleLikeCollapsed,
 }
@@ -779,6 +783,8 @@ pub struct SearchState {
     pub filter: SearchFilter,
     pub next_offset: usize,
     pub has_more: bool,
+    pub scroll_offset: usize,
+    pub visible_rows: usize,
 }
 
 impl Default for SearchState {
@@ -791,27 +797,101 @@ impl Default for SearchState {
             filter: SearchFilter::Single,
             next_offset: 0,
             has_more: false,
+            scroll_offset: 0,
+            visible_rows: 1,
         }
     }
 }
 
 impl SearchState {
-    pub fn focus_next(&mut self) {
-        if self.results.is_empty() {
-            return;
-        }
-        self.focused_idx = (self.focused_idx + 1) % self.results.len();
+    fn max_scroll_offset(&self) -> usize {
+        self.results
+            .len()
+            .saturating_sub(self.visible_rows.max(1))
     }
 
-    pub fn focus_prev(&mut self) {
+    fn clamp_scroll_offset(&mut self) {
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+    }
+
+    fn ensure_focus_visible(&mut self) {
         if self.results.is_empty() {
+            self.focused_idx = 0;
+            self.scroll_offset = 0;
             return;
         }
-        self.focused_idx = if self.focused_idx == 0 {
-            self.results.len() - 1
+
+        self.focused_idx = self.focused_idx.min(self.results.len() - 1);
+        if self.focused_idx < self.scroll_offset {
+            self.scroll_offset = self.focused_idx;
         } else {
-            self.focused_idx - 1
-        };
+            let bottom = self
+                .scroll_offset
+                .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+            if self.focused_idx > bottom {
+                self.scroll_offset = self
+                    .focused_idx
+                    .saturating_add(1)
+                    .saturating_sub(self.visible_rows.max(1));
+            }
+        }
+
+        self.clamp_scroll_offset();
+    }
+
+    pub fn set_visible_rows(&mut self, visible_rows: usize) {
+        self.visible_rows = visible_rows.max(1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn effective_scroll_offset(&self) -> usize {
+        self.scroll_offset.min(self.max_scroll_offset())
+    }
+
+    pub fn set_focus(&mut self, index: usize) {
+        if self.results.is_empty() {
+            self.focused_idx = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.focused_idx = index.min(self.results.len() - 1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn focus_next(&mut self) -> bool {
+        if self.results.is_empty() || self.focused_idx + 1 >= self.results.len() {
+            return false;
+        }
+
+        let bottom = self
+            .scroll_offset
+            .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+        let is_bottom_edge = self.focused_idx >= bottom;
+
+        self.focused_idx += 1;
+        if is_bottom_edge {
+            self.scroll_offset = self
+                .scroll_offset
+                .saturating_add(1)
+                .min(self.max_scroll_offset());
+        }
+        self.ensure_focus_visible();
+        true
+    }
+
+    pub fn focus_prev(&mut self) -> bool {
+        if self.results.is_empty() || self.focused_idx == 0 {
+            return false;
+        }
+
+        let is_top_edge = self.focused_idx == self.scroll_offset;
+        self.focused_idx -= 1;
+        if is_top_edge && self.scroll_offset > 0 {
+            self.scroll_offset -= 1;
+        }
+        self.ensure_focus_visible();
+        true
     }
 
     pub fn set_results(&mut self, results: Vec<SearchItem>) {
@@ -819,6 +899,8 @@ impl SearchState {
         self.focused_idx = 0;
         self.next_offset = self.results.len();
         self.has_more = self.results.len() >= SEARCH_RESULT_PAGE_SIZE;
+        self.scroll_offset = 0;
+        self.ensure_focus_visible();
     }
 
     pub fn append_results(&mut self, mut results: Vec<SearchItem>) -> usize {
@@ -826,6 +908,7 @@ impl SearchState {
         self.results.append(&mut results);
         self.next_offset = self.results.len();
         self.has_more = added >= SEARCH_RESULT_PAGE_SIZE;
+        self.clamp_scroll_offset();
         added
     }
 }
@@ -841,6 +924,8 @@ pub struct PlaylistState {
     cover_ascii: String,
     cover_ascii_size: (u16, u16),
     pub focused_idx: usize,
+    pub scroll_offset: usize,
+    pub visible_rows: usize,
     pub tracks: Vec<PlaylistTrack>,
 }
 
@@ -856,28 +941,109 @@ impl Default for PlaylistState {
             cover_ascii: String::new(),
             cover_ascii_size: (0, 0),
             focused_idx: 0,
+            scroll_offset: 0,
+            visible_rows: 1,
             tracks: Vec::new(),
         }
     }
 }
 
 impl PlaylistState {
-    pub fn focus_next(&mut self) {
-        if self.tracks.is_empty() {
-            return;
-        }
-        self.focused_idx = (self.focused_idx + 1) % self.tracks.len();
+    fn max_scroll_offset(&self) -> usize {
+        self.tracks
+            .len()
+            .saturating_sub(self.visible_rows.max(1))
     }
 
-    pub fn focus_prev(&mut self) {
+    fn clamp_scroll_offset(&mut self) {
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+    }
+
+    fn ensure_focus_visible(&mut self) {
         if self.tracks.is_empty() {
+            self.focused_idx = 0;
+            self.scroll_offset = 0;
             return;
         }
-        self.focused_idx = if self.focused_idx == 0 {
-            self.tracks.len() - 1
+
+        self.focused_idx = self.focused_idx.min(self.tracks.len() - 1);
+        if self.focused_idx < self.scroll_offset {
+            self.scroll_offset = self.focused_idx;
         } else {
-            self.focused_idx - 1
-        };
+            let bottom = self
+                .scroll_offset
+                .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+            if self.focused_idx > bottom {
+                self.scroll_offset = self
+                    .focused_idx
+                    .saturating_add(1)
+                    .saturating_sub(self.visible_rows.max(1));
+            }
+        }
+
+        self.clamp_scroll_offset();
+    }
+
+    pub fn set_visible_rows(&mut self, visible_rows: usize) {
+        self.visible_rows = visible_rows.max(1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn effective_scroll_offset(&self) -> usize {
+        self.scroll_offset.min(self.max_scroll_offset())
+    }
+
+    pub fn set_focus(&mut self, index: usize) {
+        if self.tracks.is_empty() {
+            self.focused_idx = 0;
+            self.scroll_offset = 0;
+            return;
+        }
+
+        self.focused_idx = index.min(self.tracks.len() - 1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn set_tracks(&mut self, tracks: Vec<PlaylistTrack>) {
+        self.tracks = tracks;
+        self.focused_idx = 0;
+        self.scroll_offset = 0;
+        self.ensure_focus_visible();
+    }
+
+    pub fn focus_next(&mut self) -> bool {
+        if self.tracks.is_empty() || self.focused_idx + 1 >= self.tracks.len() {
+            return false;
+        }
+
+        let bottom = self
+            .scroll_offset
+            .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+        let is_bottom_edge = self.focused_idx >= bottom;
+
+        self.focused_idx += 1;
+        if is_bottom_edge {
+            self.scroll_offset = self
+                .scroll_offset
+                .saturating_add(1)
+                .min(self.max_scroll_offset());
+        }
+        self.ensure_focus_visible();
+        true
+    }
+
+    pub fn focus_prev(&mut self) -> bool {
+        if self.tracks.is_empty() || self.focused_idx == 0 {
+            return false;
+        }
+
+        let is_top_edge = self.focused_idx == self.scroll_offset;
+        self.focused_idx -= 1;
+        if is_top_edge && self.scroll_offset > 0 {
+            self.scroll_offset -= 1;
+        }
+        self.ensure_focus_visible();
+        true
     }
 
     pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
@@ -916,11 +1082,7 @@ pub struct AuthorTile {
     pub kind: AuthorTileKind,
     pub title: String,
     pub subtitle: String,
-    pub song_id: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
     pub cover_url: Option<String>,
-    pub duration_ms: Option<i64>,
     pub cover_bytes: Option<Vec<u8>>,
     cover_ascii: String,
     cover_ascii_size: (u16, u16),
@@ -932,27 +1094,7 @@ impl AuthorTile {
             kind: AuthorTileKind::Album,
             title: "暂无内容".to_string(),
             subtitle: "No content".to_string(),
-            song_id: None,
-            artist: None,
-            album: None,
             cover_url: None,
-            duration_ms: None,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
-        }
-    }
-
-    fn from_hot_song(track: &PlaylistTrack) -> Self {
-        Self {
-            kind: AuthorTileKind::HotSong,
-            title: track.title.clone(),
-            subtitle: format!("热门歌曲 · {}", track.duration),
-            song_id: track.id.clone(),
-            artist: Some(track.artist.clone()),
-            album: Some(track.album.clone()),
-            cover_url: track.cover_url.clone(),
-            duration_ms: Some(track.duration_ms),
             cover_bytes: None,
             cover_ascii: String::new(),
             cover_ascii_size: (0, 0),
@@ -969,11 +1111,7 @@ impl AuthorTile {
             kind,
             title,
             subtitle,
-            song_id: None,
-            artist: None,
-            album: None,
             cover_url,
-            duration_ms: None,
             cover_bytes: None,
             cover_ascii: String::new(),
             cover_ascii_size: (0, 0),
@@ -1009,6 +1147,8 @@ pub struct AuthorState {
     cover_ascii_size: (u16, u16),
     pub focused_idx: usize,
     pub columns: usize,
+    pub scroll_row_offset: usize,
+    pub visible_rows: usize,
     pub tiles: Vec<AuthorTile>,
     pub hot_songs: Vec<PlaylistTrack>,
     pub albums: Vec<PlaylistTrack>,
@@ -1029,6 +1169,8 @@ impl Default for AuthorState {
             cover_ascii_size: (0, 0),
             focused_idx: 0,
             columns: 1,
+            scroll_row_offset: 0,
+            visible_rows: 1,
             tiles: vec![AuthorTile::placeholder()],
             hot_songs: Vec::new(),
             albums: Vec::new(),
@@ -1039,6 +1181,48 @@ impl Default for AuthorState {
 }
 
 impl AuthorState {
+    fn total_rows(&self) -> usize {
+        if self.tiles.is_empty() {
+            0
+        } else {
+            (self.tiles.len() - 1) / self.columns.max(1) + 1
+        }
+    }
+
+    fn max_scroll_row_offset(&self) -> usize {
+        self.total_rows()
+            .saturating_sub(self.visible_rows.max(1))
+    }
+
+    fn clamp_scroll_row_offset(&mut self) {
+        self.scroll_row_offset = self.scroll_row_offset.min(self.max_scroll_row_offset());
+    }
+
+    fn ensure_focus_visible(&mut self) {
+        if self.tiles.is_empty() {
+            self.focused_idx = 0;
+            self.scroll_row_offset = 0;
+            return;
+        }
+
+        self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
+        let focused_row = self.focused_idx / self.columns.max(1);
+        if focused_row < self.scroll_row_offset {
+            self.scroll_row_offset = focused_row;
+        } else {
+            let bottom_row = self
+                .scroll_row_offset
+                .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+            if focused_row > bottom_row {
+                self.scroll_row_offset = focused_row
+                    .saturating_add(1)
+                    .saturating_sub(self.visible_rows.max(1));
+            }
+        }
+
+        self.clamp_scroll_row_offset();
+    }
+
     pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
         self.cover_bytes = bytes;
         self.cover_ascii.clear();
@@ -1068,33 +1252,61 @@ impl AuthorState {
         }
         self.tiles = tiles;
         self.focused_idx = 0;
+        self.scroll_row_offset = 0;
+        self.ensure_focus_visible();
     }
 
     pub fn set_columns(&mut self, columns: usize) {
         self.columns = columns.max(1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn set_visible_rows(&mut self, visible_rows: usize) {
+        self.visible_rows = visible_rows.max(1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn effective_scroll_row_offset(&self) -> usize {
+        self.scroll_row_offset.min(self.max_scroll_row_offset())
+    }
+
+    pub fn set_focus(&mut self, index: usize) {
         if self.tiles.is_empty() {
             self.focused_idx = 0;
+            self.scroll_row_offset = 0;
+            return;
+        }
+
+        self.focused_idx = index.min(self.tiles.len() - 1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn focus_next(&mut self) -> bool {
+        if self.tiles.is_empty() {
+            return false;
+        }
+
+        self.focused_idx = if self.focused_idx + 1 < self.tiles.len() {
+            self.focused_idx + 1
         } else {
-            self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
-        }
+            0
+        };
+        self.ensure_focus_visible();
+        true
     }
 
-    pub fn focus_next(&mut self) {
+    pub fn focus_prev(&mut self) -> bool {
         if self.tiles.is_empty() {
-            return;
+            return false;
         }
-        self.focused_idx = (self.focused_idx + 1) % self.tiles.len();
-    }
 
-    pub fn focus_prev(&mut self) {
-        if self.tiles.is_empty() {
-            return;
-        }
         self.focused_idx = if self.focused_idx == 0 {
             self.tiles.len() - 1
         } else {
             self.focused_idx - 1
         };
+        self.ensure_focus_visible();
+        true
     }
 
     pub fn focus_left(&mut self) {
@@ -1105,25 +1317,51 @@ impl AuthorState {
         self.focus_next();
     }
 
-    pub fn focus_up(&mut self) {
+    pub fn focus_up(&mut self) -> bool {
         if self.tiles.is_empty() {
-            return;
+            return false;
         }
+
         let step = self.columns.max(1);
-        if self.focused_idx >= step {
-            self.focused_idx -= step;
+        if self.focused_idx < step {
+            return false;
         }
+
+        let focused_row = self.focused_idx / step;
+        let is_top_edge = focused_row == self.scroll_row_offset;
+        self.focused_idx -= step;
+        if is_top_edge && self.scroll_row_offset > 0 {
+            self.scroll_row_offset -= 1;
+        }
+        self.ensure_focus_visible();
+        true
     }
 
-    pub fn focus_down(&mut self) {
+    pub fn focus_down(&mut self) -> bool {
         if self.tiles.is_empty() {
-            return;
+            return false;
         }
+
         let step = self.columns.max(1);
         let target = self.focused_idx + step;
-        if target < self.tiles.len() {
-            self.focused_idx = target;
+        if target >= self.tiles.len() {
+            return false;
         }
+
+        let focused_row = self.focused_idx / step;
+        let bottom_edge_row = self
+            .scroll_row_offset
+            .saturating_add(self.visible_rows.max(1).saturating_sub(1));
+        let is_bottom_edge = focused_row >= bottom_edge_row;
+        self.focused_idx = target;
+        if is_bottom_edge {
+            self.scroll_row_offset = self
+                .scroll_row_offset
+                .saturating_add(1)
+                .min(self.max_scroll_row_offset());
+        }
+        self.ensure_focus_visible();
+        true
     }
 }
 
@@ -1197,30 +1435,6 @@ impl PlaybackTrack {
         Some(Self {
             song_id,
             title: item.title.clone().unwrap_or_else(|| item.left_label.clone()),
-            artist: item
-                .artist
-                .clone()
-                .unwrap_or_else(|| "Unknown Artist".to_string()),
-            album: item
-                .album
-                .clone()
-                .unwrap_or_else(|| "Unknown Album".to_string()),
-            duration_ms: item.duration_ms.unwrap_or_default(),
-            cover_url: item.cover_url.clone(),
-            cover: None,
-            lyrics: None,
-        })
-    }
-
-    fn from_author_tile(item: &AuthorTile) -> Option<Self> {
-        let song_id = item.song_id.as_ref()?.trim().to_string();
-        if song_id.is_empty() {
-            return None;
-        }
-
-        Some(Self {
-            song_id,
-            title: item.title.clone(),
             artist: item
                 .artist
                 .clone()
@@ -1454,8 +1668,6 @@ pub struct App {
     pub search_item_hits: Vec<(HitRect, usize)>,
     pub search_box_input: String,
     pub search_box_cursor: usize,
-    pub search_box_view_start: usize,
-    pub search_box_hit: Option<HitRect>,
     pub search_box_anim_height: u16,
     pub settings_selected: usize,
     pub settings_playback_selected: usize,
@@ -1556,8 +1768,6 @@ impl App {
             search_item_hits: Vec::new(),
             search_box_input: String::new(),
             search_box_cursor: 0,
-            search_box_view_start: 0,
-            search_box_hit: None,
             search_box_anim_height: 0,
             settings_selected: 0,
             settings_playback_selected: 0,
@@ -1758,53 +1968,137 @@ impl App {
             return;
         }
 
-        if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            return;
-        }
-
         let col = mouse.column;
         let row = mouse.row;
 
-        if matches!(self.overlay, Some(Overlay::SearchBox)) {
-            self.handle_search_box_click(col, row);
-            return;
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                let _ = self.handle_content_scroll(col, row, false);
+            }
+            MouseEventKind::ScrollDown => {
+                let _ = self.handle_content_scroll(col, row, true);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if matches!(self.overlay, Some(Overlay::SearchBox)) {
+                    self.handle_search_box_click(col, row);
+                    return;
+                }
+
+                if self.overlay.is_some() {
+                    return;
+                }
+
+                if self.handle_content_click(col, row) {
+                    return;
+                }
+
+                if let Some(rect) = self.player_bar_hits.prev {
+                    if rect.contains(col, row) {
+                        self.play_previous_hotkey();
+                        return;
+                    }
+                }
+                if let Some(rect) = self.player_bar_hits.play_pause {
+                    if rect.contains(col, row) {
+                        self.toggle_play_pause_hotkey();
+                        return;
+                    }
+                }
+                if let Some(rect) = self.player_bar_hits.next {
+                    if rect.contains(col, row) {
+                        self.play_next_hotkey();
+                        return;
+                    }
+                }
+                if let Some(rect) = self.player_bar_hits.progress {
+                    if rect.contains(col, row) {
+                        let relative_x = col.saturating_sub(rect.x) as f32;
+                        let ratio = if rect.width <= 1 {
+                            0.0
+                        } else {
+                            (relative_x / (rect.width - 1) as f32).clamp(0.0, 1.0)
+                        };
+                        self.seek_to_ratio(ratio);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn player_bar_contains(&self, col: u16, row: u16) -> bool {
+        self.player_bar_hits
+            .prev
+            .map(|rect| rect.contains(col, row))
+            .unwrap_or(false)
+            || self
+                .player_bar_hits
+                .play_pause
+                .map(|rect| rect.contains(col, row))
+                .unwrap_or(false)
+            || self
+                .player_bar_hits
+                .next
+                .map(|rect| rect.contains(col, row))
+                .unwrap_or(false)
+            || self
+                .player_bar_hits
+                .progress
+                .map(|rect| rect.contains(col, row))
+                .unwrap_or(false)
+    }
+
+    fn handle_content_scroll(&mut self, col: u16, row: u16, forward: bool) -> bool {
+        if self.overlay.is_some() || self.player_bar_contains(col, row) {
+            return false;
         }
 
-        if self.overlay.is_some() {
-            return;
-        }
-
-        if self.handle_content_click(col, row) {
-            return;
-        }
-
-        if let Some(rect) = self.player_bar_hits.prev {
-            if rect.contains(col, row) {
-                self.play_previous_hotkey();
-                return;
-            }
-        }
-        if let Some(rect) = self.player_bar_hits.play_pause {
-            if rect.contains(col, row) {
-                self.toggle_play_pause_hotkey();
-                return;
-            }
-        }
-        if let Some(rect) = self.player_bar_hits.next {
-            if rect.contains(col, row) {
-                self.play_next_hotkey();
-                return;
-            }
-        }
-        if let Some(rect) = self.player_bar_hits.progress {
-            if rect.contains(col, row) {
-                let relative_x = col.saturating_sub(rect.x) as f32;
-                let ratio = if rect.width <= 1 {
-                    0.0
+        match self.page {
+            Page::Search => {
+                if forward {
+                    self.advance_search_focus();
                 } else {
-                    (relative_x / (rect.width - 1) as f32).clamp(0.0, 1.0)
-                };
-                self.seek_to_ratio(ratio);
+                    let _ = self.search.focus_prev();
+                }
+                true
+            }
+            Page::Playlist => {
+                if forward {
+                    let _ = self.playlist.focus_next();
+                } else {
+                    let _ = self.playlist.focus_prev();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn advance_search_focus(&mut self) {
+        if self.search.results.is_empty() {
+            return;
+        }
+
+        if self.search.focus_next() {
+            if self.search.focused_idx + 1 == self.search.results.len() {
+                match self.load_more_search_results() {
+                    Ok(_) => {}
+                    Err(err) => {
+                        self.search.status_line = format!("加载更多失败: {}", err);
+                    }
+                }
+            }
+            return;
+        }
+
+        let before = self.search.results.len();
+        match self.load_more_search_results() {
+            Ok(added) if added > 0 => {
+                self.search.set_focus(before);
+            }
+            Ok(_) => {}
+            Err(err) => {
+                self.search.status_line = format!("加载更多失败: {}", err);
             }
         }
     }
@@ -2159,6 +2453,8 @@ impl App {
                 | KeybindAction::FullscreenNext
                 | KeybindAction::FullscreenTogglePlayPause
                 | KeybindAction::FullscreenToggleMode
+                | KeybindAction::FullscreenEq
+                | KeybindAction::FullscreenEqReset
         ) {
             return false;
         }
@@ -2201,6 +2497,8 @@ impl App {
             KeybindAction::FullscreenNext => {},
             KeybindAction::FullscreenTogglePlayPause => {},
             KeybindAction::FullscreenToggleMode => {},
+            KeybindAction::FullscreenEq => {},
+            KeybindAction::FullscreenEqReset => {},
             KeybindAction::ToggleLikeFullscreen => {},
             KeybindAction::ToggleLikeCollapsed => self.toggle_like_hotkey(),
         }
@@ -2309,6 +2607,8 @@ impl App {
             KeybindAction::FullscreenNext,
             KeybindAction::FullscreenTogglePlayPause,
             KeybindAction::FullscreenToggleMode,
+            KeybindAction::FullscreenEq,
+            KeybindAction::FullscreenEqReset,
             KeybindAction::ToggleLikeFullscreen,
             KeybindAction::ToggleLikeCollapsed,
         ];
@@ -2337,6 +2637,8 @@ impl App {
             KeybindAction::FullscreenNext => &self.config.keybind_fullscreen_next,
             KeybindAction::FullscreenTogglePlayPause => &self.config.keybind_fullscreen_toggle_play_pause,
             KeybindAction::FullscreenToggleMode => &self.config.keybind_fullscreen_toggle_mode,
+            KeybindAction::FullscreenEq => &self.config.keybind_fullscreen_eq,
+            KeybindAction::FullscreenEqReset => &self.config.keybind_fullscreen_eq_reset,
             KeybindAction::ToggleLikeFullscreen => &self.config.keybind_toggle_like_fullscreen,
             KeybindAction::ToggleLikeCollapsed => &self.config.keybind_toggle_like_collapsed,
         }
@@ -2356,9 +2658,11 @@ impl App {
             9 => Some(&mut self.config.keybind_fullscreen_next),
             10 => Some(&mut self.config.keybind_fullscreen_toggle_play_pause),
             11 => Some(&mut self.config.keybind_fullscreen_toggle_mode),
-            12 => Some(&mut self.config.keybind_toggle_like_fullscreen),
-            13 => Some(&mut self.config.keybind_toggle_mode),
-            14 => Some(&mut self.config.keybind_toggle_like_collapsed),
+            12 => Some(&mut self.config.keybind_fullscreen_eq),
+            13 => Some(&mut self.config.keybind_fullscreen_eq_reset),
+            14 => Some(&mut self.config.keybind_toggle_like_fullscreen),
+            15 => Some(&mut self.config.keybind_toggle_mode),
+            16 => Some(&mut self.config.keybind_toggle_like_collapsed),
             _ => None,
         }
     }
@@ -2377,9 +2681,11 @@ impl App {
             9 => Some(self.config.keybind_fullscreen_next.as_str()),
             10 => Some(self.config.keybind_fullscreen_toggle_play_pause.as_str()),
             11 => Some(self.config.keybind_fullscreen_toggle_mode.as_str()),
-            12 => Some(self.config.keybind_toggle_like_fullscreen.as_str()),
-            13 => Some(self.config.keybind_toggle_mode.as_str()),
-            14 => Some(self.config.keybind_toggle_like_collapsed.as_str()),
+            12 => Some(self.config.keybind_fullscreen_eq.as_str()),
+            13 => Some(self.config.keybind_fullscreen_eq_reset.as_str()),
+            14 => Some(self.config.keybind_toggle_like_fullscreen.as_str()),
+            15 => Some(self.config.keybind_toggle_mode.as_str()),
+            16 => Some(self.config.keybind_toggle_like_collapsed.as_str()),
             _ => None,
         }
     }
@@ -2417,9 +2723,11 @@ impl App {
             9 => self.lang_text("全屏下一首", "Fullscreen Next"),
             10 => self.lang_text("全屏暂停/播放", "Fullscreen Pause/Play"),
             11 => self.lang_text("全屏模式切换", "Fullscreen Mode Switch"),
-            12 => self.lang_text("全屏收藏/取消收藏", "Fullscreen Like/Unlike"),
-            13 => self.lang_text("折叠栏模式切换", "Collapsed Mode Switch"),
-            14 => self.lang_text("折叠栏收藏/取消收藏", "Collapsed Like/Unlike"),
+            12 => self.lang_text("全屏页EQ", "Fullscreen EQ"),
+            13 => self.lang_text("全屏EQ重置", "Fullscreen EQ Reset"),
+            14 => self.lang_text("全屏收藏/取消收藏", "Fullscreen Like/Unlike"),
+            15 => self.lang_text("折叠栏模式切换", "Collapsed Mode Switch"),
+            16 => self.lang_text("折叠栏收藏/取消收藏", "Collapsed Like/Unlike"),
             _ => self.lang_text("未知", "Unknown"),
         }
     }
@@ -2438,6 +2746,8 @@ impl App {
         self.config.keybind_fullscreen_next = DEFAULT_KEYBIND_FULLSCREEN_NEXT.to_string();
         self.config.keybind_fullscreen_toggle_play_pause = DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_PLAY_PAUSE.to_string();
         self.config.keybind_fullscreen_toggle_mode = DEFAULT_KEYBIND_FULLSCREEN_TOGGLE_MODE.to_string();
+        self.config.keybind_fullscreen_eq = DEFAULT_KEYBIND_FULLSCREEN_EQ.to_string();
+        self.config.keybind_fullscreen_eq_reset = DEFAULT_KEYBIND_FULLSCREEN_EQ_RESET.to_string();
         self.config.keybind_toggle_like_fullscreen = DEFAULT_KEYBIND_TOGGLE_LIKE_FULLSCREEN.to_string();
         self.config.keybind_toggle_like_collapsed = DEFAULT_KEYBIND_TOGGLE_LIKE_COLLAPSED.to_string();
     }
@@ -2456,9 +2766,11 @@ impl App {
             9 => KeybindAction::FullscreenNext,
             10 => KeybindAction::FullscreenTogglePlayPause,
             11 => KeybindAction::FullscreenToggleMode,
-            12 => KeybindAction::ToggleLikeFullscreen,
-            13 => KeybindAction::ToggleMode,
-            14 => KeybindAction::ToggleLikeCollapsed,
+            12 => KeybindAction::FullscreenEq,
+            13 => KeybindAction::FullscreenEqReset,
+            14 => KeybindAction::ToggleLikeFullscreen,
+            15 => KeybindAction::ToggleMode,
+            16 => KeybindAction::ToggleLikeCollapsed,
             _ => KeybindAction::SearchBox,
         });
         format!("{}: {}", self.keybind_name_for_index(index), value)
@@ -2550,6 +2862,30 @@ impl App {
         };
 
         self.now_playing_liked = self.liked_song_ids.contains(&song_id);
+
+        let Ok(song_id_num) = song_id.parse::<u64>() else {
+            return;
+        };
+
+        let ids_json = format!("[{song_id_num}]");
+        let Ok(response) = self.api.song_like_check(&ids_json) else {
+            return;
+        };
+
+        if response_code(&response) != 200 {
+            return;
+        }
+
+        let Some(liked) = parse_song_like_check_result(&response.body, &song_id) else {
+            return;
+        };
+
+        self.now_playing_liked = liked;
+        if liked {
+            self.liked_song_ids.insert(song_id);
+        } else {
+            self.liked_song_ids.remove(&song_id);
+        }
     }
 
     fn toggle_like_hotkey(&mut self) {
@@ -3286,24 +3622,6 @@ impl App {
         (queue, target)
     }
 
-    fn build_queue_from_author(&self) -> (Vec<PlaybackTrack>, usize) {
-        let focused = self.author.focused_idx;
-        let mut queue = Vec::new();
-        let mut mapped_focus = None;
-
-        for (idx, item) in self.author.tiles.iter().enumerate() {
-            if let Some(track) = PlaybackTrack::from_author_tile(item) {
-                if idx == focused {
-                    mapped_focus = Some(queue.len());
-                }
-                queue.push(track);
-            }
-        }
-
-        let target = mapped_focus.unwrap_or(0);
-        (queue, target)
-    }
-
     fn play_focused_playlist_track(&mut self) {
         let Some(track) = self.playlist.tracks.get(self.playlist.focused_idx) else {
             return;
@@ -3400,8 +3718,7 @@ impl App {
         )
         .to_string();
         self.playlist.cover_url = section_cover.clone();
-        self.playlist.tracks = tracks;
-        self.playlist.focused_idx = 0;
+        self.playlist.set_tracks(tracks);
 
         let cover_bytes = if let Some(url) = section_cover {
             self.api
@@ -4112,40 +4429,10 @@ impl App {
                 self.page = self.search_return_page;
             }
             KeyCode::Tab | KeyCode::Down => {
-                if self.search.results.is_empty() {
-                    return;
-                }
-
-                if self.search.focused_idx + 1 < self.search.results.len() {
-                    self.search.focus_next();
-
-                    if self.search.focused_idx + 1 == self.search.results.len() {
-                        match self.load_more_search_results() {
-                            Ok(_) => {}
-                            Err(err) => {
-                                self.search.status_line = format!("加载更多失败: {}", err);
-                            }
-                        }
-                    }
-
-                    return;
-                }
-
-                let before = self.search.results.len();
-                match self.load_more_search_results() {
-                    Ok(added) if added > 0 => {
-                        self.search.focused_idx = before;
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        self.search.status_line = format!("加载更多失败: {}", err);
-                    }
-                }
+                self.advance_search_focus();
             }
             KeyCode::BackTab | KeyCode::Up => {
-                if self.search.focused_idx > 0 {
-                    self.search.focus_prev();
-                }
+                let _ = self.search.focus_prev();
             }
             KeyCode::Enter => self.activate_focused_search_result(),
             _ => {}
@@ -4220,8 +4507,12 @@ impl App {
 
     fn handle_playlist_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up | KeyCode::BackTab => self.playlist.focus_prev(),
-            KeyCode::Down | KeyCode::Tab => self.playlist.focus_next(),
+            KeyCode::Up | KeyCode::BackTab => {
+                let _ = self.playlist.focus_prev();
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                let _ = self.playlist.focus_next();
+            }
             KeyCode::Enter => self.play_focused_playlist_track(),
             KeyCode::Esc | KeyCode::Left => {
                 if let Some(snapshot) = self.playlist_section_return_snapshot.take() {
@@ -4240,12 +4531,20 @@ impl App {
 
     fn handle_author_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Tab => self.author.focus_next(),
-            KeyCode::BackTab => self.author.focus_prev(),
+            KeyCode::Tab => {
+                let _ = self.author.focus_next();
+            }
+            KeyCode::BackTab => {
+                let _ = self.author.focus_prev();
+            }
             KeyCode::Left => self.author.focus_left(),
             KeyCode::Right => self.author.focus_right(),
-            KeyCode::Up => self.author.focus_up(),
-            KeyCode::Down => self.author.focus_down(),
+            KeyCode::Up => {
+                let _ = self.author.focus_up();
+            }
+            KeyCode::Down => {
+                let _ = self.author.focus_down();
+            }
             KeyCode::Enter => self.play_focused_author_tile(),
             KeyCode::Esc => {
                 self.page = Page::Search;
@@ -4416,7 +4715,7 @@ impl App {
                     .map(|(_, idx)| *idx);
                 if let Some(idx) = hit {
                     if idx < self.playlist.tracks.len() {
-                        self.playlist.focused_idx = idx;
+                        self.playlist.set_focus(idx);
                         if self.is_double_content_click(Page::Playlist, idx) {
                             self.play_focused_playlist_track();
                         }
@@ -4432,7 +4731,7 @@ impl App {
                     .map(|(_, idx)| *idx);
                 if let Some(idx) = hit {
                     if idx < self.author.tiles.len() {
-                        self.author.focused_idx = idx;
+                        self.author.set_focus(idx);
                         if self.is_double_content_click(Page::Author, idx) {
                             self.play_focused_author_tile();
                         }
@@ -4448,7 +4747,7 @@ impl App {
                     .map(|(_, idx)| *idx);
                 if let Some(idx) = hit {
                     if idx < self.search.results.len() {
-                        self.search.focused_idx = idx;
+                        self.search.set_focus(idx);
                         if self.is_double_content_click(Page::Search, idx) {
                             self.activate_focused_search_result();
                         }
@@ -4458,7 +4757,6 @@ impl App {
             }
             _ => {}
         }
-
         false
     }
 
@@ -4515,6 +4813,7 @@ impl App {
             language: self.config.language,
             page_lyrics: self.config.page_lyrics,
             audio_quality: self.config.audio_quality,
+            eq_bands_db: self.config.eq_bands_db,
             audio_preload: self.config.audio_preload,
             playback_memory: self.config.playback_memory,
             vip_audio_unlocked: self.vip_audio_unlocked,
@@ -4570,6 +4869,14 @@ impl App {
         let clamped_quality = sync.audio_quality.clamp_for_vip(self.vip_audio_unlocked);
         if self.config.audio_quality != clamped_quality {
             self.config.audio_quality = clamped_quality;
+            changed = true;
+        }
+
+        if self.config.eq_bands_db != sync.eq_bands_db {
+            self.config.eq_bands_db = sync.eq_bands_db;
+            let _ = self
+                .audio_player
+                .set_eq(crate::tmplayer::app::state::EqSettings { bands_db: sync.eq_bands_db });
             changed = true;
         }
 
@@ -5522,8 +5829,7 @@ impl App {
         self.playlist.artist = artist;
         self.playlist.description = description;
         self.playlist.cover_url = cover_url.clone();
-        self.playlist.tracks = tracks;
-        self.playlist.focused_idx = 0;
+        self.playlist.set_tracks(tracks);
 
         let cover_bytes = if let Some(url) = cover_url {
             self.api
@@ -5568,8 +5874,7 @@ impl App {
             )
             .to_string();
         self.playlist.cover_url = cover_url.clone();
-        self.playlist.tracks = tracks;
-        self.playlist.focused_idx = 0;
+        self.playlist.set_tracks(tracks);
 
         let cover_bytes = if let Some(url) = cover_url {
             self.api
@@ -5640,8 +5945,7 @@ impl App {
         self.playlist.artist = artist;
         self.playlist.description = description;
         self.playlist.cover_url = cover_url.clone();
-        self.playlist.tracks = tracks;
-        self.playlist.focused_idx = 0;
+        self.playlist.set_tracks(tracks);
 
         let cover_bytes = if let Some(url) = cover_url {
             self.api
@@ -6534,8 +6838,10 @@ fn parse_tracks(items: &[Value]) -> Vec<PlaylistTrack> {
 }
 
 fn parse_song_like_check_result(body: &Value, song_id: &str) -> Option<bool> {
-    if let Some(value) = body.pointer(&format!("/data/{song_id}")).and_then(|value| value.as_bool()) {
-        return Some(value);
+    if let Some(value) = body.pointer(&format!("/data/{song_id}")) {
+        if let Some(liked) = parse_song_like_check_flag(value) {
+            return Some(liked);
+        }
     }
 
     for pointer in [
@@ -6544,17 +6850,51 @@ fn parse_song_like_check_result(body: &Value, song_id: &str) -> Option<bool> {
         "/data/songs/0/liked",
         "/liked",
     ] {
-        if let Some(value) = body.pointer(pointer).and_then(|value| value.as_bool()) {
-            return Some(value);
+        if let Some(value) = body.pointer(pointer) {
+            if let Some(liked) = parse_song_like_check_flag(value) {
+                return Some(liked);
+            }
         }
     }
 
     if let Some(obj) = body.get("data").and_then(|value| value.as_object()) {
         for value in obj.values() {
-            if let Some(value) = value.as_bool() {
-                return Some(value);
+            if let Some(liked) = parse_song_like_check_flag(value) {
+                return Some(liked);
             }
         }
+    }
+
+    None
+}
+
+fn parse_song_like_check_flag(value: &Value) -> Option<bool> {
+    if let Some(flag) = value.as_bool() {
+        return Some(flag);
+    }
+
+    if let Some(flag) = value.as_i64() {
+        return match flag {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+    }
+
+    if let Some(flag) = value.as_u64() {
+        return match flag {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+    }
+
+    if let Some(flag) = value.as_str() {
+        return match flag.trim().to_ascii_lowercase().as_str() {
+            "0" | "false" => Some(false),
+            "1" | "true" => Some(true),
+            _ => None,
+        };
     }
 
     None

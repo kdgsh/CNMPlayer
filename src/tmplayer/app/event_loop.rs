@@ -19,7 +19,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::time::{Duration, Instant};
 
-const HELP_MODAL_ITEMS: usize = 12;
+const HELP_MODAL_ITEMS: usize = 14;
 
 fn sync_playlists_when_viewing_playback(app: &mut AppState) {
     if app.local_view_album_folder.is_some() && app.local_folder.is_some() {
@@ -147,6 +147,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             AudioQuality::Dolby => crate::data::config::AudioQuality::Dolby,
             AudioQuality::Jymaster => crate::data::config::AudioQuality::Jymaster,
         },
+        eq_bands_db: app.config.eq_bands_db,
         audio_preload: app.config.audio_preload,
         playback_memory: app.config.playback_memory,
         vip_audio_unlocked: app.vip_audio_unlocked,
@@ -201,6 +202,8 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
         crate::data::config::AudioQuality::Jymaster => AudioQuality::Jymaster,
     }
     .clamp_for_vip(app.vip_audio_unlocked);
+    app.config.eq_bands_db = config.eq_bands_db;
+    app.eq.bands_db = config.eq_bands_db;
     app.config.audio_preload = config.audio_preload;
     app.config.playback_memory = config.playback_memory;
     app.config.show_hints = config.show_hints;
@@ -236,6 +239,21 @@ fn save_and_sync_host_config(
     if let Some(bridge) = host_bridge.as_mut() {
         (*bridge).apply_config_sync(host_config_sync_from_app(app));
     }
+}
+
+fn sync_eq_config(
+    app: &mut AppState,
+    mode_manager: &mut ModeManager,
+    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+) {
+    app.eq = app.eq.clamp();
+    app.config.eq_bands_db = app.eq.bands_db;
+
+    if app.player.mode == PlayMode::LocalPlayback {
+        let _ = mode_manager.local.set_eq(app.eq);
+    }
+
+    save_and_sync_host_config(app, host_bridge);
 }
 
 fn empty_track_metadata() -> crate::tmplayer::app::state::TrackMetadata {
@@ -900,9 +918,6 @@ fn handle_action(
             // handled by tui flag
             app.set_toast("Bye");
         }
-        Action::OpenFolder => {
-            app.set_toast("Local audio is disabled in CNMPlayer");
-        }
         Action::OpenSettingsModal => {
             app.settings_selected = app.settings_selected.min(9);
             app.overlay = Overlay::SettingsModal;
@@ -914,13 +929,8 @@ fn handle_action(
             app.overlay = Overlay::HelpModal;
         }
         Action::OpenEqModal => {
-            // 需求：均衡器仅对本地音频播放生效
-            if app.player.mode == PlayMode::LocalPlayback {
-                app.overlay = Overlay::EqModal;
-                app.eq_selected = 0;
-            } else {
-                app.set_toast("EQ only for local playback");
-            }
+            app.overlay = Overlay::EqModal;
+            app.eq_selected = 0;
         }
         Action::EqSetBandDb { band, db } => {
             if app.overlay == Overlay::EqModal {
@@ -929,29 +939,14 @@ fn handle_action(
                 if app.eq_selected < crate::tmplayer::app::state::EQ_BANDS {
                     app.eq.bands_db[app.eq_selected] = db;
                 }
-
-                // Persist EQ to config (best-effort).
-                app.config.eq_bands_db = app.eq.bands_db;
-                let _ = app.config.save();
-
-                // 需求：均衡器自动生效
-                if app.player.mode == PlayMode::LocalPlayback {
-                    let _ = mode_manager.local.set_eq(app.eq);
-                }
+                sync_eq_config(app, mode_manager, host_bridge);
             }
         }
         Action::EqResetDefault => {
             if app.overlay == Overlay::EqModal {
                 app.eq = crate::tmplayer::app::state::EqSettings::default();
                 app.eq_selected = 0;
-
-                // Persist reset.
-                app.config.eq_bands_db = app.eq.bands_db;
-                let _ = app.config.save();
-
-                if app.player.mode == PlayMode::LocalPlayback {
-                    let _ = mode_manager.local.set_eq(app.eq);
-                }
+                sync_eq_config(app, mode_manager, host_bridge);
             }
         }
         Action::FolderChar(c) => {
@@ -1335,11 +1330,7 @@ fn handle_action(
                     let v = app.eq.bands_db[app.eq_selected];
                     app.eq.bands_db[app.eq_selected] = (v + step).clamp(-12.0, 12.0);
                 }
-
-                // 需求：均衡器自动生效
-                if app.player.mode == PlayMode::LocalPlayback {
-                    let _ = mode_manager.local.set_eq(app.eq);
-                }
+                sync_eq_config(app, mode_manager, host_bridge);
             } else if app.overlay == Overlay::HelpModal {
                 if app.help_keybind_selected == 0 {
                     app.help_keybind_selected = HELP_MODAL_ITEMS - 1;
@@ -1364,11 +1355,7 @@ fn handle_action(
                     let v = app.eq.bands_db[app.eq_selected];
                     app.eq.bands_db[app.eq_selected] = (v - step).clamp(-12.0, 12.0);
                 }
-
-                // 需求：均衡器自动生效
-                if app.player.mode == PlayMode::LocalPlayback {
-                    let _ = mode_manager.local.set_eq(app.eq);
-                }
+                sync_eq_config(app, mode_manager, host_bridge);
             } else if app.overlay == Overlay::HelpModal {
                 app.help_keybind_selected = (app.help_keybind_selected + 1) % HELP_MODAL_ITEMS;
             }

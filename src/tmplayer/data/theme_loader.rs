@@ -9,7 +9,6 @@ pub struct ThemeLoader;
 
 #[derive(Debug, Deserialize)]
 struct ThemeToml {
-    name: String,
     text: String,
     subtext: String,
     base: String,

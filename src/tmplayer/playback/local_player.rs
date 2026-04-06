@@ -333,7 +333,7 @@ fn detect_folder_kind(folder: &Path) -> (LocalFolderKind, Vec<PathBuf>) {
 }
 
 pub struct LocalPlayer {
-    device_sink: MixerDeviceSink,
+    _device_sink: MixerDeviceSink,
     player: Player,
 
     current_path: Option<PathBuf>,
@@ -360,11 +360,12 @@ pub struct LocalPlayer {
 
 impl LocalPlayer {
     pub fn new() -> Self {
-        let device_sink = rodio::DeviceSinkBuilder::open_default_sink().expect("no output device");
+        let mut device_sink = rodio::DeviceSinkBuilder::open_default_sink().expect("no output device");
+        device_sink.log_on_drop(false);
         let player = Player::connect_new(device_sink.mixer());
         let eq_params = Arc::new(EqParams::new());
         Self {
-            device_sink,
+            _device_sink: device_sink,
             player,
             current_path: None,
             duration: None,
@@ -728,10 +729,6 @@ impl LocalPlayer {
         self.started_at = if was_paused { None } else { Some(Instant::now()) };
         Ok(())
     }
-
-    pub fn latest_samples(&self, n: usize) -> Vec<f32> {
-        self.viz_samples.latest_samples(n)
-    }
 }
 
 /// Lock-free fixed-size ring buffer for visualization samples.
@@ -763,24 +760,6 @@ impl VizRing {
         let idx = self.write_idx.fetch_add(1, Ordering::Relaxed);
         let pos = idx % self.cap;
         self.data[pos].store(s.to_bits(), Ordering::Relaxed);
-    }
-
-    fn latest_samples(&self, n: usize) -> Vec<f32> {
-        let end = self.write_idx.load(Ordering::Relaxed);
-        if end == 0 {
-            return Vec::new();
-        }
-
-        let n = n.min(self.cap).min(end);
-        let start = end - n;
-
-        let mut out = Vec::with_capacity(n);
-        for i in 0..n {
-            let pos = (start + i) % self.cap;
-            let bits = self.data[pos].load(Ordering::Relaxed);
-            out.push(f32::from_bits(bits));
-        }
-        out
     }
 }
 

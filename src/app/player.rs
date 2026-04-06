@@ -1,13 +1,16 @@
-use crate::app::api::ApiState;
 use crate::data::assets;
 use crate::data::config::{CacheCleanStrategy, Config};
+use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings};
 use anyhow::{anyhow, Context, Result};
 use directories::BaseDirs;
 use rodio::{Decoder, MixerDeviceSink, Player, Source};
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,12 +29,20 @@ pub struct AudioPlayer {
     total_duration: Option<Duration>,
     paused_position: Duration,
     started_at: Option<Instant>,
+    eq: EqSettings,
+    eq_params: Arc<EqParams>,
 }
 
 impl AudioPlayer {
     pub fn new(config: &Config) -> Self {
         let cache_root = resolve_cache_root(config);
         let cache_dir = cache_root.join("audio");
+        let eq = EqSettings {
+            bands_db: config.eq_bands_db,
+        }
+        .clamp();
+        let eq_params = Arc::new(EqParams::new());
+        eq_params.set_from(eq);
 
         if config.cache.clean_on_startup {
             let _ = cleanup_cache_dir(&cache_dir, &config.cache);
@@ -47,6 +58,8 @@ impl AudioPlayer {
             total_duration: None,
             paused_position: Duration::from_secs(0),
             started_at: None,
+            eq,
+            eq_params,
         };
 
         if let Err(err) = player.ensure_output_device_sink() {
@@ -54,13 +67,6 @@ impl AudioPlayer {
         }
 
         player
-    }
-
-    pub fn play_song(&mut self, api: &mut ApiState, song_id: &str, quality_level: &str) -> Result<()> {
-        self.ensure_output_device_sink()?;
-
-        let file_path = self.ensure_cached_song(api, song_id, quality_level)?;
-        self.play_from_file(song_id, file_path)
     }
 
     pub fn play_cached_song(&mut self, song_id: &str, quality_level: &str) -> Result<bool> {
@@ -84,13 +90,14 @@ impl AudioPlayer {
         let decoder = Decoder::new(BufReader::new(file))
             .with_context(|| format!("decode cached audio failed: {}", file_path.display()))?;
         let total_duration = decoder.total_duration();
+        let source = EqSource::new(decoder, self.eq_params.clone());
 
         let device_sink = self
             .device_sink
             .as_ref()
             .ok_or_else(|| anyhow!("audio output device_sink not initialized"))?;
         let player = Player::connect_new(device_sink.mixer());
-        player.append(decoder);
+        player.append(source);
         player.play();
 
         if let Some(old) = self.sink.take() {
@@ -103,6 +110,12 @@ impl AudioPlayer {
         self.total_duration = total_duration;
         self.paused_position = Duration::from_secs(0);
         self.started_at = Some(Instant::now());
+        Ok(())
+    }
+
+    pub fn set_eq(&mut self, eq: EqSettings) -> Result<()> {
+        self.eq = eq.clamp();
+        self.eq_params.set_from(self.eq);
         Ok(())
     }
 
@@ -172,13 +185,14 @@ impl AudioPlayer {
             .with_context(|| format!("open cached audio failed: {}", path.display()))?;
         let decoder = Decoder::new(BufReader::new(file))
             .with_context(|| format!("decode cached audio failed: {}", path.display()))?;
+        let source = EqSource::new(decoder.skip_duration(target), self.eq_params.clone());
 
         let device_sink = self
             .device_sink
             .as_ref()
             .ok_or_else(|| anyhow!("audio output device_sink not initialized"))?;
         let player = Player::connect_new(device_sink.mixer());
-        player.append(decoder.skip_duration(target));
+        player.append(source);
         if was_paused {
             player.pause();
         } else {
@@ -210,24 +224,184 @@ impl AudioPlayer {
             return Ok(());
         }
 
-        let device_sink = rodio::DeviceSinkBuilder::open_default_sink().context("open default audio output failed")?;
+        let mut device_sink = rodio::DeviceSinkBuilder::open_default_sink().context("open default audio output failed")?;
+        device_sink.log_on_drop(false);
         self.device_sink = Some(device_sink);
         Ok(())
     }
+}
 
-    fn ensure_cached_song(&self, api: &mut ApiState, song_id: &str, quality_level: &str) -> Result<PathBuf> {
-        let path = self.cached_song_path(song_id, quality_level);
-        if is_nonempty_file(&path) {
-            return Ok(path);
+struct EqParams {
+    bands_db_x10: [AtomicI32; EQ_BANDS],
+}
+
+impl EqParams {
+    fn new() -> Self {
+        Self {
+            bands_db_x10: std::array::from_fn(|_| AtomicI32::new(0)),
+        }
+    }
+
+    fn set_from(&self, eq: EqSettings) {
+        let eq = eq.clamp();
+        for (idx, value) in eq.bands_db.iter().enumerate() {
+            self.bands_db_x10[idx].store((value * 10.0).round() as i32, Ordering::Relaxed);
+        }
+    }
+
+    fn load_db(&self) -> [f32; EQ_BANDS] {
+        std::array::from_fn(|idx| self.bands_db_x10[idx].load(Ordering::Relaxed) as f32 / 10.0)
+    }
+
+    fn load_db_x10(&self) -> [i32; EQ_BANDS] {
+        std::array::from_fn(|idx| self.bands_db_x10[idx].load(Ordering::Relaxed))
+    }
+}
+
+struct BiquadCoeffs {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+}
+
+#[derive(Default, Clone, Copy)]
+struct BiquadState {
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+}
+
+fn biquad_peaking(fs: f32, f0: f32, q: f32, gain_db: f32) -> BiquadCoeffs {
+    let fs = if fs > 0.0 { fs } else { 44100.0 };
+    let f0 = f0.clamp(10.0, fs * 0.45);
+    let q = q.max(0.001);
+
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let w0 = 2.0 * std::f32::consts::PI * (f0 / fs);
+    let cos_w0 = w0.cos();
+    let sin_w0 = w0.sin();
+    let alpha = sin_w0 / (2.0 * q);
+
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos_w0;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos_w0;
+    let a2 = 1.0 - alpha / a;
+
+    BiquadCoeffs {
+        b0: b0 / a0,
+        b1: b1 / a0,
+        b2: b2 / a0,
+        a1: a1 / a0,
+        a2: a2 / a0,
+    }
+}
+
+fn biquad_process(coeffs: &BiquadCoeffs, state: &mut BiquadState, input: f32) -> f32 {
+    let output = coeffs.b0 * input
+        + coeffs.b1 * state.x1
+        + coeffs.b2 * state.x2
+        - coeffs.a1 * state.y1
+        - coeffs.a2 * state.y2;
+    state.x2 = state.x1;
+    state.x1 = input;
+    state.y2 = state.y1;
+    state.y1 = output;
+    output
+}
+
+struct EqSource<S>
+where
+    S: Source<Item = f32>,
+{
+    inner: S,
+    channels: NonZero<u16>,
+    idx: usize,
+    params: Arc<EqParams>,
+    last_db_x10: [i32; EQ_BANDS],
+    coeffs: [BiquadCoeffs; EQ_BANDS],
+    states: Vec<BiquadState>,
+}
+
+impl<S> EqSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn new(inner: S, params: Arc<EqParams>) -> Self {
+        let channels = inner.channels();
+        let fs = inner.sample_rate().get() as f32;
+        let eq_db = params.load_db();
+        let last_db_x10 = params.load_db_x10();
+        let coeffs = std::array::from_fn(|idx| biquad_peaking(fs, EQ_FREQS_HZ[idx], 1.0, eq_db[idx]));
+        let states = vec![BiquadState::default(); (channels.get() as usize) * EQ_BANDS];
+
+        Self {
+            inner,
+            channels,
+            idx: 0,
+            params,
+            last_db_x10,
+            coeffs,
+            states,
+        }
+    }
+
+    fn state_index(&self, channel: usize, band: usize) -> usize {
+        channel * EQ_BANDS + band
+    }
+}
+
+impl<S> Iterator for EqSource<S>
+where
+    S: Source<Item = f32>,
+{
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let current = self.params.load_db_x10();
+        if current != self.last_db_x10 {
+            let fs = self.inner.sample_rate().get() as f32;
+            let eq_db = self.params.load_db();
+            self.coeffs = std::array::from_fn(|idx| biquad_peaking(fs, EQ_FREQS_HZ[idx], 1.0, eq_db[idx]));
+            self.last_db_x10 = current;
         }
 
-        fs::create_dir_all(&self.cache_dir)
-            .with_context(|| format!("create cache dir failed: {}", self.cache_dir.display()))?;
+        let input = self.inner.next()?;
+        let channel =
+            (self.idx % (self.channels.get() as usize)).min(self.channels.get() as usize - 1);
+        self.idx = self.idx.wrapping_add(1);
 
-        let stream_url = api.song_stream_url_with_quality(song_id, quality_level)?;
-        api.fetch_audio_to_path(&stream_url, &path)?;
+        let mut output = input;
+        for band in 0..EQ_BANDS {
+            let state_idx = self.state_index(channel, band);
+            output = biquad_process(&self.coeffs[band], &mut self.states[state_idx], output);
+        }
+        Some(output)
+    }
+}
 
-        Ok(path)
+impl<S> Source for EqSource<S>
+where
+    S: Source<Item = f32>,
+{
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> NonZero<u16> {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> NonZero<u32> {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
     }
 }
 

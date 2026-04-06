@@ -36,16 +36,6 @@ impl ThemeName {
             ThemeName::Mocha => "Mocha",
         }
     }
-
-    pub fn next(self) -> Self {
-        match self {
-            ThemeName::System => ThemeName::Latte,
-            ThemeName::Latte => ThemeName::Frappe,
-            ThemeName::Frappe => ThemeName::Macchiato,
-            ThemeName::Macchiato => ThemeName::Mocha,
-            ThemeName::Mocha => ThemeName::System,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

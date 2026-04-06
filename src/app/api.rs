@@ -303,10 +303,6 @@ impl ApiState {
         ))
     }
 
-    pub fn song_stream_url(&mut self, song_id: &str) -> Result<String> {
-        self.song_stream_url_with_quality(song_id, "exhigh")
-    }
-
     pub fn vip_info(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
         let response = self.runtime.block_on(self.client.vip_info(&query))?;
@@ -370,25 +366,6 @@ impl ApiState {
                 Ok::<Vec<u8>, anyhow::Error>(bytes)
             })
             .with_context(|| format!("download cover image failed: {}", url))?;
-
-        Ok(bytes)
-    }
-
-    pub fn fetch_audio_bytes(&self, url: &str) -> Result<Vec<u8>> {
-        let url = url.trim();
-        if url.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let bytes = self
-            .runtime
-            .block_on(async {
-                let response = self.http.get(url).send().await?;
-                let response = response.error_for_status()?;
-                let bytes = response.bytes().await?;
-                Ok::<Vec<u8>, reqwest::Error>(bytes.to_vec())
-            })
-            .with_context(|| format!("download audio failed: {}", url))?;
 
         Ok(bytes)
     }

@@ -18,10 +18,6 @@ impl Playlist {
         self.items.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
     pub fn clamp_selected(&mut self) {
         if self.items.is_empty() {
             self.selected = 0;

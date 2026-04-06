@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+const DEFAULT_EQ_BANDS_DB: [f32; crate::tmplayer::app::state::EQ_BANDS] =
+    [0.0; crate::tmplayer::app::state::EQ_BANDS];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub theme: String,
@@ -13,6 +16,9 @@ pub struct Config {
 
     #[serde(default = "default_visualize")]
     pub visualize: VisualizeMode,
+
+    #[serde(default = "default_eq_bands_db")]
+    pub eq_bands_db: [f32; crate::tmplayer::app::state::EQ_BANDS],
 
     #[serde(default)]
     pub transparent_background: bool,
@@ -124,6 +130,12 @@ pub struct Config {
 
     #[serde(default = "default_keybind_fullscreen_toggle_mode")]
     pub keybind_fullscreen_toggle_mode: String,
+
+    #[serde(default = "default_keybind_fullscreen_eq")]
+    pub keybind_fullscreen_eq: String,
+
+    #[serde(default = "default_keybind_fullscreen_eq_reset")]
+    pub keybind_fullscreen_eq_reset: String,
 
     #[serde(default = "default_keybind_toggle_like_fullscreen")]
     pub keybind_toggle_like_fullscreen: String,
@@ -297,6 +309,10 @@ fn default_visualize() -> VisualizeMode {
     VisualizeMode::Bars
 }
 
+fn default_eq_bands_db() -> [f32; crate::tmplayer::app::state::EQ_BANDS] {
+    DEFAULT_EQ_BANDS_DB
+}
+
 fn default_album_border() -> bool {
     true
 }
@@ -401,6 +417,14 @@ fn default_keybind_fullscreen_toggle_mode() -> String {
     "M".to_string()
 }
 
+fn default_keybind_fullscreen_eq() -> String {
+    "E".to_string()
+}
+
+fn default_keybind_fullscreen_eq_reset() -> String {
+    "Alt+R".to_string()
+}
+
 fn default_keybind_toggle_like_fullscreen() -> String {
     "L".to_string()
 }
@@ -417,6 +441,7 @@ impl Default for Config {
             spectrum_hz: 60,
             mpris_poll_ms: 100,
             visualize: default_visualize(),
+            eq_bands_db: default_eq_bands_db(),
             transparent_background: true,
             album_border: default_album_border(),
             kitty_graphics: false,
@@ -454,6 +479,8 @@ impl Default for Config {
             keybind_fullscreen_next: default_keybind_fullscreen_next(),
             keybind_fullscreen_toggle_play_pause: default_keybind_fullscreen_toggle_play_pause(),
             keybind_fullscreen_toggle_mode: default_keybind_fullscreen_toggle_mode(),
+            keybind_fullscreen_eq: default_keybind_fullscreen_eq(),
+            keybind_fullscreen_eq_reset: default_keybind_fullscreen_eq_reset(),
             keybind_toggle_like_fullscreen: default_keybind_toggle_like_fullscreen(),
             keybind_toggle_like_collapsed: default_keybind_toggle_like_collapsed(),
         }
@@ -489,6 +516,7 @@ impl Config {
         if !raw.contains("default_opening_title")
             || !raw.contains("language")
             || !raw.contains("page_lyrics")
+            || !raw.contains("eq_bands_db")
             || !raw.contains("audio_quality")
             || !raw.contains("audio_preload")
             || !raw.contains("playback_memory")
@@ -511,6 +539,8 @@ impl Config {
             || !raw.contains("keybind_fullscreen_next")
             || !raw.contains("keybind_fullscreen_toggle_play_pause")
             || !raw.contains("keybind_fullscreen_toggle_mode")
+                        || !raw.contains("keybind_fullscreen_eq")
+                        || !raw.contains("keybind_fullscreen_eq_reset")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("keybind_toggle_like_collapsed")
               || migrated_legacy_sidebar

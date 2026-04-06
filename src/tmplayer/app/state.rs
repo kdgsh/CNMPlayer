@@ -635,26 +635,6 @@ impl AppState {
         });
     }
 
-    pub fn is_playlist_open(&self) -> bool {
-        self.overlay == Overlay::Playlist
-    }
-
-    pub fn open_playlist(&mut self, width: i16) {
-        self.overlay = Overlay::Playlist;
-        self.playlist_slide_x = -width;
-        self.playlist_slide_target_x = 0;
-    }
-
-    pub fn close_playlist(&mut self, width: i16) {
-        self.overlay = Overlay::None;
-        self.playlist_slide_target_x = -width;
-    }
-
-    pub fn open_folder_input(&mut self) {
-        self.overlay = Overlay::FolderInput;
-        self.folder_input.buf.clear();
-    }
-
     pub fn close_overlay(&mut self) {
         self.overlay = Overlay::None;
     }

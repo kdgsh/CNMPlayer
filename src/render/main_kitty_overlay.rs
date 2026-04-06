@@ -334,7 +334,12 @@ fn playlist_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
         ])
         .split(inner);
 
-    let cover_rect = cols[0].inner(&ratatui::layout::Margin {
+    let cover_block = centered_visual_square_block(cols[0]);
+    if cover_block.width == 0 || cover_block.height == 0 {
+        return None;
+    }
+
+    let cover_rect = cover_block.inner(&ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -395,7 +400,12 @@ fn author_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
         ])
         .split(inner);
 
-    let cover_rect = cols[0].inner(&ratatui::layout::Margin {
+    let cover_block = centered_visual_square_block(cols[0]);
+    if cover_block.width == 0 || cover_block.height == 0 {
+        return None;
+    }
+
+    let cover_rect = cover_block.inner(&ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -404,6 +414,28 @@ fn author_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
     }
 
     Some(cover_rect)
+}
+
+fn centered_visual_square_block(area: Rect) -> Rect {
+    if area.width < 4 || area.height < 3 {
+        return Rect::default();
+    }
+
+    let content_width = area.width.saturating_sub(2);
+    let content_height = area.height.saturating_sub(2);
+    let side = content_height.min(content_width / 2);
+    if side == 0 {
+        return Rect::default();
+    }
+
+    let width = side.saturating_mul(2).saturating_add(2);
+    let height = side.saturating_add(2);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
 }
 
 fn tile_cover_rect(tile_rect: Rect) -> Rect {

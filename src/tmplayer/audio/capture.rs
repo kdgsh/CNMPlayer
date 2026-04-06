@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::Result;
 use rodio::cpal;
 use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -61,8 +63,9 @@ impl AudioCapture {
             });
         };
 
-        if let Ok(name) = device.name() {
-            log::info!("cpal input device: {name}");
+        let device_name = device_display_name(&device);
+        if !device_name.is_empty() {
+            log::info!("cpal input device: {device_name}");
         }
 
         let config = device.default_input_config()?;
@@ -198,7 +201,7 @@ fn pick_best_input_device(host: &cpal::Host) -> Option<cpal::Device> {
     let mut other: Option<cpal::Device> = None;
 
     for d in devices {
-        let name = d.name().unwrap_or_default();
+        let name = device_display_name(&d);
         let lname = name.to_lowercase();
 
         let looks_like_mic = lname.contains("mic") || lname.contains("microphone") || lname.contains("input") && !lname.contains("monitor");
@@ -244,7 +247,7 @@ fn pick_best_input_device_any_host() -> Option<cpal::Device> {
         };
 
         for d in devices {
-            let name = d.name().unwrap_or_default();
+            let name = device_display_name(&d);
             let score = host_bonus + device_name_score(&name);
             match &best {
                 None => best = Some((score, d)),
@@ -298,6 +301,13 @@ fn device_name_score(name: &str) -> i32 {
     }
 
     score
+}
+
+fn device_display_name(device: &cpal::Device) -> String {
+    device
+        .description()
+        .map(|description| description.name().trim().to_string())
+        .unwrap_or_default()
 }
 
 fn dummy_stream() -> Result<(cpal::Stream, ())> {

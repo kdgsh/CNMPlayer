@@ -226,7 +226,7 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         rows[0],
     );
 
-    let mut lines: Vec<Line> = (0..15)
+    let mut lines: Vec<Line> = (0..crate::app::SETTINGS_KEYBIND_ITEMS)
         .map(|idx| {
             let is_rebinding = app.settings_keybind_rebinding == Some(idx);
             let style = if is_rebinding {

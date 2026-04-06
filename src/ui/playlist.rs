@@ -77,26 +77,29 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
         .constraints([Constraint::Length((inner.height * 2).min(26)), Constraint::Min(1)])
         .split(inner);
 
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(app.theme.color_surface())),
-        cols[0],
-    );
-
-    let cover_area = cols[0].inner(&ratatui::layout::Margin {
-        horizontal: 1,
-        vertical: 1,
-    });
-    if cover_area.width > 0 && cover_area.height > 0 {
-        frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
-        let cover_ascii = app.playlist.cover_ascii(cover_area.width, cover_area.height);
+    let cover_block = centered_visual_square_block(cols[0]);
+    if cover_block.width > 0 && cover_block.height > 0 {
         frame.render_widget(
-            Paragraph::new(cover_ascii)
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(app.theme.color_text())),
-            cover_area,
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.color_surface())),
+            cover_block,
         );
+
+        let cover_area = cover_block.inner(&ratatui::layout::Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
+        if cover_area.width > 0 && cover_area.height > 0 {
+            frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
+            let cover_ascii = app.playlist.cover_ascii(cover_area.width, cover_area.height);
+            frame.render_widget(
+                Paragraph::new(cover_ascii)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(app.theme.color_text())),
+                cover_area,
+            );
+        }
     }
 
     let info = vec![
@@ -158,10 +161,8 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 
     let visible = inner.height as usize;
-    let offset = app
-        .playlist
-        .focused_idx
-        .saturating_sub(visible.saturating_sub(1));
+    app.playlist.set_visible_rows(visible);
+    let offset = app.playlist.effective_scroll_offset();
 
     for (line_idx, track_idx) in (offset..app.playlist.tracks.len()).take(visible).enumerate() {
         let y = inner.y + line_idx as u16;
@@ -247,6 +248,28 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
             ])),
             row,
         );
+    }
+}
+
+fn centered_visual_square_block(area: Rect) -> Rect {
+    if area.width < 4 || area.height < 3 {
+        return Rect::default();
+    }
+
+    let content_width = area.width.saturating_sub(2);
+    let content_height = area.height.saturating_sub(2);
+    let side = content_height.min(content_width / 2);
+    if side == 0 {
+        return Rect::default();
+    }
+
+    let width = side.saturating_mul(2).saturating_add(2);
+    let height = side.saturating_add(2);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
     }
 }
 
