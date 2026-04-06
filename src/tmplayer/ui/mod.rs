@@ -1,6 +1,6 @@
+pub mod borders;
 pub mod theme;
 pub mod tui;
-pub mod borders;
 
 pub mod components {
     pub mod control_buttons;
@@ -13,4 +13,3 @@ pub mod panels {
     pub mod playlist_panel;
     pub mod visual_panel;
 }
-

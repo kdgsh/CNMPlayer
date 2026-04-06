@@ -2,11 +2,11 @@ use crate::app::App;
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 
 pub fn draw_author(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
@@ -29,7 +29,10 @@ pub fn draw_author(frame: &mut Frame, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(player_bar::PLAYER_BAR_HEIGHT)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(player_bar::PLAYER_BAR_HEIGHT),
+        ])
         .split(size);
 
     let (content_area, hint_area) = if app.config.show_hints {
@@ -72,7 +75,10 @@ fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length((inner.height * 2).min(26)), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length((inner.height * 2).min(26)),
+            Constraint::Min(1),
+        ])
         .split(inner);
 
     let cover_block = centered_visual_square_block(cols[0]);
@@ -341,13 +347,11 @@ fn draw_author_hint(frame: &mut Frame, app: &App, area: Rect) {
     let text = match app.config.language {
         Language::Zh => format!(
             "{} 搜索  Enter 进入歌单页  Esc 返回搜索  {} 全屏",
-            app.config.keybind_search_box,
-            app.config.keybind_fullscreen
+            app.config.keybind_search_box, app.config.keybind_fullscreen
         ),
         Language::En => format!(
             "{} Search  Enter open playlist page  Esc back  {} Fullscreen",
-            app.config.keybind_search_box,
-            app.config.keybind_fullscreen
+            app.config.keybind_search_box, app.config.keybind_fullscreen
         ),
     };
 

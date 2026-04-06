@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Context, Result};
-use ncm_api::{create_client, ApiClient, ApiResponse, Query};
-use reqwest::{header, Client};
+use anyhow::{Context, Result, anyhow};
+use ncm_api::{ApiClient, ApiResponse, Query, create_client};
+use reqwest::{Client, header};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -90,23 +90,37 @@ impl ApiState {
         Ok(response)
     }
 
-    pub fn user_playlist_create(&mut self, uid: &str, limit: usize, offset: usize) -> Result<ApiResponse> {
+    pub fn user_playlist_create(
+        &mut self,
+        uid: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<ApiResponse> {
         let query = self
             .query_with_cookie()
             .param("uid", uid)
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
-        let response = self.runtime.block_on(self.client.user_playlist_create(&query))?;
+        let response = self
+            .runtime
+            .block_on(self.client.user_playlist_create(&query))?;
         Ok(response)
     }
 
-    pub fn user_playlist_collect(&mut self, uid: &str, limit: usize, offset: usize) -> Result<ApiResponse> {
+    pub fn user_playlist_collect(
+        &mut self,
+        uid: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<ApiResponse> {
         let query = self
             .query_with_cookie()
             .param("uid", uid)
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
-        let response = self.runtime.block_on(self.client.user_playlist_collect(&query))?;
+        let response = self
+            .runtime
+            .block_on(self.client.user_playlist_collect(&query))?;
         Ok(response)
     }
 
@@ -126,9 +140,7 @@ impl ApiState {
     }
 
     pub fn login_phone_captcha(&mut self, phone: &str, captcha: &str) -> Result<ApiResponse> {
-        let query = Query::new()
-            .param("phone", phone)
-            .param("captcha", captcha);
+        let query = Query::new().param("phone", phone).param("captcha", captcha);
         let response = self.runtime.block_on(self.client.login_cellphone(&query))?;
         self.capture_cookie(&response);
         Ok(response)
@@ -155,7 +167,9 @@ impl ApiState {
 
     pub fn recommend_resource(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self.runtime.block_on(self.client.recommend_resource(&query))?;
+        let response = self
+            .runtime
+            .block_on(self.client.recommend_resource(&query))?;
         Ok(response)
     }
 
@@ -315,7 +329,13 @@ impl ApiState {
         Ok(response)
     }
 
-    pub fn search(&mut self, keywords: &str, search_type: i32, limit: usize, offset: usize) -> Result<ApiResponse> {
+    pub fn search(
+        &mut self,
+        keywords: &str,
+        search_type: i32,
+        limit: usize,
+        offset: usize,
+    ) -> Result<ApiResponse> {
         let query = self
             .query_with_cookie()
             .param("keywords", keywords)
@@ -388,8 +408,9 @@ impl ApiState {
                 let response = self.http.get(url).send().await?;
                 let mut response = response.error_for_status()?;
 
-                let mut file = File::create(&tmp_path)
-                    .with_context(|| format!("create temp audio file failed: {}", tmp_path.display()))?;
+                let mut file = File::create(&tmp_path).with_context(|| {
+                    format!("create temp audio file failed: {}", tmp_path.display())
+                })?;
 
                 let mut written = 0u64;
                 while let Some(chunk) = response.chunk().await? {
@@ -402,8 +423,9 @@ impl ApiState {
                     written = written.saturating_add(chunk.len() as u64);
                 }
 
-                file.flush()
-                    .with_context(|| format!("flush temp audio file failed: {}", tmp_path.display()))?;
+                file.flush().with_context(|| {
+                    format!("flush temp audio file failed: {}", tmp_path.display())
+                })?;
 
                 if written == 0 {
                     return Err(anyhow!("song audio payload is empty"));

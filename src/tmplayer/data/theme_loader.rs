@@ -1,5 +1,5 @@
 use crate::tmplayer::data::assets;
-use crate::tmplayer::ui::theme::{detect_color_capability, Theme, ThemeName, ThemePalette};
+use crate::tmplayer::ui::theme::{Theme, ThemeName, ThemePalette, detect_color_capability};
 use anyhow::Result;
 use serde::Deserialize;
 use std::fs;
@@ -58,4 +58,3 @@ fn parse_hex(s: &str) -> (u8, u8, u8) {
     let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(255);
     (r, g, b)
 }
-

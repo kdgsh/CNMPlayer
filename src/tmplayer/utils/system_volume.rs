@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 mod imp {
     use alsa::mixer::{Mixer, Selem, SelemChannelId, SelemId};
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
 
     pub struct SystemVolume {
         selem_id: SelemId,
@@ -53,7 +53,10 @@ mod imp {
                 .ok_or_else(|| anyhow!("ALSA element not found: {}", self.elem_name))?;
 
             if !selem.has_playback_volume() {
-                return Err(anyhow!("ALSA element has no playback volume: {}", self.elem_name));
+                return Err(anyhow!(
+                    "ALSA element has no playback volume: {}",
+                    self.elem_name
+                ));
             }
 
             let (min, max) = selem.get_playback_volume_range();
@@ -75,7 +78,8 @@ mod imp {
                 }
             }
 
-            let raw = raw.ok_or_else(|| anyhow!("No playback channel found for: {}", self.elem_name))?;
+            let raw =
+                raw.ok_or_else(|| anyhow!("No playback channel found for: {}", self.elem_name))?;
             let v = (raw - min) as f32 / (max - min) as f32;
             Ok(v.clamp(0.0, 1.0))
         }
@@ -108,7 +112,7 @@ mod imp {
 
 #[cfg(not(target_os = "linux"))]
 mod imp {
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
 
     pub struct SystemVolume;
 

@@ -1,19 +1,19 @@
 use crate::tmplayer::app::state::{AppState, Overlay};
-use crate::tmplayer::ui::panels::{info_panel, playlist_panel, visual_panel};
 use crate::tmplayer::ui::components::control_buttons;
+use crate::tmplayer::ui::panels::{info_panel, playlist_panel, visual_panel};
 use crate::tmplayer::utils::input::Action;
 use anyhow::Result;
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{event, terminal};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Terminal;
-use std::io::{self, Stdout};
 use std::collections::{HashMap, HashSet};
+use std::io::{self, Stdout};
 use std::sync::mpsc;
 use std::thread;
 
@@ -86,7 +86,11 @@ impl Tui {
 
         thread::spawn(move || {
             while let Ok(req) = rx.recv() {
-                if let Some((b64, width, height)) = crate::tmplayer::render::kitty_graphics::encode_image_bytes_to_png_base64(&req.bytes, req.max_w, req.max_h) {
+                if let Some((b64, width, height)) =
+                    crate::tmplayer::render::kitty_graphics::encode_image_bytes_to_png_base64(
+                        &req.bytes, req.max_w, req.max_h,
+                    )
+                {
                     let _ = res_tx.send(KittyRenderResponse {
                         hash: req.hash,
                         b64,
@@ -117,14 +121,22 @@ impl Tui {
     }
 
     pub fn enter(&mut self) -> Result<()> {
-        execute!(io::stdout(), EnterAlternateScreen, event::EnableMouseCapture)?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            event::EnableMouseCapture
+        )?;
         terminal::enable_raw_mode()?;
         Ok(())
     }
 
     pub fn exit(&mut self) -> Result<()> {
         terminal::disable_raw_mode()?;
-        execute!(io::stdout(), event::DisableMouseCapture, LeaveAlternateScreen)?;
+        execute!(
+            io::stdout(),
+            event::DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
         Ok(())
     }
 
@@ -162,14 +174,14 @@ impl Tui {
                 if !app.config.transparent_background {
                     base_style = base_style.bg(app.theme.color_base());
                 }
+                f.render_widget(ratatui::widgets::Block::default().style(base_style), size);
                 f.render_widget(
-                    ratatui::widgets::Block::default()
-                        .style(base_style),
-                    size,
-                );
-                f.render_widget(
-                    ratatui::widgets::Paragraph::new(lang_text(app, "终端窗口过小", "Terminal too small"))
-                        .style(Style::default().fg(app.theme.color_subtext())),
+                    ratatui::widgets::Paragraph::new(lang_text(
+                        app,
+                        "终端窗口过小",
+                        "Terminal too small",
+                    ))
+                    .style(Style::default().fg(app.theme.color_subtext())),
                     size,
                 );
                 return;
@@ -198,7 +210,10 @@ impl Tui {
                 width: rows[0].width,
                 height: rows[0].height.saturating_add(rows[1].height),
             };
-            let inner = outer.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+            let inner = outer.inner(&ratatui::layout::Margin {
+                horizontal: 1,
+                vertical: 1,
+            });
             let lyric_h_inner = rows[0].height.saturating_sub(2).min(inner.height);
             layout_out.spectrum_rect = Rect {
                 x: inner.x,
@@ -214,10 +229,16 @@ impl Tui {
 
             // For kitty graphics, we draw into the inner area (optional border).
             layout_out.info_cover_image = if app.config.album_border {
-                info_l.cover.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 })
+                info_l.cover.inner(&ratatui::layout::Margin {
+                    horizontal: 1,
+                    vertical: 1,
+                })
             } else {
                 // Reserve one ring for visual breathing room even without border.
-                info_l.cover.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 })
+                info_l.cover.inner(&ratatui::layout::Margin {
+                    horizontal: 1,
+                    vertical: 1,
+                })
             };
 
             // base styling
@@ -227,26 +248,26 @@ impl Tui {
             if !app.config.transparent_background {
                 base_style = base_style.bg(app.theme.color_base());
             }
-            f.render_widget(
-                ratatui::widgets::Block::default()
-                    .style(base_style),
-                size,
-            );
+            f.render_widget(ratatui::widgets::Block::default().style(base_style), size);
 
             info_panel::render(f, cols[0], app);
             visual_panel::render(f, rows[0], rows[1], app);
 
             // playlist overlay slides in/out over left
-            if app.overlay == Overlay::Playlist || app.playlist_slide_x != app.playlist_slide_target_x {
+            if app.overlay == Overlay::Playlist
+                || app.playlist_slide_x != app.playlist_slide_target_x
+            {
                 let collapsing = app.overlay != Overlay::Playlist
                     && app.playlist_slide_x > app.playlist_slide_target_x;
 
                 // advance animation
                 let step: i16 = 4;
                 if app.playlist_slide_x < app.playlist_slide_target_x {
-                    app.playlist_slide_x = (app.playlist_slide_x + step).min(app.playlist_slide_target_x);
+                    app.playlist_slide_x =
+                        (app.playlist_slide_x + step).min(app.playlist_slide_target_x);
                 } else if app.playlist_slide_x > app.playlist_slide_target_x {
-                    app.playlist_slide_x = (app.playlist_slide_x - step).max(app.playlist_slide_target_x);
+                    app.playlist_slide_x =
+                        (app.playlist_slide_x - step).max(app.playlist_slide_target_x);
                 }
 
                 // Slide effect via visible width growth/shrink (x stays at left edge)
@@ -268,7 +289,11 @@ impl Tui {
                             Block::default()
                                 .borders(Borders::ALL)
                                 .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
-                                .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())),
+                                .style(
+                                    Style::default()
+                                        .fg(app.theme.color_subtext())
+                                        .bg(app.theme.color_surface()),
+                                ),
                             r,
                         );
                     } else {
@@ -295,8 +320,11 @@ impl Tui {
                     height: 1,
                 };
                 f.render_widget(
-                    ratatui::widgets::Paragraph::new(prompt)
-                        .style(Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface())),
+                    ratatui::widgets::Paragraph::new(prompt).style(
+                        Style::default()
+                            .fg(app.theme.color_text())
+                            .bg(app.theme.color_surface()),
+                    ),
                     area,
                 );
             }
@@ -310,7 +338,8 @@ impl Tui {
                     height: 1,
                 };
                 f.render_widget(
-                    ratatui::widgets::Paragraph::new(msg.as_str()).style(Style::default().fg(app.theme.color_accent3())),
+                    ratatui::widgets::Paragraph::new(msg.as_str())
+                        .style(Style::default().fg(app.theme.color_accent3())),
                     area,
                 );
             }
@@ -328,8 +357,7 @@ impl Tui {
                     hint_style = hint_style.bg(app.theme.color_base());
                 }
                 f.render_widget(
-                    Paragraph::new(format!(" {}", hint_text))
-                        .style(hint_style),
+                    Paragraph::new(format!(" {}", hint_text)).style(hint_style),
                     hint_area,
                 );
             }
@@ -460,7 +488,8 @@ impl Tui {
 
         let modal_area = settings_modal_area(layout.full, app.overlay);
         let info_cover_segments = cover_visible_segments(layout.info_cover_image, modal_area);
-        let playlist_cover_segments = cover_visible_segments(layout.playlist_cover_image, modal_area);
+        let playlist_cover_segments =
+            cover_visible_segments(layout.playlist_cover_image, modal_area);
 
         let effective_quality: u8 = if settings_open {
             self.kitty_last_cover_quality
@@ -492,9 +521,11 @@ impl Tui {
         // Drain finished render results and transmit (only when kitty is enabled).
         while let Ok(res) = self.kitty_rx.try_recv() {
             let image_id = self.image_id_for_hash(res.hash);
-            let _ = crate::tmplayer::render::kitty_graphics::transmit_png_base64(image_id, &res.b64);
+            let _ =
+                crate::tmplayer::render::kitty_graphics::transmit_png_base64(image_id, &res.b64);
             self.kitty_transmitted.insert(res.hash);
-            self.kitty_image_sizes.insert(res.hash, (res.width, res.height));
+            self.kitty_image_sizes
+                .insert(res.hash, (res.width, res.height));
             self.kitty_pending.remove(&res.hash);
         }
 
@@ -527,13 +558,19 @@ impl Tui {
             && app.playlist_slide_target_x == 0;
 
         // Info panel cover (current track).
-        if let (Some(bytes), Some(hash)) = (app.player.track.cover.as_deref(), app.player.track.cover_hash) {
+        if let (Some(bytes), Some(hash)) = (
+            app.player.track.cover.as_deref(),
+            app.player.track.cover_hash,
+        ) {
             enqueue(self, hash, bytes, layout.info_cover_image);
         }
 
         if playlist_overlay_visible {
             hide_info(self);
-        } else if let (Some(_bytes), Some(hash)) = (app.player.track.cover.as_deref(), app.player.track.cover_hash) {
+        } else if let (Some(_bytes), Some(hash)) = (
+            app.player.track.cover.as_deref(),
+            app.player.track.cover_hash,
+        ) {
             if info_cover_segments.is_empty() {
                 hide_info(self);
             } else {
@@ -555,12 +592,14 @@ impl Tui {
                                 .take(INFO_PLACEMENT_IDS.len())
                                 .enumerate()
                             {
-                                if let Some((src_x, src_y, src_w, src_h)) = map_segment_to_image_crop(
-                                    layout.info_cover_image,
-                                    *segment,
-                                    img_w,
-                                    img_h,
-                                ) {
+                                if let Some((src_x, src_y, src_w, src_h)) =
+                                    map_segment_to_image_crop(
+                                        layout.info_cover_image,
+                                        *segment,
+                                        img_w,
+                                        img_h,
+                                    )
+                                {
                                     let _ = crate::tmplayer::render::kitty_graphics::place_image_cropped(
                                         *segment,
                                         image_id,
@@ -583,14 +622,20 @@ impl Tui {
 
         // Playlist album cover (local browsing). Only show the real cover once fully expanded.
         if playlist_fully_expanded {
-            if let (Some(bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
+            if let (Some(bytes), Some(hash)) = (
+                app.local_view_album_cover.as_deref(),
+                app.local_view_album_cover_hash,
+            ) {
                 enqueue(self, hash, bytes, layout.playlist_cover_image);
             }
         }
 
         if !playlist_fully_expanded || playlist_cover_segments.is_empty() {
             hide_playlist(self);
-        } else if let (Some(_bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
+        } else if let (Some(_bytes), Some(hash)) = (
+            app.local_view_album_cover.as_deref(),
+            app.local_view_album_cover_hash,
+        ) {
             let image_id = self.image_id_for_hash(hash);
             let new_state = KittyPlacementState {
                 hash,
@@ -615,15 +660,16 @@ impl Tui {
                                 img_w,
                                 img_h,
                             ) {
-                                let _ = crate::tmplayer::render::kitty_graphics::place_image_cropped(
-                                    *segment,
-                                    image_id,
-                                    PLAYLIST_PLACEMENT_IDS[idx],
-                                    src_x,
-                                    src_y,
-                                    src_w,
-                                    src_h,
-                                );
+                                let _ =
+                                    crate::tmplayer::render::kitty_graphics::place_image_cropped(
+                                        *segment,
+                                        image_id,
+                                        PLAYLIST_PLACEMENT_IDS[idx],
+                                        src_x,
+                                        src_y,
+                                        src_w,
+                                        src_h,
+                                    );
                             }
                         }
                         self.kitty_playlist_last = Some(new_state);
@@ -773,8 +819,10 @@ fn map_segment_to_image_crop(
     let src_x = (rel_x0.saturating_mul(img_w) / base_w) as u32;
     let src_y = (rel_y0.saturating_mul(img_h) / base_h) as u32;
 
-    let src_x_end = ((rel_x1.saturating_mul(img_w) + base_w.saturating_sub(1)) / base_w).min(img_w) as u32;
-    let src_y_end = ((rel_y1.saturating_mul(img_h) + base_h.saturating_sub(1)) / base_h).min(img_h) as u32;
+    let src_x_end =
+        ((rel_x1.saturating_mul(img_w) + base_w.saturating_sub(1)) / base_w).min(img_w) as u32;
+    let src_y_end =
+        ((rel_y1.saturating_mul(img_h) + base_h.saturating_sub(1)) / base_h).min(img_h) as u32;
 
     if src_x >= image_w || src_y >= image_h {
         return None;
@@ -816,14 +864,25 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, " 设置 ", " Settings "))
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     f.render_widget(Paragraph::new(""), rows[0]);
 
@@ -891,20 +950,38 @@ fn render_acoustid_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, "AcoustID API 密钥", "AcoustID API Key"))
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::styled(
         "",
-        Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()),
+        Style::default()
+            .fg(app.theme.color_subtext())
+            .bg(app.theme.color_surface()),
     ));
-    lines.push(Line::styled("", Style::default().bg(app.theme.color_surface())));
     lines.push(Line::styled(
-        format!("{}: {}", lang_text(app, "API 密钥", "API Key"), app.acoustid_input),
-        Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface()),
+        "",
+        Style::default().bg(app.theme.color_surface()),
+    ));
+    lines.push(Line::styled(
+        format!(
+            "{}: {}",
+            lang_text(app, "API 密钥", "API Key"),
+            app.acoustid_input
+        ),
+        Style::default()
+            .fg(app.theme.color_text())
+            .bg(app.theme.color_surface()),
     ));
 
     let p = Paragraph::new(lines)
@@ -921,14 +998,25 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, " 播放设置 ", " Playback Settings "))
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     f.render_widget(Paragraph::new(""), rows[0]);
 
@@ -952,7 +1040,8 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             lang_text(app, "可视化", "Visualization"),
             match app.config.visualize {
                 crate::tmplayer::data::config::VisualizeMode::Off => lang_text(app, "关闭", "Off"),
-                crate::tmplayer::data::config::VisualizeMode::Bars => lang_text(app, "频谱", "Bars"),
+                crate::tmplayer::data::config::VisualizeMode::Bars =>
+                    lang_text(app, "频谱", "Bars"),
                 crate::tmplayer::data::config::VisualizeMode::Oscilloscope => {
                     lang_text(app, "示波器", "Oscilloscope")
                 }
@@ -963,8 +1052,16 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             lang_text(app, "超级流畅", "Super Smooth"),
             lang_on_off(app, app.config.super_smooth_bar)
         ),
-        format!("{}: {}", lang_text(app, "频谱间隔", "Bars Gap"), lang_on_off(app, app.config.bars_gap)),
-        format!("{}: {}", lang_text(app, "频谱数", "Bars Count"), bar_number_label),
+        format!(
+            "{}: {}",
+            lang_text(app, "频谱间隔", "Bars Gap"),
+            lang_on_off(app, app.config.bars_gap)
+        ),
+        format!(
+            "{}: {}",
+            lang_text(app, "频谱数", "Bars Count"),
+            bar_number_label
+        ),
         format!("{}: {}", lang_text(app, "声道", "Channels"), channels_label),
         format!(
             "{}: {}",
@@ -980,10 +1077,14 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             "{}: {}",
             lang_text(app, "音质", "Audio Quality"),
             match app.config.audio_quality {
-                crate::tmplayer::data::config::AudioQuality::Standard => lang_text(app, "标准", "Standard"),
-                crate::tmplayer::data::config::AudioQuality::Higher => lang_text(app, "较高", "Higher"),
-                crate::tmplayer::data::config::AudioQuality::Exhigh => lang_text(app, "极高", "Exhigh"),
-                crate::tmplayer::data::config::AudioQuality::Lossless => lang_text(app, "无损", "Lossless"),
+                crate::tmplayer::data::config::AudioQuality::Standard =>
+                    lang_text(app, "标准", "Standard"),
+                crate::tmplayer::data::config::AudioQuality::Higher =>
+                    lang_text(app, "较高", "Higher"),
+                crate::tmplayer::data::config::AudioQuality::Exhigh =>
+                    lang_text(app, "极高", "Exhigh"),
+                crate::tmplayer::data::config::AudioQuality::Lossless =>
+                    lang_text(app, "无损", "Lossless"),
                 crate::tmplayer::data::config::AudioQuality::Hires => "Hi-Res",
                 crate::tmplayer::data::config::AudioQuality::Jyeffect => {
                     lang_text(app, "高清环绕声", "JYEffect")
@@ -1043,17 +1144,29 @@ fn render_local_audio_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &m
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, "本地音频", "Local Audio"))
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::styled(
         "",
-        Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()),
+        Style::default()
+            .fg(app.theme.color_subtext())
+            .bg(app.theme.color_surface()),
     ));
-    lines.push(Line::styled("", Style::default().bg(app.theme.color_surface())));
+    lines.push(Line::styled(
+        "",
+        Style::default().bg(app.theme.color_surface()),
+    ));
 
     let lyrics_fetch_label = format!(
         "{}: {}",
@@ -1126,16 +1239,22 @@ fn render_local_audio_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &m
 
         let style = if idx == app.local_audio_settings_selected {
             if disabled {
-                Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())
+                Style::default()
+                    .fg(app.theme.color_subtext())
+                    .bg(app.theme.color_surface())
             } else {
                 Style::default()
                     .fg(app.theme.color_accent2())
                     .add_modifier(Modifier::BOLD)
             }
         } else if disabled {
-            Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface())
         } else {
-            Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface())
+            Style::default()
+                .fg(app.theme.color_text())
+                .bg(app.theme.color_surface())
         };
         lines.push(Line::styled(format!("  {}", text), style));
     }
@@ -1154,10 +1273,17 @@ fn render_about_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(" about ")
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
@@ -1176,9 +1302,11 @@ fn render_about_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         height: 1,
     };
     f.render_widget(
-        Paragraph::new(version)
-            .alignment(Alignment::Center)
-            .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())),
+        Paragraph::new(version).alignment(Alignment::Center).style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        ),
         version_area,
     );
 }
@@ -1188,8 +1316,11 @@ fn render_about_braille(f: &mut ratatui::Frame, area: Rect, app: &mut AppState) 
         return;
     }
     let lines = about_braille_lines(area.width as usize, area.height as usize);
-    let p = Paragraph::new(lines)
-        .style(Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface()));
+    let p = Paragraph::new(lines).style(
+        Style::default()
+            .fg(app.theme.color_text())
+            .bg(app.theme.color_surface()),
+    );
     f.render_widget(p, area);
 }
 
@@ -1237,7 +1368,14 @@ fn render_about_text(f: &mut ratatui::Frame, area: Rect, app: &mut AppState) {
 
     let lines: Vec<Line> = rendered
         .into_iter()
-        .map(|l| Line::styled(l, Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface())))
+        .map(|l| {
+            Line::styled(
+                l,
+                Style::default()
+                    .fg(app.theme.color_text())
+                    .bg(app.theme.color_surface()),
+            )
+        })
         .collect();
     let p = Paragraph::new(lines)
         .style(Style::default().bg(app.theme.color_surface()))
@@ -1302,7 +1440,11 @@ fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
     }
     rows = rows[start..end].to_vec();
 
-    let rows_w = rows.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let rows_w = rows
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
     let canvas_w = selected.width.max(rows_w);
     let canvas_h = selected.height.max(rows.len());
 
@@ -1324,7 +1466,9 @@ fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
         }
     }
 
-    grid.into_iter().map(|row| Line::from(row.into_iter().collect::<String>())).collect()
+    grid.into_iter()
+        .map(|row| Line::from(row.into_iter().collect::<String>()))
+        .collect()
 }
 
 fn select_about_braille_art<'a>(
@@ -1353,8 +1497,7 @@ fn select_about_braille_art<'a>(
         return Some(art);
     }
 
-    arts
-        .iter()
+    arts.iter()
         .filter(|art| art.width > 0 && art.height > 0)
         .min_by_key(|art| {
             let dw = art.width.saturating_sub(width) as u128;
@@ -1373,14 +1516,25 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         .borders(Borders::ALL)
         .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, " 按键绑定 ", " Keybinds "))
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 2, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     f.render_widget(Paragraph::new(""), rows[0]);
 
@@ -1450,12 +1604,7 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         (selected + 1 - visible_rows).min(max_scroll)
     };
 
-    for (idx, (label, key)) in items
-        .iter()
-        .enumerate()
-        .skip(scroll)
-        .take(visible_rows)
-    {
+    for (idx, (label, key)) in items.iter().enumerate().skip(scroll).take(visible_rows) {
         let style = if idx == selected {
             Style::default()
                 .fg(app.theme.color_accent2())
@@ -1464,10 +1613,7 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
             Style::default().fg(app.theme.color_text())
         };
         f.render_widget(
-            Paragraph::new(Line::styled(
-                format!("  {}: {}", label, key),
-                style,
-            )),
+            Paragraph::new(Line::styled(format!("  {}: {}", label, key), style)),
             Rect {
                 x: rows[1].x,
                 y: rows[1].y + (idx - scroll) as u16,
@@ -1483,7 +1629,7 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
             "Up/Down 浏览  Esc 关闭（仅查看）",
             "Up/Down browse  Esc close (view only, no rebinding)",
         ))
-            .style(Style::default().fg(app.theme.color_subtext())),
+        .style(Style::default().fg(app.theme.color_subtext())),
         rows[2],
     );
 }
@@ -1496,16 +1642,27 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-            .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
+        .border_set(crate::tmplayer::ui::borders::SOLID_BORDER)
         .title(lang_text(app, "均衡器", "Equalizer"))
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()));
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
 
     let bg = Style::default().bg(app.theme.color_surface());
-    let sub = Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface());
-    let text = Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface());
+    let sub = Style::default()
+        .fg(app.theme.color_subtext())
+        .bg(app.theme.color_surface());
+    let text = Style::default()
+        .fg(app.theme.color_text())
+        .bg(app.theme.color_surface());
     let selected_bg = Style::default()
         .fg(app.theme.color_base())
         .bg(app.theme.color_accent())
@@ -1521,8 +1678,18 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         width: inner.width,
         height: 1,
     };
-    let freq_label_rect = Rect { x: inner.x, y: inner.y + inner.height - 2, width: inner.width, height: 1 };
-    let gain_label_rect = Rect { x: inner.x, y: inner.y + inner.height - 1, width: inner.width, height: 1 };
+    let freq_label_rect = Rect {
+        x: inner.x,
+        y: inner.y + inner.height - 2,
+        width: inner.width,
+        height: 1,
+    };
+    let gain_label_rect = Rect {
+        x: inner.x,
+        y: inner.y + inner.height - 1,
+        width: inner.width,
+        height: 1,
+    };
     let bars_rect = Rect {
         x: inner.x,
         y: inner.y + 1,
@@ -1531,9 +1698,7 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
     };
 
     f.render_widget(
-        Paragraph::new("")
-            .style(sub)
-            .wrap(Wrap { trim: true }),
+        Paragraph::new("").style(sub).wrap(Wrap { trim: true }),
         hint_rect,
     );
 
@@ -1577,7 +1742,11 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
 
     // fixed height: 25 rows => +12..0..-12
     let want_h: u16 = 25;
-    let bars_h = if bars_rect.height >= want_h { want_h } else { bars_rect.height.max(3) };
+    let bars_h = if bars_rect.height >= want_h {
+        want_h
+    } else {
+        bars_rect.height.max(3)
+    };
     let y0 = bars_rect.y + (bars_rect.height.saturating_sub(bars_h)) / 2;
 
     // helper: map row index to db
@@ -1650,7 +1819,8 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         }
 
         // right padding
-        let drawn = (cw.saturating_mul(BANDS as u16) + gap.saturating_mul((BANDS as u16).saturating_sub(1)))
+        let drawn = (cw.saturating_mul(BANDS as u16)
+            + gap.saturating_mul((BANDS as u16).saturating_sub(1)))
             + (x0 - bars_rect.x);
         if drawn < bars_rect.width {
             spans.push(ratatui::text::Span::styled(
@@ -1668,7 +1838,10 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         width: bars_rect.width,
         height: bars_h,
     };
-    f.render_widget(Paragraph::new(lines).style(bg).wrap(Wrap { trim: false }), draw_rect);
+    f.render_widget(
+        Paragraph::new(lines).style(bg).wrap(Wrap { trim: false }),
+        draw_rect,
+    );
 
     // bottom labels (two lines): keep frequency + always show numeric gain.
     let mut freq_spans: Vec<ratatui::text::Span> = Vec::new();
@@ -1679,7 +1852,11 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         gain_spans.push(ratatui::text::Span::styled(pad, bg));
     }
     for b in 0..BANDS {
-        let style = if b == app.eq_selected { selected_bg } else { sub };
+        let style = if b == app.eq_selected {
+            selected_bg
+        } else {
+            sub
+        };
 
         let mut ftxt = freq_labels[b].clone();
         if unicode_width::UnicodeWidthStr::width(ftxt.as_str()) as u16 > cw {
@@ -1688,7 +1865,12 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         let fpad = cw.saturating_sub(unicode_width::UnicodeWidthStr::width(ftxt.as_str()) as u16);
         let fleft = fpad / 2;
         let fright = fpad - fleft;
-        let mut fcell = format!("{}{}{}", " ".repeat(fleft as usize), ftxt, " ".repeat(fright as usize));
+        let mut fcell = format!(
+            "{}{}{}",
+            " ".repeat(fleft as usize),
+            ftxt,
+            " ".repeat(fright as usize)
+        );
         if b + 1 < BANDS {
             fcell.push_str(&" ".repeat(gap as usize));
         }
@@ -1701,21 +1883,35 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         let gpad = cw.saturating_sub(unicode_width::UnicodeWidthStr::width(gtxt.as_str()) as u16);
         let gleft = gpad / 2;
         let gright = gpad - gleft;
-        let mut gcell = format!("{}{}{}", " ".repeat(gleft as usize), gtxt, " ".repeat(gright as usize));
+        let mut gcell = format!(
+            "{}{}{}",
+            " ".repeat(gleft as usize),
+            gtxt,
+            " ".repeat(gright as usize)
+        );
         if b + 1 < BANDS {
             gcell.push_str(&" ".repeat(gap as usize));
         }
         gain_spans.push(ratatui::text::Span::styled(gcell, style));
     }
-    f.render_widget(Paragraph::new(Line::from(freq_spans)).style(bg), freq_label_rect);
-    f.render_widget(Paragraph::new(Line::from(gain_spans)).style(bg), gain_label_rect);
+    f.render_widget(
+        Paragraph::new(Line::from(freq_spans)).style(bg),
+        freq_label_rect,
+    );
+    f.render_widget(
+        Paragraph::new(Line::from(gain_spans)).style(bg),
+        gain_label_rect,
+    );
 }
 
 pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option<Action> {
     // Eq modal consumes clicks first
     if app.overlay == Overlay::EqModal {
         let area = centered_rect(layout.full, 44, 31);
-        let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+        let inner = area.inner(&ratatui::layout::Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
         if inner.height >= 3 {
             let bars_rect = Rect {
                 x: inner.x,
@@ -1759,11 +1955,17 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
                     }
                 }
 
-                let Some(band) = band else { return None; };
+                let Some(band) = band else {
+                    return None;
+                };
 
                 // fixed height mapping: prefer 25 rows (12..0..-12)
                 let want_h: u16 = 25;
-                let bars_h = if bars_rect.height >= want_h { want_h } else { bars_rect.height.max(3) };
+                let bars_h = if bars_rect.height >= want_h {
+                    want_h
+                } else {
+                    bars_rect.height.max(3)
+                };
                 let y0 = bars_rect.y + (bars_rect.height.saturating_sub(bars_h)) / 2;
                 if row < y0 || row >= y0 + bars_h {
                     return None;
@@ -1804,7 +2006,10 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
     }
 
     if contains(layout.info_progress, col, row) {
-        return Some(Action::SeekToFraction(ratio_in_track(layout.info_progress, col)));
+        return Some(Action::SeekToFraction(ratio_in_track(
+            layout.info_progress,
+            col,
+        )));
     }
 
     if contains(layout.playlist_list_inner, col, row) {

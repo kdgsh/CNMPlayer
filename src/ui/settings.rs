@@ -1,12 +1,12 @@
 use crate::app::{App, Overlay};
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
-use crate::tmplayer::data::about::{about_info, BrailleImage};
+use crate::tmplayer::data::about::{BrailleImage, about_info};
 use crate::tmplayer::ui::borders::SOLID_BORDER;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 
 pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
     let size = frame.size();
@@ -53,7 +53,11 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
 fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
@@ -125,7 +129,11 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
 fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
         .split(inner);
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
@@ -162,7 +170,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             l(app, "超级流畅", "Super Smooth"),
             on_off(app, app.config.super_smooth_bar)
         ),
-        format!("{}: {}", l(app, "频谱间隔", "Bars Gap"), on_off(app, app.config.bars_gap)),
+        format!(
+            "{}: {}",
+            l(app, "频谱间隔", "Bars Gap"),
+            on_off(app, app.config.bars_gap)
+        ),
         format!("{}: {}", l(app, "频谱数", "Bars Count"), bar_number),
         format!("{}: {}", l(app, "声道", "Channels"), channels),
         format!(
@@ -222,7 +234,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
 fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(2),
+        ])
         .split(inner);
     frame.render_widget(
         Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
@@ -265,11 +281,21 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         Style::default().fg(app.theme.color_subtext()),
     )));
     lines.push(Line::from(Span::styled(
-        format!("  {}", l(app, "按键绑定弹窗（Ctrl+K）", "Open Keybinds (Ctrl+K)")),
+        format!(
+            "  {}",
+            l(app, "按键绑定弹窗（Ctrl+K）", "Open Keybinds (Ctrl+K)")
+        ),
         Style::default().fg(app.theme.color_subtext()),
     )));
     lines.push(Line::from(Span::styled(
-        format!("  {}", l(app, "重置快捷键（Ctrl+Alt+R）", "Reset Keybinds (Ctrl+Alt+R)")),
+        format!(
+            "  {}",
+            l(
+                app,
+                "重置快捷键（Ctrl+Alt+R）",
+                "Reset Keybinds (Ctrl+Alt+R)"
+            )
+        ),
         Style::default().fg(app.theme.color_subtext()),
     )));
 
@@ -296,9 +322,12 @@ fn draw_keybind_settings(frame: &mut Frame, app: &App, inner: Rect) {
         format!(
             "{}: {}  {}",
             l(app, "正在重绑", "Rebinding"),
-            app.keybind_label_for_index(index)
-                ,
-            l(app, "按下新快捷键，Esc 取消", "Press a new shortcut, Esc to cancel")
+            app.keybind_label_for_index(index),
+            l(
+                app,
+                "按下新快捷键，Esc 取消",
+                "Press a new shortcut, Esc to cancel"
+            )
         )
     } else {
         l(
@@ -354,13 +383,11 @@ fn draw_about_modal(frame: &mut Frame, app: &App, size: Rect) {
         height: 1,
     };
     frame.render_widget(
-        Paragraph::new(version)
-            .alignment(Alignment::Center)
-            .style(
-                Style::default()
-                    .fg(app.theme.color_subtext())
-                    .bg(app.theme.color_surface()),
-            ),
+        Paragraph::new(version).alignment(Alignment::Center).style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        ),
         version_area,
     );
 }
@@ -371,8 +398,11 @@ fn draw_about_braille(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     let lines = about_braille_lines(area.width as usize, area.height as usize);
-    let p = Paragraph::new(lines)
-        .style(Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface()));
+    let p = Paragraph::new(lines).style(
+        Style::default()
+            .fg(app.theme.color_text())
+            .bg(app.theme.color_surface()),
+    );
     frame.render_widget(p, area);
 }
 
@@ -423,7 +453,9 @@ fn draw_about_text(frame: &mut Frame, app: &App, area: Rect) {
         .map(|l| {
             Line::styled(
                 l,
-                Style::default().fg(app.theme.color_text()).bg(app.theme.color_surface()),
+                Style::default()
+                    .fg(app.theme.color_text())
+                    .bg(app.theme.color_surface()),
             )
         })
         .collect();
@@ -490,7 +522,11 @@ fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
     }
     rows = rows[start..end].to_vec();
 
-    let rows_w = rows.iter().map(|line| line.chars().count()).max().unwrap_or(0);
+    let rows_w = rows
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
     let canvas_w = selected.width.max(rows_w);
     let canvas_h = selected.height.max(rows.len());
 
@@ -512,8 +548,7 @@ fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
         }
     }
 
-    grid
-        .into_iter()
+    grid.into_iter()
         .map(|row| Line::from(row.into_iter().collect::<String>()))
         .collect()
 }
@@ -544,16 +579,12 @@ fn select_about_braille_art<'a>(
         return Some(art);
     }
 
-    arts
-        .iter()
+    arts.iter()
         .filter(|art| art.width > 0 && art.height > 0)
         .min_by_key(|art| {
             let dw = art.width.saturating_sub(width) as u128;
             let dh = art.height.saturating_sub(height) as u128;
-            let overflow = dw
-                .saturating_mul(dh)
-                .saturating_add(dw)
-                .saturating_add(dh);
+            let overflow = dw.saturating_mul(dh).saturating_add(dw).saturating_add(dh);
             let area = (art.width as u128).saturating_mul(art.height as u128);
             (overflow, area)
         })

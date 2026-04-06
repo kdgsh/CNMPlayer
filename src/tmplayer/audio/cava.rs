@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::PathBuf;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
@@ -161,7 +161,10 @@ impl CavaRunner {
     }
 
     pub fn latest_stereo_bars(&self) -> (Vec<f32>, Vec<f32>) {
-        (self.left.lock().unwrap().clone(), self.right.lock().unwrap().clone())
+        (
+            self.left.lock().unwrap().clone(),
+            self.right.lock().unwrap().clone(),
+        )
     }
 }
 
@@ -214,7 +217,8 @@ fn resolve_cava_executable() -> Result<(PathBuf, Option<TempDir>)> {
             .tempdir()
             .context("create temp dir for cava")?;
         let path = temp_dir.path().join("cava");
-        fs::write(&path, embedded_cava_bytes()).with_context(|| format!("write temp cava: {}", path.display()))?;
+        fs::write(&path, embedded_cava_bytes())
+            .with_context(|| format!("write temp cava: {}", path.display()))?;
 
         #[cfg(unix)]
         {

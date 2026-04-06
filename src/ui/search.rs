@@ -2,11 +2,11 @@ use crate::app::{App, SearchItem};
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw_search(frame: &mut Frame, app: &mut App) {
@@ -14,10 +14,7 @@ pub fn draw_search(frame: &mut Frame, app: &mut App) {
     app.clear_content_hits();
 
     let size = frame.size();
-    frame.render_widget(
-        Block::default().style(base_bg_style(app)),
-        size,
-    );
+    frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 42 || size.height < 14 {
         frame.render_widget(
@@ -25,7 +22,7 @@ pub fn draw_search(frame: &mut Frame, app: &mut App) {
                 Language::Zh => "终端窗口过小",
                 Language::En => "Terminal too small",
             })
-                .style(Style::default().fg(app.theme.color_subtext())),
+            .style(Style::default().fg(app.theme.color_subtext())),
             size,
         );
         return;
@@ -33,7 +30,10 @@ pub fn draw_search(frame: &mut Frame, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(player_bar::PLAYER_BAR_HEIGHT)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(player_bar::PLAYER_BAR_HEIGHT),
+        ])
         .split(size);
 
     draw_result_panel(frame, app, rows[0]);
@@ -170,11 +170,7 @@ fn render_search_row(
     let used = display_width(&clipped_left) + display_width(&right);
     let space = usize::from(row.width).saturating_sub(used).max(1);
 
-    let right_style = if focused {
-        row_style
-    } else {
-        row_style
-    };
+    let right_style = if focused { row_style } else { row_style };
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![

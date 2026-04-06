@@ -1,12 +1,12 @@
 use crate::tmplayer::app::state::AppState;
 use crate::tmplayer::app::state::{LocalFolderKind, Overlay, PlayMode};
-use crate::tmplayer::ui::borders::SOLID_BORDER;
 use crate::tmplayer::render::cover_cache::CoverKey;
+use crate::tmplayer::ui::borders::SOLID_BORDER;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -26,22 +26,42 @@ pub struct PlaylistPanelLayout {
 fn list_only_layout(inner: Rect) -> PlaylistPanelLayout {
     PlaylistPanelLayout {
         inner,
-        cover_area: Rect { x: inner.x, y: inner.y, width: inner.width, height: 0 },
-        cover_rect: Rect { x: inner.x, y: inner.y, width: 0, height: 0 },
-        separator_area: Rect { x: inner.x, y: inner.y, width: inner.width, height: 0 },
+        cover_area: Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 0,
+        },
+        cover_rect: Rect {
+            x: inner.x,
+            y: inner.y,
+            width: 0,
+            height: 0,
+        },
+        separator_area: Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 0,
+        },
         list_area: inner,
         list_inner: inner,
     }
 }
 
 pub fn compute_layout(area: Rect, app: &AppState) -> PlaylistPanelLayout {
-    let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = area.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
 
     let show_cover = app.local_view_album_cover.is_some()
         || (app.player.mode == PlayMode::LocalPlayback
-            && (app.local_folder_kind == LocalFolderKind::Album || app.local_folder_kind == LocalFolderKind::MultiAlbum));
+            && (app.local_folder_kind == LocalFolderKind::Album
+                || app.local_folder_kind == LocalFolderKind::MultiAlbum));
 
-    if !show_cover || inner.width < MIN_COVER_LAYOUT_WIDTH || inner.height < MIN_COVER_LAYOUT_HEIGHT {
+    if !show_cover || inner.width < MIN_COVER_LAYOUT_WIDTH || inner.height < MIN_COVER_LAYOUT_HEIGHT
+    {
         return list_only_layout(inner);
     }
 
@@ -50,10 +70,25 @@ pub fn compute_layout(area: Rect, app: &AppState) -> PlaylistPanelLayout {
     let cover_h = cover_h.clamp(3, inner.height.saturating_sub(4));
     let sep_h = 1u16;
     let list_h = inner.height.saturating_sub(cover_h).saturating_sub(sep_h);
-    let cover_area = Rect { x: inner.x, y: inner.y, width: inner.width, height: cover_h };
+    let cover_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: cover_h,
+    };
     let cover_rect = cover_rect_in_area(cover_area);
-    let separator_area = Rect { x: inner.x, y: inner.y + cover_h, width: inner.width, height: sep_h };
-    let list_area = Rect { x: inner.x, y: inner.y + cover_h + sep_h, width: inner.width, height: list_h };
+    let separator_area = Rect {
+        x: inner.x,
+        y: inner.y + cover_h,
+        width: inner.width,
+        height: sep_h,
+    };
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y + cover_h + sep_h,
+        width: inner.width,
+        height: list_h,
+    };
     let list_inner = list_area;
 
     PlaylistPanelLayout {
@@ -78,7 +113,12 @@ fn cover_rect_in_area(area: Rect) -> Rect {
 
     let x = area.x + (area.width.saturating_sub(cover_w)) / 2;
     let y = area.y + (area.height.saturating_sub(cover_h)) / 2;
-    Rect { x, y, width: cover_w, height: cover_h }
+    Rect {
+        x,
+        y,
+        width: cover_w,
+        height: cover_h,
+    }
 }
 
 fn render_album_cover(f: &mut Frame, area: Rect, app: &mut AppState) {
@@ -103,7 +143,10 @@ fn render_album_cover(f: &mut Frame, area: Rect, app: &mut AppState) {
 
     if kitty_enabled {
         // During expansion, show a solid theme color to avoid any heavy work.
-        let bg = if let (Some(bytes), Some(hash)) = (app.local_view_album_cover.as_deref(), app.local_view_album_cover_hash) {
+        let bg = if let (Some(bytes), Some(hash)) = (
+            app.local_view_album_cover.as_deref(),
+            app.local_view_album_cover_hash,
+        ) {
             app.cover_dominant_rgb(hash, bytes)
                 .map(|(r, g, b)| Color::Rgb(r, g, b))
                 .unwrap_or(app.theme.color_surface())
@@ -127,15 +170,7 @@ fn render_album_cover(f: &mut Frame, area: Rect, app: &mut AppState) {
         let bytes = app.local_view_album_cover.as_deref();
         let hash = app.local_view_album_cover_hash;
         let folder = app.local_view_album_folder.as_ref();
-        warm_album_cover_ascii_cache(
-            bytes,
-            hash,
-            folder,
-            cover.width,
-            cover.height,
-            app,
-            '█',
-        );
+        warm_album_cover_ascii_cache(bytes, hash, folder, cover.width, cover.height, app, '█');
 
         // Keep the original prev/next hint bars in kitty mode.
         render_multi_album_hint_bars(f, area, cover, app);
@@ -178,10 +213,21 @@ fn render_album_cover(f: &mut Frame, area: Rect, app: &mut AppState) {
             '█',
         );
 
-        let composed = compose_slide_cover(cover.width, cover.height, &from_ascii, &to_ascii, anim.dir, offset);
+        let composed = compose_slide_cover(
+            cover.width,
+            cover.height,
+            &from_ascii,
+            &to_ascii,
+            anim.dir,
+            offset,
+        );
         f.render_widget(
             Paragraph::new(composed)
-                .style(Style::default().bg(app.theme.color_surface()).fg(app.theme.color_text()))
+                .style(
+                    Style::default()
+                        .bg(app.theme.color_surface())
+                        .fg(app.theme.color_text()),
+                )
                 .wrap(Wrap { trim: false }),
             cover,
         );
@@ -204,7 +250,11 @@ fn render_album_cover(f: &mut Frame, area: Rect, app: &mut AppState) {
         app.local_view_album_cover = current_cover;
         f.render_widget(
             Paragraph::new(ascii)
-                .style(Style::default().bg(app.theme.color_surface()).fg(app.theme.color_text()))
+                .style(
+                    Style::default()
+                        .bg(app.theme.color_surface())
+                        .fg(app.theme.color_text()),
+                )
                 .wrap(Wrap { trim: false }),
             cover,
         );
@@ -226,19 +276,37 @@ fn render_multi_album_hint_bars(f: &mut Frame, area: Rect, cover: Rect, app: &Ap
 
     if app.local_view_album_index > 0 {
         // Stick to playlist border (inside)
-        let left = Rect { x: area.x, y: cover.y, width: 1, height: h };
+        let left = Rect {
+            x: area.x,
+            y: cover.y,
+            width: 1,
+            height: h,
+        };
         let s = (0..h).map(|_| "▒\n").collect::<String>();
         f.render_widget(
-            Paragraph::new(s).style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())),
+            Paragraph::new(s).style(
+                Style::default()
+                    .fg(app.theme.color_subtext())
+                    .bg(app.theme.color_surface()),
+            ),
             left,
         );
     }
     if app.local_view_album_index + 1 < app.local_album_folders.len() {
         // Stick to playlist border (inside)
-        let right = Rect { x: area.x + area.width.saturating_sub(1), y: cover.y, width: 1, height: h };
+        let right = Rect {
+            x: area.x + area.width.saturating_sub(1),
+            y: cover.y,
+            width: 1,
+            height: h,
+        };
         let s = (0..h).map(|_| "▒\n").collect::<String>();
         f.render_widget(
-            Paragraph::new(s).style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())),
+            Paragraph::new(s).style(
+                Style::default()
+                    .fg(app.theme.color_subtext())
+                    .bg(app.theme.color_surface()),
+            ),
             right,
         );
     }
@@ -250,7 +318,11 @@ fn render_separator(f: &mut Frame, area: Rect, app: &AppState) {
     }
     let line = "─".repeat(area.width as usize);
     f.render_widget(
-        Paragraph::new(line).style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface())),
+        Paragraph::new(line).style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        ),
         area,
     );
 }
@@ -273,7 +345,11 @@ fn render_playlist_list(f: &mut Frame, area: Rect, app: &AppState) {
         // Also clamp to tail.
         start = start.min(total - visible);
     }
-    let end = if visible == 0 { 0 } else { (start + visible).min(total) };
+    let end = if visible == 0 {
+        0
+    } else {
+        (start + visible).min(total)
+    };
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -310,8 +386,7 @@ fn render_playlist_list(f: &mut Frame, area: Rect, app: &AppState) {
 
     // No in-panel shortcut hint; see Keys modal.
 
-    let p = Paragraph::new(lines)
-        .style(Style::default().bg(app.theme.color_surface()));
+    let p = Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface()));
     f.render_widget(p, area);
 }
 
@@ -352,7 +427,11 @@ fn album_cover_ascii(
     default_ch: char,
 ) -> String {
     if let (Some(bytes), Some(hash)) = (bytes, hash) {
-        let key = CoverKey { hash, width, height };
+        let key = CoverKey {
+            hash,
+            width,
+            height,
+        };
         let mut cache = app.cover_cache.borrow_mut();
         if let Some(s) = cache.get(key) {
             return s;
@@ -360,7 +439,9 @@ fn album_cover_ascii(
         drop(cache);
 
         if let Some(folder) = folder {
-            if let Some(s) = crate::tmplayer::playback::local_player::read_cover_ascii_cache(folder, hash, width, height) {
+            if let Some(s) = crate::tmplayer::playback::local_player::read_cover_ascii_cache(
+                folder, hash, width, height,
+            ) {
                 app.cover_cache.borrow_mut().put(key, s.clone());
                 return s;
             }
@@ -394,13 +475,19 @@ fn warm_album_cover_ascii_cache(
         return;
     };
 
-    let key = CoverKey { hash, width, height };
+    let key = CoverKey {
+        hash,
+        width,
+        height,
+    };
     if app.cover_cache.borrow().contains(key) {
         return;
     }
 
     if let Some(folder) = folder {
-        if let Some(s) = crate::tmplayer::playback::local_player::read_cover_ascii_cache(folder, hash, width, height) {
+        if let Some(s) = crate::tmplayer::playback::local_player::read_cover_ascii_cache(
+            folder, hash, width, height,
+        ) {
             app.cover_cache.borrow_mut().put(key, s);
             return;
         }
@@ -479,7 +566,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(SOLID_BORDER)
-        .style(Style::default().fg(app.theme.color_subtext()).bg(app.theme.color_surface()))
+        .style(
+            Style::default()
+                .fg(app.theme.color_subtext())
+                .bg(app.theme.color_surface()),
+        )
         .title(format!("Playlist ({} tracks)", app.playlist_view.len()));
     f.render_widget(block, area);
 
@@ -522,7 +613,15 @@ mod tests {
         app.player.mode = PlayMode::LocalPlayback;
         app.local_folder_kind = LocalFolderKind::MultiAlbum;
 
-        let layout = compute_layout(Rect { x: 0, y: 0, width: 1, height: 8 }, &app);
+        let layout = compute_layout(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 8,
+            },
+            &app,
+        );
 
         assert_eq!(layout.cover_area.height, 0);
         assert_eq!(layout.list_area.width, 0);
@@ -535,13 +634,20 @@ mod tests {
         app.player.mode = PlayMode::LocalPlayback;
         app.local_folder_kind = LocalFolderKind::Album;
 
-        let area = Rect { x: 0, y: 0, width: 16, height: 6 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 16,
+            height: 6,
+        };
         let layout = compute_layout(area, &app);
-        let inner = area.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+        let inner = area.inner(&ratatui::layout::Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
 
         assert_eq!(layout.cover_area.height, 0);
         assert_eq!(layout.list_area, inner);
         assert_eq!(layout.list_inner, inner);
     }
 }
-

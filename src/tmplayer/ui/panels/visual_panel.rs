@@ -2,11 +2,11 @@ use crate::tmplayer::app::state::{AppState, LyricLine};
 use crate::tmplayer::data::config::VisualizeMode;
 use crate::tmplayer::render::{oscilloscope_renderer, spectrum_renderer};
 use crate::tmplayer::ui::borders::SOLID_BORDER;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 
 pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut AppState) {
     let outer = Rect {
@@ -21,7 +21,10 @@ pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut Ap
         .style(Style::default().fg(app.theme.color_subtext()));
     f.render_widget(outer_block, outer);
 
-    let inner = outer.inner(&ratatui::layout::Margin { horizontal: 1, vertical: 1 });
+    let inner = outer.inner(&ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -32,7 +35,12 @@ pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut Ap
     }
 
     let lyric_h = lyric_area.height.saturating_sub(2).min(inner.height);
-    let lyric_inner = Rect { x: inner.x, y: inner.y, width: inner.width, height: lyric_h };
+    let lyric_inner = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: lyric_h,
+    };
     let spectrum_inner = Rect {
         x: inner.x,
         y: inner.y + lyric_h,
@@ -50,7 +58,12 @@ pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut Ap
                         .add_modifier(Modifier::BOLD),
                 )
                 .alignment(Alignment::Center),
-            Rect { x: lyric_inner.x, y: lyric_inner.y, width: lyric_inner.width, height: 1 },
+            Rect {
+                x: lyric_inner.x,
+                y: lyric_inner.y,
+                width: lyric_inner.width,
+                height: 1,
+            },
         );
     }
     if lyric_inner.height >= 2 && !l2.is_empty() {
@@ -58,7 +71,12 @@ pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut Ap
             Paragraph::new(l2)
                 .style(Style::default().fg(app.theme.color_subtext()))
                 .alignment(Alignment::Center),
-            Rect { x: lyric_inner.x, y: lyric_inner.y + 1, width: lyric_inner.width, height: 1 },
+            Rect {
+                x: lyric_inner.x,
+                y: lyric_inner.y + 1,
+                width: lyric_inner.width,
+                height: 1,
+            },
         );
     }
 

@@ -1,10 +1,10 @@
 use crate::app::App;
 use crate::data::config::Language;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 
 const PAGE_LYRICS_PANEL_HEIGHT: u16 = 4;
 

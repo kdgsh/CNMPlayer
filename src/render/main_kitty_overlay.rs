@@ -91,7 +91,10 @@ impl MainKittyOverlay {
         let mut new_slots: HashMap<CoverSlotKey, SlotPlacementState> = HashMap::new();
 
         for target in targets {
-            if target.base_rect.width == 0 || target.base_rect.height == 0 || target.bytes.is_empty() {
+            if target.base_rect.width == 0
+                || target.base_rect.height == 0
+                || target.bytes.is_empty()
+            {
                 continue;
             }
 
@@ -100,7 +103,8 @@ impl MainKittyOverlay {
                 continue;
             }
 
-            let (max_w, max_h) = target_px(target.base_rect.width, target.base_rect.height, quality);
+            let (max_w, max_h) =
+                target_px(target.base_rect.width, target.base_rect.height, quality);
 
             let bytes_hash = hash_bytes(target.bytes);
             let render_hash = hash_render_variant(bytes_hash, max_w, max_h, quality);
@@ -173,7 +177,9 @@ impl MainKittyOverlay {
     fn transmit_image_variant(&mut self, hash: u64, bytes: &[u8], max_w: u32, max_h: u32) {
         let image_id = self.image_id_for_hash(hash);
 
-        let Some((b64, w, h)) = kitty_graphics::encode_image_bytes_to_png_base64(bytes, max_w, max_h) else {
+        let Some((b64, w, h)) =
+            kitty_graphics::encode_image_bytes_to_png_base64(bytes, max_w, max_h)
+        else {
             return;
         };
 
@@ -191,7 +197,8 @@ impl MainKittyOverlay {
     }
 
     fn clear_all(&mut self) {
-        let stale_slots: Vec<(CoverSlotKey, SlotPlacementState)> = self.last_slots.drain().collect();
+        let stale_slots: Vec<(CoverSlotKey, SlotPlacementState)> =
+            self.last_slots.drain().collect();
         for (slot, state) in stale_slots {
             self.delete_slot_placements(slot, state.image_id);
         }
@@ -486,9 +493,9 @@ fn collect_occluders(app: &App, size: Rect) -> Vec<Rect> {
 
 fn settings_modal_area(size: Rect, overlay: Option<Overlay>) -> Option<Rect> {
     match overlay {
-        Some(Overlay::Settings) | Some(Overlay::SettingsPlayback) | Some(Overlay::SettingsKeybinds) => {
-            Some(centered_rect(70, 20, size))
-        }
+        Some(Overlay::Settings)
+        | Some(Overlay::SettingsPlayback)
+        | Some(Overlay::SettingsKeybinds) => Some(centered_rect(70, 20, size)),
         Some(Overlay::SettingsAbout) => Some(centered_rect(70, 22, size)),
         _ => None,
     }
@@ -510,7 +517,9 @@ fn search_box_area(size: Rect, anim_h: u16) -> Option<Rect> {
         return None;
     }
 
-    let visible_h = anim_h.min(crate::ui::search_box::TARGET_HEIGHT).min(size.height);
+    let visible_h = anim_h
+        .min(crate::ui::search_box::TARGET_HEIGHT)
+        .min(size.height);
     if visible_h == 0 {
         return None;
     }
@@ -619,7 +628,12 @@ fn subtract_rect_segments(base: Rect, cut: Rect) -> Vec<Rect> {
         .collect()
 }
 
-fn map_segment_to_cover_crop(base: Rect, segment: Rect, image_w: u32, image_h: u32) -> Option<(u32, u32, u32, u32)> {
+fn map_segment_to_cover_crop(
+    base: Rect,
+    segment: Rect,
+    image_w: u32,
+    image_h: u32,
+) -> Option<(u32, u32, u32, u32)> {
     if base.width == 0 || base.height == 0 || segment.width == 0 || segment.height == 0 {
         return None;
     }
@@ -627,7 +641,8 @@ fn map_segment_to_cover_crop(base: Rect, segment: Rect, image_w: u32, image_h: u
         return None;
     }
 
-    let (view_x, view_y, view_w, view_h) = cover_viewport(image_w, image_h, base.width, base.height);
+    let (view_x, view_y, view_w, view_h) =
+        cover_viewport(image_w, image_h, base.width, base.height);
 
     let base_w = base.width as u64;
     let base_h = base.height as u64;
@@ -644,20 +659,26 @@ fn map_segment_to_cover_crop(base: Rect, segment: Rect, image_w: u32, image_h: u
     let src_y = view_y.saturating_add((rel_y0.saturating_mul(view_h_u64) / base_h) as u32);
 
     let src_x_end = view_x.saturating_add(
-        ((rel_x1.saturating_mul(view_w_u64) + base_w.saturating_sub(1)) / base_w)
-            .min(view_w_u64) as u32,
+        ((rel_x1.saturating_mul(view_w_u64) + base_w.saturating_sub(1)) / base_w).min(view_w_u64)
+            as u32,
     );
     let src_y_end = view_y.saturating_add(
-        ((rel_y1.saturating_mul(view_h_u64) + base_h.saturating_sub(1)) / base_h)
-            .min(view_h_u64) as u32,
+        ((rel_y1.saturating_mul(view_h_u64) + base_h.saturating_sub(1)) / base_h).min(view_h_u64)
+            as u32,
     );
 
     if src_x >= image_w || src_y >= image_h {
         return None;
     }
 
-    let src_w = src_x_end.saturating_sub(src_x).max(1).min(image_w.saturating_sub(src_x));
-    let src_h = src_y_end.saturating_sub(src_y).max(1).min(image_h.saturating_sub(src_y));
+    let src_w = src_x_end
+        .saturating_sub(src_x)
+        .max(1)
+        .min(image_w.saturating_sub(src_x));
+    let src_h = src_y_end
+        .saturating_sub(src_y)
+        .max(1)
+        .min(image_h.saturating_sub(src_y));
 
     if src_w == 0 || src_h == 0 {
         return None;
@@ -666,7 +687,12 @@ fn map_segment_to_cover_crop(base: Rect, segment: Rect, image_w: u32, image_h: u
     Some((src_x, src_y, src_w, src_h))
 }
 
-fn cover_viewport(image_w: u32, image_h: u32, target_w: u16, target_h: u16) -> (u32, u32, u32, u32) {
+fn cover_viewport(
+    image_w: u32,
+    image_h: u32,
+    target_w: u16,
+    target_h: u16,
+) -> (u32, u32, u32, u32) {
     if target_w == 0 || target_h == 0 || image_w == 0 || image_h == 0 {
         return (0, 0, image_w.max(1), image_h.max(1));
     }
@@ -718,8 +744,12 @@ fn placement_base_for_slot(slot: CoverSlotKey) -> u32 {
     match slot {
         CoverSlotKey::PlaylistHeader => 1_000_000,
         CoverSlotKey::AuthorHeader => 1_010_000,
-        CoverSlotKey::HomeTile(index) => 2_000_000_u32.saturating_add((index as u32).saturating_mul(SLOT_SEGMENT_CAP as u32)),
-        CoverSlotKey::AuthorTile(index) => 3_000_000_u32.saturating_add((index as u32).saturating_mul(SLOT_SEGMENT_CAP as u32)),
+        CoverSlotKey::HomeTile(index) => {
+            2_000_000_u32.saturating_add((index as u32).saturating_mul(SLOT_SEGMENT_CAP as u32))
+        }
+        CoverSlotKey::AuthorTile(index) => {
+            3_000_000_u32.saturating_add((index as u32).saturating_mul(SLOT_SEGMENT_CAP as u32))
+        }
     }
 }
 

@@ -2,7 +2,7 @@ use anyhow::Result;
 use base64::Engine;
 use crossterm::{cursor, queue, style::Print};
 use image::codecs::png::PngEncoder;
-use image::{imageops, ColorType, ImageEncoder};
+use image::{ColorType, ImageEncoder, imageops};
 use ratatui::layout::Rect;
 use std::io::{self, Write};
 
@@ -63,11 +63,7 @@ pub fn encode_image_bytes_to_png_base64(
         }
     }
 
-    Some((
-        base64::engine::general_purpose::STANDARD.encode(png),
-        w,
-        h,
-    ))
+    Some((base64::engine::general_purpose::STANDARD.encode(png), w, h))
 }
 
 pub fn transmit_png_base64(image_id: u32, b64: &str) -> Result<()> {

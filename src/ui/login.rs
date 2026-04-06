@@ -1,12 +1,12 @@
 use crate::app::{App, LoginMethod};
 use crate::data::config::Language;
+use qrcode::QrCode;
+use qrcode::render::unicode;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph, Wrap};
-use ratatui::Frame;
-use qrcode::render::unicode;
-use qrcode::QrCode;
 
 const DEFAULT_OPENING_TITLE: &str = " ██████╗███╗   ██╗███╗   ███╗██████╗ ██╗      █████╗ ██╗   ██╗███████╗██████╗ \n██╔════╝████╗  ██║████╗ ████║██╔══██╗██║     ██╔══██╗╚██╗ ██╔╝██╔════╝██╔══██╗\n██║     ██╔██╗ ██║██╔████╔██║██████╔╝██║     ███████║ ╚████╔╝ █████╗  ██████╔╝\n██║     ██║╚██╗██║██║╚██╔╝██║██╔═══╝ ██║     ██╔══██║  ╚██╔╝  ██╔══╝  ██╔══██╗\n╚██████╗██║ ╚████║██║ ╚═╝ ██║██║     ███████╗██║  ██║   ██║   ███████╗██║  ██║\n ╚═════╝╚═╝  ╚═══╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝";
 
@@ -18,10 +18,7 @@ pub fn draw_login(frame: &mut Frame, app: &App) {
         return;
     }
 
-    frame.render_widget(
-        Block::default().style(base_bg_style(app)),
-        size,
-    );
+    frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     let title_height = (size.height / 3).max(3);
     let hint_height = 1;
@@ -79,8 +76,8 @@ pub fn draw_login(frame: &mut Frame, app: &App) {
             left_hint,
             "F1/F2/F3 switch login mode  Tab/Up/Down switch focus  Enter confirm",
         ))
-            .style(Style::default().fg(app.theme.color_subtext()))
-            .alignment(Alignment::Left),
+        .style(Style::default().fg(app.theme.color_subtext()))
+        .alignment(Alignment::Left),
         hint_cols[0],
     );
 
@@ -93,10 +90,7 @@ pub fn draw_login(frame: &mut Frame, app: &App) {
 }
 
 fn draw_too_small(frame: &mut Frame, app: &App, area: Rect) {
-    frame.render_widget(
-        Block::default().style(base_bg_style(app)),
-        area,
-    );
+    frame.render_widget(Block::default().style(base_bg_style(app)), area);
     let msg = Paragraph::new(lang_text(app, "终端窗口过小", "Terminal too small"))
         .style(Style::default().fg(app.theme.color_subtext()))
         .alignment(Alignment::Center);
@@ -155,7 +149,10 @@ fn build_form_lines(app: &App) -> Vec<Line<'static>> {
                 &mut lines,
                 app,
                 1,
-                format!("󰦏 {}", lang_text(app, "已扫码，确认登录", "Scanned, Confirm Login")),
+                format!(
+                    "󰦏 {}",
+                    lang_text(app, "已扫码，确认登录", "Scanned, Confirm Login")
+                ),
                 app.login.focus_index == 1,
             );
             if !app.login.qr_url.trim().is_empty() {
@@ -314,7 +311,10 @@ fn push_input_line(
     };
 
     lines.push(Line::from(vec![
-        Span::styled(format!("{}: ", label), row_style.fg(app.theme.color_accent2())),
+        Span::styled(
+            format!("{}: ", label),
+            row_style.fg(app.theme.color_accent2()),
+        ),
         Span::styled(format!("{}{}", shown, cursor), row_style.patch(value_style)),
     ]));
 }

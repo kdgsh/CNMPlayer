@@ -6,7 +6,10 @@ pub struct Ema {
 
 impl Ema {
     pub fn new(alpha: f32, len: usize) -> Self {
-        Self { alpha, state: vec![0.0; len] }
+        Self {
+            alpha,
+            state: vec![0.0; len],
+        }
     }
 
     pub fn apply(&mut self, input: &[f32]) -> Vec<f32> {

@@ -38,7 +38,9 @@ mod imp {
                 Err(_) => return Ok(None),
             };
 
-            let status = player.get_playback_status().unwrap_or(PlaybackStatus::Stopped);
+            let status = player
+                .get_playback_status()
+                .unwrap_or(PlaybackStatus::Stopped);
             let playback = match status {
                 PlaybackStatus::Playing => PlaybackState::Playing,
                 PlaybackStatus::Paused => PlaybackState::Paused,

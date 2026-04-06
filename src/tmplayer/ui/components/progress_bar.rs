@@ -1,9 +1,9 @@
 use crate::tmplayer::app::state::AppState;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 use std::time::Duration;
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState, pos: Duration, dur: Duration) {
@@ -26,7 +26,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState, pos: Duration, dur: Dur
     };
 
     let left = "─".repeat(knob);
-    let right = if w > 0 { "─".repeat(w.saturating_sub(1 + knob)) } else { String::new() };
+    let right = if w > 0 {
+        "─".repeat(w.saturating_sub(1 + knob))
+    } else {
+        String::new()
+    };
 
     let line = Line::from(vec![
         Span::styled(left, Style::default().fg(app.theme.color_accent2())),

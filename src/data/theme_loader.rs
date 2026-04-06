@@ -1,5 +1,5 @@
 use crate::data::assets;
-use crate::ui::theme::{detect_color_capability, Theme, ThemeName, ThemePalette};
+use crate::ui::theme::{Theme, ThemeName, ThemePalette, detect_color_capability};
 use anyhow::Result;
 use serde::Deserialize;
 use std::fs;

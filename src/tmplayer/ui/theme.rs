@@ -81,7 +81,9 @@ impl Theme {
 }
 
 pub fn detect_color_capability() -> ColorCapability {
-    let colorterm = std::env::var("COLORTERM").unwrap_or_default().to_lowercase();
+    let colorterm = std::env::var("COLORTERM")
+        .unwrap_or_default()
+        .to_lowercase();
     if colorterm.contains("truecolor") || colorterm.contains("24bit") {
         return ColorCapability::TrueColor;
     }

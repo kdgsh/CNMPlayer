@@ -1,10 +1,10 @@
 use crate::tmplayer::app::state::AppState;
 use crate::tmplayer::data::config::BarChannels;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     let h = area.height as usize;
@@ -32,12 +32,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         }
     }
 
-    let (bar_widths, gap_width, draw_total, x_offset) = compute_bar_layout(
-        w,
-        app.config.bars_gap,
-        mono_count,
-        app.config.bar_channels,
-    );
+    let (bar_widths, gap_width, draw_total, x_offset) =
+        compute_bar_layout(w, app.config.bars_gap, mono_count, app.config.bar_channels);
     if draw_total == 0 || bar_widths.is_empty() {
         return;
     }
@@ -95,7 +91,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     // Render per-line vertical gradient using theme colors.
     let mut lines: Vec<Line> = Vec::with_capacity(bars_h + 1);
     for (row_idx, row) in app.spectrum_render_grid.iter().enumerate() {
-        let t = if bars_h <= 1 { 1.0 } else { row_idx as f32 / (bars_h - 1) as f32 };
+        let t = if bars_h <= 1 {
+            1.0
+        } else {
+            row_idx as f32 / (bars_h - 1) as f32
+        };
         let fg = vertical_gradient_color(app, t);
         let s = row.iter().collect::<String>();
         lines.push(Line::from(Span::styled(s, Style::default().fg(fg))));
@@ -203,17 +203,15 @@ fn build_display_vals(
     }
 
     match mode {
-        BarChannels::Mono => {
-            (0..draw_total)
-                .map(|i| {
-                    if reverse {
-                        sample_val(data, data_len, draw_total, draw_total - 1 - i)
-                    } else {
-                        sample_val(data, data_len, draw_total, i)
-                    }
-                })
-                .collect()
-        }
+        BarChannels::Mono => (0..draw_total)
+            .map(|i| {
+                if reverse {
+                    sample_val(data, data_len, draw_total, draw_total - 1 - i)
+                } else {
+                    sample_val(data, data_len, draw_total, i)
+                }
+            })
+            .collect(),
         BarChannels::Stereo => {
             let per_side = (draw_total / 2).max(1);
             let mut right: Vec<f32> = (0..per_side)
@@ -234,7 +232,8 @@ fn build_display_vals(
 }
 
 fn sample_val(data: &[f32], data_len: usize, draw_len: usize, i: usize) -> f32 {
-    let idx = ((i as u32) * (data_len as u32) / (draw_len as u32)).min((data_len - 1) as u32) as usize;
+    let idx =
+        ((i as u32) * (data_len as u32) / (draw_len as u32)).min((data_len - 1) as u32) as usize;
     data.get(idx).copied().unwrap_or(0.0).clamp(0.0, 1.0)
 }
 

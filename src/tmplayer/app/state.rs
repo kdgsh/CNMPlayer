@@ -1,12 +1,14 @@
+use crate::data::config::Language;
+use crate::tmplayer::audio::smoother::Ema;
 use crate::tmplayer::data::config::Config;
 use crate::tmplayer::data::playlist::Playlist;
+use crate::tmplayer::playback::remote_fetch::{
+    FetchOptions, RemoteFetchRequest, RemoteFetchResult, TrackKey, start_remote_fetch_worker,
+};
 use crate::tmplayer::render::cover_cache::CoverCache;
 use crate::tmplayer::render::cover_cache::CoverKey;
 use crate::tmplayer::render::cover_renderer::render_cover_ascii;
 use crate::tmplayer::ui::theme::Theme;
-use crate::tmplayer::audio::smoother::Ema;
-use crate::tmplayer::playback::remote_fetch::{FetchOptions, RemoteFetchRequest, RemoteFetchResult, TrackKey, start_remote_fetch_worker};
-use crate::data::config::Language;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -64,11 +66,15 @@ pub struct EqSettings {
 }
 
 pub const EQ_BANDS: usize = 10;
-pub const EQ_FREQS_HZ: [f32; EQ_BANDS] = [31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0];
+pub const EQ_FREQS_HZ: [f32; EQ_BANDS] = [
+    31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
+];
 
 impl Default for EqSettings {
     fn default() -> Self {
-        Self { bands_db: [0.0; EQ_BANDS] }
+        Self {
+            bands_db: [0.0; EQ_BANDS],
+        }
     }
 }
 
@@ -320,7 +326,6 @@ pub struct AppState {
 
     pub last_mouse_click: Option<(Instant, u16, u16)>,
 
-
     // playlist slide animation
     pub playlist_slide_x: i16,
     pub playlist_slide_target_x: i16,
@@ -371,7 +376,10 @@ impl AppState {
                         &ascii,
                     );
                 }
-                let _ = cover_render_res_tx.send(CoverRenderResult { key: req.key, ascii });
+                let _ = cover_render_res_tx.send(CoverRenderResult {
+                    key: req.key,
+                    ascii,
+                });
             }
         });
 
@@ -448,7 +456,8 @@ impl AppState {
         let has_lyrics = self.player.track.lyrics.is_some();
         let has_cover = self.player.track.cover.is_some();
 
-        let enable_fingerprint = self.config.audio_fingerprint && !self.config.acoustid_api_key.trim().is_empty();
+        let enable_fingerprint =
+            self.config.audio_fingerprint && !self.config.acoustid_api_key.trim().is_empty();
         let opts = FetchOptions {
             enable_fetch: self.config.lyrics_cover_fetch,
             download: self.config.lyrics_cover_download,
@@ -576,7 +585,10 @@ impl AppState {
             return true;
         }
 
-        if self.cover_anim.is_some() || self.playlist_album_anim.is_some() || self.pending_system_cover_anim.is_some() {
+        if self.cover_anim.is_some()
+            || self.playlist_album_anim.is_some()
+            || self.pending_system_cover_anim.is_some()
+        {
             return true;
         }
 
@@ -627,7 +639,13 @@ impl AppState {
             || self.spectrum.bars_right.iter().any(|&v| v > TAIL_EPS)
     }
 
-    pub fn start_cover_anim(&mut self, from: CoverSnapshot, to: CoverSnapshot, dir: i8, now: Instant) {
+    pub fn start_cover_anim(
+        &mut self,
+        from: CoverSnapshot,
+        to: CoverSnapshot,
+        dir: i8,
+        now: Instant,
+    ) {
         self.cover_anim = Some(CoverAnim {
             from,
             to,

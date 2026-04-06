@@ -62,7 +62,11 @@ pub struct Config {
     #[serde(default)]
     pub resume_last_position: bool,
 
-    #[serde(default, rename = "default-opening-folder", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "default-opening-folder",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub default_opening_folder: String,
 
     #[serde(default)]
@@ -393,10 +397,7 @@ fn default_keybind_sidebar() -> String {
 }
 
 fn is_legacy_sidebar_default(value: &str) -> bool {
-    let normalized = value
-        .trim()
-        .to_ascii_lowercase()
-        .replace(' ', "");
+    let normalized = value.trim().to_ascii_lowercase().replace(' ', "");
     normalized == "alt+b"
 }
 
@@ -565,11 +566,11 @@ impl Config {
             || !raw.contains("keybind_fullscreen_next")
             || !raw.contains("keybind_fullscreen_toggle_play_pause")
             || !raw.contains("keybind_fullscreen_toggle_mode")
-                        || !raw.contains("keybind_fullscreen_eq")
-                        || !raw.contains("keybind_fullscreen_eq_reset")
+            || !raw.contains("keybind_fullscreen_eq")
+            || !raw.contains("keybind_fullscreen_eq_reset")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("keybind_toggle_like_collapsed")
-              || migrated_legacy_sidebar
+            || migrated_legacy_sidebar
         {
             let _ = cfg.save();
         }

@@ -128,7 +128,11 @@ impl AudioCapture {
     }
 }
 
-fn push_samples(buf: &Arc<Mutex<Vec<f32>>>, last_sample_at: &Arc<Mutex<Option<Instant>>>, data: &[f32]) {
+fn push_samples(
+    buf: &Arc<Mutex<Vec<f32>>>,
+    last_sample_at: &Arc<Mutex<Option<Instant>>>,
+    data: &[f32],
+) {
     let mut guard = buf.lock().unwrap();
     guard.extend_from_slice(data);
 
@@ -204,8 +208,14 @@ fn pick_best_input_device(host: &cpal::Host) -> Option<cpal::Device> {
         let name = device_display_name(&d);
         let lname = name.to_lowercase();
 
-        let looks_like_mic = lname.contains("mic") || lname.contains("microphone") || lname.contains("input") && !lname.contains("monitor");
-        let looks_like_monitor = lname.contains("monitor") || lname.contains("loopback") || lname.contains("stereo mix") || lname.contains("what u hear") || lname.contains("mix");
+        let looks_like_mic = lname.contains("mic")
+            || lname.contains("microphone")
+            || lname.contains("input") && !lname.contains("monitor");
+        let looks_like_monitor = lname.contains("monitor")
+            || lname.contains("loopback")
+            || lname.contains("stereo mix")
+            || lname.contains("what u hear")
+            || lname.contains("mix");
 
         if looks_like_monitor {
             monitor = Some(d);
@@ -314,23 +324,51 @@ fn dummy_stream() -> Result<(cpal::Stream, ())> {
     // create a no-op output stream if possible; fall back to panic avoided by using a minimal input stream impossible.
     // Here we use default host output with silent callback if available.
     let host = cpal::default_host();
-    let device = host.default_output_device().ok_or_else(|| anyhow::anyhow!("no audio device"))?;
+    let device = host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no audio device"))?;
     let config = device.default_output_config()?;
     let err_fn = |err| {
         log::warn!("cpal dummy stream error: {err}");
     };
 
     let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => device.build_output_stream(&config.into(), move |out: &mut [f32], _| {
-            for s in out.iter_mut() { *s = 0.0; }
-        }, err_fn, None)?,
-        cpal::SampleFormat::I16 => device.build_output_stream(&config.into(), move |out: &mut [i16], _| {
-            for s in out.iter_mut() { *s = 0; }
-        }, err_fn, None)?,
-        cpal::SampleFormat::U16 => device.build_output_stream(&config.into(), move |out: &mut [u16], _| {
-            for s in out.iter_mut() { *s = u16::MAX / 2; }
-        }, err_fn, None)?,
-        _ => device.build_output_stream(&config.into(), move |_out: &mut [f32], _| {}, err_fn, None)?,
+        cpal::SampleFormat::F32 => device.build_output_stream(
+            &config.into(),
+            move |out: &mut [f32], _| {
+                for s in out.iter_mut() {
+                    *s = 0.0;
+                }
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::I16 => device.build_output_stream(
+            &config.into(),
+            move |out: &mut [i16], _| {
+                for s in out.iter_mut() {
+                    *s = 0;
+                }
+            },
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::U16 => device.build_output_stream(
+            &config.into(),
+            move |out: &mut [u16], _| {
+                for s in out.iter_mut() {
+                    *s = u16::MAX / 2;
+                }
+            },
+            err_fn,
+            None,
+        )?,
+        _ => device.build_output_stream(
+            &config.into(),
+            move |_out: &mut [f32], _| {},
+            err_fn,
+            None,
+        )?,
     };
     let _ = stream.play();
     Ok((stream, ()))

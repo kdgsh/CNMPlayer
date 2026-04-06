@@ -1,9 +1,9 @@
-use crate::app::{App, HitRect, PlayerBarHitTargets, PlaybackRuntimeState};
+use crate::app::{App, HitRect, PlaybackRuntimeState, PlayerBarHitTargets};
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 use std::time::Duration;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -49,12 +49,12 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let mode_symbol = playback_repeat_symbol(app);
     let controls = format!("{prev_label} {play_label} {next_label} {mode_symbol}");
 
-    let spectrum = if app.now_playing.is_some() && app.playback_state != PlaybackRuntimeState::Stopped
-    {
-        app.main_spectrum_braille()
-    } else {
-        " ".repeat(10)
-    };
+    let spectrum =
+        if app.now_playing.is_some() && app.playback_state != PlaybackRuntimeState::Stopped {
+            app.main_spectrum_braille()
+        } else {
+            " ".repeat(10)
+        };
 
     let controls_w = display_width(&controls) as u16;
     let spectrum_w = display_width(&spectrum).min(10) as u16;

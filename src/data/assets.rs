@@ -109,7 +109,10 @@ fn ensure_themes(root: &Path) -> Result<()> {
 
     write_if_missing(&root.join("themes/system.toml"), THEME_SYSTEM_TOML)?;
     write_if_missing(&root.join("themes/catppuccin_latte.toml"), THEME_LATTE_TOML)?;
-    write_if_missing(&root.join("themes/catppuccin_frappe.toml"), THEME_FRAPPE_TOML)?;
+    write_if_missing(
+        &root.join("themes/catppuccin_frappe.toml"),
+        THEME_FRAPPE_TOML,
+    )?;
     write_if_missing(
         &root.join("themes/catppuccin_macchiato.toml"),
         THEME_MACCHIATO_TOML,

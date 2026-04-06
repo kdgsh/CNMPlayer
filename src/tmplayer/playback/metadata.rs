@@ -25,7 +25,6 @@ pub fn read_metadata(path: &Path) -> Result<TrackMetadata> {
         if let Some(al) = tag.album() {
             meta.album = al.to_string();
         }
-
     }
 
     // Embedded cover (prefer any embedded picture across all tags; best-effort)
@@ -95,18 +94,10 @@ fn read_cover_from_tag(tag: &Tag) -> Option<(Vec<u8>, u64)> {
 }
 
 pub fn read_cover_from_folder(dir: &Path) -> Option<(Vec<u8>, u64)> {
-
     // Common filenames used by many players.
     // Keep this list small and predictable.
     let candidates = [
-        "cover",
-        "folder",
-        "front",
-        "album",
-        "artwork",
-        "Cover",
-        "Folder",
-        "Front",
+        "cover", "folder", "front", "album", "artwork", "Cover", "Folder", "Front",
     ];
     let exts = ["jpg", "jpeg", "png"];
 
@@ -191,9 +182,15 @@ fn read_lyrics_from_tag(tag: &Tag) -> Option<Vec<LyricLine>> {
     let second = non_empty.next().map(|s| s.to_string());
 
     let mut out = Vec::new();
-    out.push(LyricLine { start_ms: 0, text: first });
+    out.push(LyricLine {
+        start_ms: 0,
+        text: first,
+    });
     if let Some(s2) = second {
-        out.push(LyricLine { start_ms: u64::MAX, text: s2 });
+        out.push(LyricLine {
+            start_ms: u64::MAX,
+            text: s2,
+        });
     }
     Some(out)
 }
@@ -202,7 +199,10 @@ fn read_lrc_for_audio(audio_path: &Path) -> Option<Vec<LyricLine>> {
     let mut candidates = Vec::new();
     candidates.push(audio_path.with_extension("lrc"));
 
-    if let (Some(folder), Some(stem)) = (audio_path.parent(), audio_path.file_stem().and_then(|s| s.to_str())) {
+    if let (Some(folder), Some(stem)) = (
+        audio_path.parent(),
+        audio_path.file_stem().and_then(|s| s.to_str()),
+    ) {
         candidates.push(folder.join("lrc").join(format!("{stem}.lrc")));
     }
 
@@ -264,9 +264,15 @@ pub fn parse_plain_lyrics(content: &str) -> Option<Vec<LyricLine>> {
     let second = non_empty.next().map(|s| s.to_string());
 
     let mut out = Vec::new();
-    out.push(LyricLine { start_ms: 0, text: first });
+    out.push(LyricLine {
+        start_ms: 0,
+        text: first,
+    });
     if let Some(s2) = second {
-        out.push(LyricLine { start_ms: u64::MAX, text: s2 });
+        out.push(LyricLine {
+            start_ms: u64::MAX,
+            text: s2,
+        });
     }
     Some(out)
 }
@@ -292,7 +298,11 @@ fn parse_lrc_time_tag(tag: &str) -> Option<u64> {
     let mut ms: u64 = 0;
     if let Some(frac) = frac_s {
         let frac = frac.trim();
-        let digits: String = frac.chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
+        let digits: String = frac
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .take(3)
+            .collect();
         if digits.is_empty() {
             ms = 0;
         } else if digits.len() == 1 {

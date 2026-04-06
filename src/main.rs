@@ -8,15 +8,17 @@ use anyhow::Result;
 use app::App;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use data::config::Config;
 use data::theme_loader::ThemeLoader;
-use render::main_kitty_overlay::MainKittyOverlay;
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
-use ratatui::Terminal;
+use render::main_kitty_overlay::MainKittyOverlay;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
 
@@ -85,16 +87,20 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
             })
             .collect::<Vec<_>>();
 
-        let current_track = snapshot.now_playing.as_ref().map(|track| tmplayer::FullscreenTrackSeed {
-            playlist_index: snapshot.current_index,
-            title: track.title.clone(),
-            artist: track.artist.clone(),
-            album: track.album.clone(),
-            duration: Duration::from_millis(track.duration_ms.max(0) as u64),
-            liked: snapshot.now_playing_liked,
-            cover: track.cover.clone(),
-            lyrics: track.lyrics.clone(),
-        });
+        let current_track =
+            snapshot
+                .now_playing
+                .as_ref()
+                .map(|track| tmplayer::FullscreenTrackSeed {
+                    playlist_index: snapshot.current_index,
+                    title: track.title.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.clone(),
+                    duration: Duration::from_millis(track.duration_ms.max(0) as u64),
+                    liked: snapshot.now_playing_liked,
+                    cover: track.cover.clone(),
+                    lyrics: track.lyrics.clone(),
+                });
 
         tmplayer::HostPlaybackSnapshot {
             playlist,
@@ -174,7 +180,11 @@ fn init_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture, LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -318,7 +328,6 @@ fn play_fullscreen_transition(
                     .style(Style::default().bg(app.theme.color_base())),
                 overlay,
             );
-
         })?;
 
         std::thread::sleep(Duration::from_millis(14));

@@ -2,11 +2,11 @@ use crate::app::{App, HomeSidebarHit, HomeSidebarSection};
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw_home(frame: &mut Frame, app: &mut App) {
@@ -14,10 +14,7 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
     app.clear_content_hits();
 
     let size = frame.size();
-    frame.render_widget(
-        Block::default().style(base_bg_style(app)),
-        size,
-    );
+    frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 32 || size.height < 12 {
         frame.render_widget(
@@ -25,7 +22,7 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
                 Language::Zh => "终端窗口过小",
                 Language::En => "Terminal too small",
             })
-                .style(Style::default().fg(app.theme.color_subtext())),
+            .style(Style::default().fg(app.theme.color_subtext())),
             size,
         );
         return;
@@ -33,7 +30,10 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(player_bar::PLAYER_BAR_HEIGHT)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(player_bar::PLAYER_BAR_HEIGHT),
+        ])
         .split(size);
 
     let (content_area, hint_area) = if app.config.show_hints {
@@ -199,12 +199,11 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         let content = Paragraph::new(lines)
-        .wrap(Wrap { trim: true })
-        .alignment(Alignment::Center);
+            .wrap(Wrap { trim: true })
+            .alignment(Alignment::Center);
 
         frame.render_widget(content, text_rect);
     }
-
 }
 
 fn home_real_to_virtual_index(index: usize, columns: usize) -> usize {
@@ -350,7 +349,10 @@ fn draw_home_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default().fg(app.theme.color_subtext()),
         )));
     }
-    frame.render_widget(Paragraph::new(header_lines).wrap(Wrap { trim: true }), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(header_lines).wrap(Wrap { trim: true }),
+        chunks[0],
+    );
 
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -511,7 +513,10 @@ fn draw_home_sidebar_section(
                     width: inner.width,
                     height: 1,
                 },
-                HomeSidebarHit { section, index: idx },
+                HomeSidebarHit {
+                    section,
+                    index: idx,
+                },
             );
 
             let text_style = if is_focused {

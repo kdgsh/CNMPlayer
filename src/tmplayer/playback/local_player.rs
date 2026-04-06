@@ -1,8 +1,10 @@
-use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings, LocalFolderKind, PlaybackState, TrackMetadata};
+use crate::tmplayer::app::state::{
+    EQ_BANDS, EQ_FREQS_HZ, EqSettings, LocalFolderKind, PlaybackState, TrackMetadata,
+};
 use crate::tmplayer::data::playlist::{Playlist, PlaylistItem};
-use crate::tmplayer::playback::metadata::read_metadata;
 use crate::tmplayer::playback::metadata::read_cover_from_folder;
-use anyhow::{anyhow, Result};
+use crate::tmplayer::playback::metadata::read_metadata;
+use anyhow::{Result, anyhow};
 use rodio::{MixerDeviceSink, Player, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -14,7 +16,7 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
@@ -288,7 +290,11 @@ fn detect_album_folder(folder: &Path) -> bool {
         }
 
         // allow external lyrics files
-        if p.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("lrc")) == Some(true) {
+        if p.extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("lrc"))
+            == Some(true)
+        {
             continue;
         }
 
@@ -360,7 +366,8 @@ pub struct LocalPlayer {
 
 impl LocalPlayer {
     pub fn new() -> Self {
-        let mut device_sink = rodio::DeviceSinkBuilder::open_default_sink().expect("no output device");
+        let mut device_sink =
+            rodio::DeviceSinkBuilder::open_default_sink().expect("no output device");
         device_sink.log_on_drop(false);
         let player = Player::connect_new(device_sink.mixer());
         let eq_params = Arc::new(EqParams::new());
@@ -388,7 +395,10 @@ impl LocalPlayer {
         if let Some(m) = self.meta_cache.get(path) {
             // touch
             if let Some(pos) = self.meta_order.iter().position(|p| p == path) {
-                let p = self.meta_order.remove(pos).unwrap_or_else(|| path.to_path_buf());
+                let p = self
+                    .meta_order
+                    .remove(pos)
+                    .unwrap_or_else(|| path.to_path_buf());
                 self.meta_order.push_back(p);
             }
             return m.clone();
@@ -408,13 +418,20 @@ impl LocalPlayer {
         meta
     }
 
-    pub fn update_cached_metadata(&mut self, path: &Path, update: &crate::tmplayer::playback::remote_fetch::RemoteFetchResult) {
+    pub fn update_cached_metadata(
+        &mut self,
+        path: &Path,
+        update: &crate::tmplayer::playback::remote_fetch::RemoteFetchResult,
+    ) {
         if let Some(m) = self.meta_cache.get_mut(path) {
             update.apply_to(m);
 
             // touch
             if let Some(pos) = self.meta_order.iter().position(|p| p == path) {
-                let p = self.meta_order.remove(pos).unwrap_or_else(|| path.to_path_buf());
+                let p = self
+                    .meta_order
+                    .remove(pos)
+                    .unwrap_or_else(|| path.to_path_buf());
                 self.meta_order.push_back(p);
             }
         }
@@ -516,7 +533,8 @@ impl LocalPlayer {
                     .cloned()
                     .ok_or_else(|| anyhow!("no album folders"))?;
 
-                let (playlist, track) = self.load_folder(playback_folder.to_string_lossy().as_ref())?;
+                let (playlist, track) =
+                    self.load_folder(playback_folder.to_string_lossy().as_ref())?;
                 let cover = read_cover_from_folder(&playback_folder);
                 Ok(LoadPathResult {
                     kind,
@@ -532,7 +550,11 @@ impl LocalPlayer {
         }
     }
 
-    pub fn load_playlist_only(&mut self, folder: &Path, restore_last_opened: bool) -> Result<Playlist> {
+    pub fn load_playlist_only(
+        &mut self,
+        folder: &Path,
+        restore_last_opened: bool,
+    ) -> Result<Playlist> {
         let p = folder.to_path_buf();
         let mut playlist = Playlist::default();
         let mut files: Vec<PathBuf> = Vec::new();
@@ -726,7 +748,11 @@ impl LocalPlayer {
 
         self.base_seek = pos;
         self.paused_acc = Duration::from_secs(0);
-        self.started_at = if was_paused { None } else { Some(Instant::now()) };
+        self.started_at = if was_paused {
+            None
+        } else {
+            Some(Instant::now())
+        };
         Ok(())
     }
 }
@@ -749,7 +775,11 @@ impl VizRing {
         for _ in 0..cap {
             data.push(AtomicU32::new(0));
         }
-        Self { cap, write_idx: AtomicUsize::new(0), data }
+        Self {
+            cap,
+            write_idx: AtomicUsize::new(0),
+            data,
+        }
     }
 
     fn clear(&self) {
@@ -790,7 +820,8 @@ impl SymphoniaSource {
         let metadata_opts: MetadataOptions = Default::default();
         let decoder_opts: DecoderOptions = Default::default();
 
-        let probed = symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)?;
+        let probed =
+            symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)?;
         let mut format = probed.format;
 
         let track = format
@@ -800,7 +831,8 @@ impl SymphoniaSource {
             return Err(anyhow!("unsupported codec"));
         }
 
-        let mut decoder = symphonia::default::get_codecs().make(&track.codec_params, &decoder_opts)?;
+        let mut decoder =
+            symphonia::default::get_codecs().make(&track.codec_params, &decoder_opts)?;
 
         let track_id = track.id;
         let channels = track
@@ -814,7 +846,13 @@ impl SymphoniaSource {
         // Seek to requested start time (best-effort).
         if start > Duration::from_millis(0) {
             let time = Time::from(start.as_secs_f64());
-            let _ = format.seek(SeekMode::Accurate, SeekTo::Time { time, track_id: Some(track_id) });
+            let _ = format.seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time,
+                    track_id: Some(track_id),
+                },
+            );
             decoder.reset();
         }
 
@@ -1053,7 +1091,8 @@ where
         if cur != self.last_db_x10 {
             let fs = self.inner.sample_rate().get() as f32;
             let eq_db = self.params.load_db();
-            self.coeffs = std::array::from_fn(|i| biquad_peaking(fs, EQ_FREQS_HZ[i], 1.0, eq_db[i]));
+            self.coeffs =
+                std::array::from_fn(|i| biquad_peaking(fs, EQ_FREQS_HZ[i], 1.0, eq_db[i]));
             self.last_db_x10 = cur;
         }
 

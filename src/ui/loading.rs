@@ -1,9 +1,9 @@
 use crate::app::App;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui::Frame;
 
 const DEFAULT_OPENING_TITLE: &str = " ██████╗███╗   ██╗███╗   ███╗██████╗ ██╗      █████╗ ██╗   ██╗███████╗██████╗ \n██╔════╝████╗  ██║████╗ ████║██╔══██╗██║     ██╔══██╗╚██╗ ██╔╝██╔════╝██╔══██╗\n██║     ██╔██╗ ██║██╔████╔██║██████╔╝██║     ███████║ ╚████╔╝ █████╗  ██████╔╝\n██║     ██║╚██╗██║██║╚██╔╝██║██╔═══╝ ██║     ██╔══██║  ╚██╔╝  ██╔══╝  ██╔══██╗\n╚██████╗██║ ╚████║██║ ╚═╝ ██║██║     ███████╗██║  ██║   ██║   ███████╗██║  ██║\n ╚═════╝╚═╝  ╚═══╝╚═╝     ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝";
 
@@ -54,7 +54,9 @@ pub fn draw_loading(frame: &mut Frame, app: &App) {
         height: 1,
     };
 
-    let progress = app.startup_loading_progress_for_width(bar_w).clamp(0.0, 1.0);
+    let progress = app
+        .startup_loading_progress_for_width(bar_w)
+        .clamp(0.0, 1.0);
     let filled = ((bar_w as f32) * progress).round() as u16;
     let filled = filled.min(bar_w);
 
@@ -68,7 +70,11 @@ pub fn draw_loading(frame: &mut Frame, app: &App) {
         };
         spans.push(Span::styled(
             "█",
-            Style::default().fg(mix_color(app.theme.color_accent3(), app.theme.color_accent2(), t)),
+            Style::default().fg(mix_color(
+                app.theme.color_accent3(),
+                app.theme.color_accent2(),
+                t,
+            )),
         ));
     }
     let remain = bar_w.saturating_sub(filled) as usize;

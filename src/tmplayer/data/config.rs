@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const DEFAULT_EQ_BANDS_DB: [f32; crate::tmplayer::app::state::EQ_BANDS] = [0.0; crate::tmplayer::app::state::EQ_BANDS];
+const DEFAULT_EQ_BANDS_DB: [f32; crate::tmplayer::app::state::EQ_BANDS] =
+    [0.0; crate::tmplayer::app::state::EQ_BANDS];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -127,7 +128,11 @@ pub struct Config {
     #[serde(default = "default_keybind_toggle_like_fullscreen")]
     pub keybind_toggle_like_fullscreen: String,
 
-    #[serde(default, rename = "default-opening-folder", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        default,
+        rename = "default-opening-folder",
+        skip_serializing_if = "String::is_empty"
+    )]
     pub default_opening_folder: String,
 }
 
@@ -296,10 +301,7 @@ fn default_keybind_sidebar() -> String {
 
 #[allow(dead_code)]
 fn is_legacy_sidebar_default(value: &str) -> bool {
-    let normalized = value
-        .trim()
-        .to_ascii_lowercase()
-        .replace(' ', "");
+    let normalized = value.trim().to_ascii_lowercase().replace(' ', "");
     normalized == "alt+b"
 }
 

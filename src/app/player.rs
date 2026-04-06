@@ -1,7 +1,7 @@
 use crate::data::assets;
 use crate::data::config::{CacheCleanStrategy, Config};
 use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use directories::BaseDirs;
 use rodio::{Decoder, MixerDeviceSink, Player, Source};
 use std::fs;
@@ -81,7 +81,8 @@ impl AudioPlayer {
 
     pub fn cached_song_path(&self, song_id: &str, quality_level: &str) -> PathBuf {
         let quality = sanitize_cache_key(quality_level);
-        self.cache_dir.join(format!("{}__{}.audio", song_id, quality))
+        self.cache_dir
+            .join(format!("{}__{}.audio", song_id, quality))
     }
 
     fn play_from_file(&mut self, song_id: &str, file_path: PathBuf) -> Result<()> {
@@ -205,7 +206,11 @@ impl AudioPlayer {
 
         self.sink = Some(player);
         self.paused_position = target;
-        self.started_at = if was_paused { None } else { Some(Instant::now()) };
+        self.started_at = if was_paused {
+            None
+        } else {
+            Some(Instant::now())
+        };
         Ok(())
     }
 
@@ -224,7 +229,8 @@ impl AudioPlayer {
             return Ok(());
         }
 
-        let mut device_sink = rodio::DeviceSinkBuilder::open_default_sink().context("open default audio output failed")?;
+        let mut device_sink = rodio::DeviceSinkBuilder::open_default_sink()
+            .context("open default audio output failed")?;
         device_sink.log_on_drop(false);
         self.device_sink = Some(device_sink);
         Ok(())
@@ -302,9 +308,7 @@ fn biquad_peaking(fs: f32, f0: f32, q: f32, gain_db: f32) -> BiquadCoeffs {
 }
 
 fn biquad_process(coeffs: &BiquadCoeffs, state: &mut BiquadState, input: f32) -> f32 {
-    let output = coeffs.b0 * input
-        + coeffs.b1 * state.x1
-        + coeffs.b2 * state.x2
+    let output = coeffs.b0 * input + coeffs.b1 * state.x1 + coeffs.b2 * state.x2
         - coeffs.a1 * state.y1
         - coeffs.a2 * state.y2;
     state.x2 = state.x1;
@@ -336,7 +340,8 @@ where
         let fs = inner.sample_rate().get() as f32;
         let eq_db = params.load_db();
         let last_db_x10 = params.load_db_x10();
-        let coeffs = std::array::from_fn(|idx| biquad_peaking(fs, EQ_FREQS_HZ[idx], 1.0, eq_db[idx]));
+        let coeffs =
+            std::array::from_fn(|idx| biquad_peaking(fs, EQ_FREQS_HZ[idx], 1.0, eq_db[idx]));
         let states = vec![BiquadState::default(); (channels.get() as usize) * EQ_BANDS];
 
         Self {
@@ -366,7 +371,8 @@ where
         if current != self.last_db_x10 {
             let fs = self.inner.sample_rate().get() as f32;
             let eq_db = self.params.load_db();
-            self.coeffs = std::array::from_fn(|idx| biquad_peaking(fs, EQ_FREQS_HZ[idx], 1.0, eq_db[idx]));
+            self.coeffs =
+                std::array::from_fn(|idx| biquad_peaking(fs, EQ_FREQS_HZ[idx], 1.0, eq_db[idx]));
             self.last_db_x10 = current;
         }
 
@@ -453,11 +459,16 @@ struct CacheEntry {
     modified: SystemTime,
 }
 
-pub(crate) fn cleanup_cache_dir(cache_dir: &Path, policy: &crate::data::config::CacheConfig) -> Result<()> {
+pub(crate) fn cleanup_cache_dir(
+    cache_dir: &Path,
+    policy: &crate::data::config::CacheConfig,
+) -> Result<()> {
     let mut entries = list_cache_entries(cache_dir)?;
 
-    if matches!(policy.clean_strategy, CacheCleanStrategy::Age | CacheCleanStrategy::Both)
-        && policy.max_age_days > 0
+    if matches!(
+        policy.clean_strategy,
+        CacheCleanStrategy::Age | CacheCleanStrategy::Both
+    ) && policy.max_age_days > 0
     {
         let now = SystemTime::now();
         let ttl = Duration::from_secs(policy.max_age_days.saturating_mul(24 * 60 * 60));
@@ -474,8 +485,10 @@ pub(crate) fn cleanup_cache_dir(cache_dir: &Path, policy: &crate::data::config::
         });
     }
 
-    if matches!(policy.clean_strategy, CacheCleanStrategy::Size | CacheCleanStrategy::Both)
-        && policy.max_size_mb > 0
+    if matches!(
+        policy.clean_strategy,
+        CacheCleanStrategy::Size | CacheCleanStrategy::Both
+    ) && policy.max_size_mb > 0
     {
         let limit_bytes = policy.max_size_mb.saturating_mul(1024 * 1024);
         let mut total_bytes = entries.iter().map(|entry| entry.size).sum::<u64>();

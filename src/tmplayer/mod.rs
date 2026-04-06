@@ -6,20 +6,16 @@ pub mod render;
 pub mod ui;
 pub mod utils;
 
-use anyhow::Result;
 use crate::app::player::{cleanup_cache_dir, resolve_cache_root};
+use anyhow::Result;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::data::config::{
-    AudioQuality as HostAudioQuality,
-    BarChannels as HostBarChannels,
-    BarNumber as HostBarNumber,
-    Config as HostConfig,
-    Language as HostLanguage,
-    VisualizeMode as HostVisualizeMode,
+    AudioQuality as HostAudioQuality, BarChannels as HostBarChannels, BarNumber as HostBarNumber,
+    Config as HostConfig, Language as HostLanguage, VisualizeMode as HostVisualizeMode,
 };
 
 #[derive(Debug, Clone)]
@@ -308,7 +304,10 @@ fn apply_bootstrap(app: &mut app::state::AppState, bootstrap: FullscreenBootstra
         return;
     }
 
-    let mut active_idx = bootstrap.current_index.unwrap_or(0).min(tracks.len().saturating_sub(1));
+    let mut active_idx = bootstrap
+        .current_index
+        .unwrap_or(0)
+        .min(tracks.len().saturating_sub(1));
     let mut current_liked = false;
 
     if let Some(current) = bootstrap.current_track.as_ref() {
@@ -357,7 +356,12 @@ fn track_from_seed(seed: &FullscreenTrackSeed) -> app::state::TrackMetadata {
         artist: seed.artist.clone(),
         album: seed.album.clone(),
         duration: seed.duration,
-        cover_hash: seed.cover.as_deref().map(hash_bytes).map(Some).unwrap_or(None),
+        cover_hash: seed
+            .cover
+            .as_deref()
+            .map(hash_bytes)
+            .map(Some)
+            .unwrap_or(None),
         cover: seed.cover.clone(),
         cover_folder: None,
         lyrics: seed.lyrics.clone(),

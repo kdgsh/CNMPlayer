@@ -1,10 +1,10 @@
 use crate::tmplayer::app::state::{AppState, PlaybackState};
 use crate::tmplayer::utils::input::Action;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
@@ -17,9 +17,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
 
     let line = Line::from(vec![
         Span::styled("[] ", Style::default().fg(app.theme.color_text())),
-        Span::styled(format!("{} ", play), Style::default().fg(app.theme.color_text())),
+        Span::styled(
+            format!("{} ", play),
+            Style::default().fg(app.theme.color_text()),
+        ),
         Span::styled("[] ", Style::default().fg(app.theme.color_text())),
-        Span::styled(repeat_symbol, Style::default().fg(app.theme.color_subtext())),
+        Span::styled(
+            repeat_symbol,
+            Style::default().fg(app.theme.color_subtext()),
+        ),
     ]);
 
     f.render_widget(

@@ -2,11 +2,11 @@ use crate::app::App;
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
-use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub fn draw_playlist(frame: &mut Frame, app: &mut App) {
@@ -14,10 +14,7 @@ pub fn draw_playlist(frame: &mut Frame, app: &mut App) {
     app.clear_content_hits();
 
     let size = frame.size();
-    frame.render_widget(
-        Block::default().style(base_bg_style(app)),
-        size,
-    );
+    frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 40 || size.height < 14 {
         frame.render_widget(
@@ -25,7 +22,7 @@ pub fn draw_playlist(frame: &mut Frame, app: &mut App) {
                 Language::Zh => "终端窗口过小",
                 Language::En => "Terminal too small",
             })
-                .style(Style::default().fg(app.theme.color_subtext())),
+            .style(Style::default().fg(app.theme.color_subtext())),
             size,
         );
         return;
@@ -33,7 +30,10 @@ pub fn draw_playlist(frame: &mut Frame, app: &mut App) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(player_bar::PLAYER_BAR_HEIGHT)])
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(player_bar::PLAYER_BAR_HEIGHT),
+        ])
         .split(size);
 
     let (content_area, hint_area) = if app.config.show_hints {
@@ -74,7 +74,10 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length((inner.height * 2).min(26)), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length((inner.height * 2).min(26)),
+            Constraint::Min(1),
+        ])
         .split(inner);
 
     let cover_block = centered_visual_square_block(cols[0]);
@@ -92,7 +95,9 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
         });
         if cover_area.width > 0 && cover_area.height > 0 {
             frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
-            let cover_ascii = app.playlist.cover_ascii(cover_area.width, cover_area.height);
+            let cover_ascii = app
+                .playlist
+                .cover_ascii(cover_area.width, cover_area.height);
             frame.render_widget(
                 Paragraph::new(cover_ascii)
                     .alignment(Alignment::Center)
@@ -164,7 +169,10 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
     app.playlist.set_visible_rows(visible);
     let offset = app.playlist.effective_scroll_offset();
 
-    for (line_idx, track_idx) in (offset..app.playlist.tracks.len()).take(visible).enumerate() {
+    for (line_idx, track_idx) in (offset..app.playlist.tracks.len())
+        .take(visible)
+        .enumerate()
+    {
         let y = inner.y + line_idx as u16;
         let row = Rect {
             x: inner.x,
@@ -220,7 +228,10 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
         let reserved = display_width(&index_label) + 1 + display_width(&duration) + 1;
         let max_left = usize::from(row.width).saturating_sub(reserved);
         let clipped_left = clip_to_display_width(&left, max_left);
-        let used = display_width(&index_label) + 1 + display_width(&clipped_left) + display_width(&duration);
+        let used = display_width(&index_label)
+            + 1
+            + display_width(&clipped_left)
+            + display_width(&duration);
         let space = usize::from(row.width).saturating_sub(used).max(1);
 
         let index_style = if focused {
@@ -319,13 +330,11 @@ fn draw_playlist_hint(frame: &mut Frame, app: &App, area: Rect) {
     let text = match app.config.language {
         Language::Zh => format!(
             "Enter 播放/打开专辑  Esc 返回  {} 搜索  {} 全屏",
-            app.config.keybind_search_box,
-            app.config.keybind_fullscreen
+            app.config.keybind_search_box, app.config.keybind_fullscreen
         ),
         Language::En => format!(
             "Enter play/open album  Esc back  {} Search  {} Fullscreen",
-            app.config.keybind_search_box,
-            app.config.keybind_fullscreen
+            app.config.keybind_search_box, app.config.keybind_fullscreen
         ),
     };
 

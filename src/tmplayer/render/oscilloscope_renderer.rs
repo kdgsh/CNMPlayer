@@ -1,9 +1,9 @@
 use crate::tmplayer::app::state::AppState;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 const BINS: usize = 64;
 const F_MIN_HZ: f32 = 40.0;
@@ -34,7 +34,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &AppState) {
     // Render per-line vertical gradient using theme colors.
     let mut lines: Vec<Line> = Vec::with_capacity(h_cells);
     for row in 0..h_cells {
-        let t = if h_cells <= 1 { 1.0 } else { row as f32 / (h_cells - 1) as f32 };
+        let t = if h_cells <= 1 {
+            1.0
+        } else {
+            row as f32 / (h_cells - 1) as f32
+        };
         let fg = vertical_gradient_color(app, t);
         let mut s = String::with_capacity(w_cells);
         let base = row * w_cells;
@@ -72,8 +76,20 @@ fn synthesize_waveforms(app: &AppState, w_px: usize, mid_y: i32) -> (Vec<i32>, V
     for x in 0..w_px {
         let t = (x as f32 / (w_px.saturating_sub(1).max(1) as f32)) * DISPLAY_WINDOW_SEC;
 
-        let y_l = synth_channel(&app.spectrum.stereo_left, &app.spectrum.osc_phase_left, denom_left, t, bin_step);
-        let y_r = synth_channel(&app.spectrum.stereo_right, &app.spectrum.osc_phase_right, denom_right, t, bin_step);
+        let y_l = synth_channel(
+            &app.spectrum.stereo_left,
+            &app.spectrum.osc_phase_left,
+            denom_left,
+            t,
+            bin_step,
+        );
+        let y_r = synth_channel(
+            &app.spectrum.stereo_right,
+            &app.spectrum.osc_phase_right,
+            denom_right,
+            t,
+            bin_step,
+        );
 
         out_left.push(map_to_pixel_row(y_l, mid_y));
         out_right.push(map_to_pixel_row(y_r, mid_y));
@@ -90,7 +106,13 @@ fn amplitude_denominator(vals: &[f32; BINS], bin_step: usize) -> f32 {
     sum.max(1e-3)
 }
 
-fn synth_channel(vals: &[f32; BINS], phases: &[f32; BINS], denom: f32, t: f32, bin_step: usize) -> f32 {
+fn synth_channel(
+    vals: &[f32; BINS],
+    phases: &[f32; BINS],
+    denom: f32,
+    t: f32,
+    bin_step: usize,
+) -> f32 {
     let mut acc = 0.0f32;
     for k in (0..BINS).step_by(bin_step) {
         let a = vals[k].clamp(0.0, 1.0).powf(GAMMA);
@@ -125,7 +147,14 @@ fn rasterize_braille(w_cells: usize, h_cells: usize, y_left: &[i32], y_right: &[
     bits
 }
 
-fn draw_polyline(bits: &mut [u8], w_cells: usize, h_cells: usize, ys: &[i32], w_px: i32, h_px: i32) {
+fn draw_polyline(
+    bits: &mut [u8],
+    w_cells: usize,
+    h_cells: usize,
+    ys: &[i32],
+    w_px: i32,
+    h_px: i32,
+) {
     if ys.is_empty() {
         return;
     }
@@ -142,7 +171,15 @@ fn draw_polyline(bits: &mut [u8], w_cells: usize, h_cells: usize, ys: &[i32], w_
     }
 }
 
-fn draw_line_px(bits: &mut [u8], w_cells: usize, h_cells: usize, x0: i32, y0: i32, x1: i32, y1: i32) {
+fn draw_line_px(
+    bits: &mut [u8],
+    w_cells: usize,
+    h_cells: usize,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+) {
     // Bresenham line in pixel space.
     let mut x0 = x0;
     let mut y0 = y0;

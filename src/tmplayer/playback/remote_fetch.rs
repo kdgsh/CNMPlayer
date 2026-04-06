@@ -1,13 +1,6 @@
 use crate::tmplayer::app::state::{LyricLine, TrackMetadata};
 use crate::tmplayer::playback::metadata::{parse_lrc, parse_plain_lyrics};
 use chromaprint::Chromaprint;
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::DecoderOptions;
-use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::FormatOptions;
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -15,6 +8,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
 
 const LAST_ATTEMPT_MAX: usize = 2048;
 const LAST_ATTEMPT_PRUNE_TO: usize = 1536;
@@ -170,10 +170,8 @@ fn prune_last_attempt_map(last_attempt: &mut HashMap<TrackKey, Instant>) {
         return;
     }
 
-    let mut pairs: Vec<(TrackKey, Instant)> = last_attempt
-        .iter()
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
+    let mut pairs: Vec<(TrackKey, Instant)> =
+        last_attempt.iter().map(|(k, v)| (k.clone(), *v)).collect();
     pairs.sort_by_key(|(_, at)| *at);
 
     for (key, _) in pairs.into_iter().take(remove_count) {
@@ -209,7 +207,9 @@ fn process_request(req: RemoteFetchRequest) -> Option<RemoteFetchResult> {
     let need_cover = !req.has_cover;
 
     if metadata_missing && req.options.enable_fingerprint && (need_lyrics || need_cover) {
-        if let (Some(path), Some(key)) = (req.path.as_deref(), req.options.acoustid_api_key.as_deref()) {
+        if let (Some(path), Some(key)) =
+            (req.path.as_deref(), req.options.acoustid_api_key.as_deref())
+        {
             if let Some((fp, fp_dur)) = chromaprint_fingerprint(path) {
                 if duration_secs == 0 {
                     duration_secs = fp_dur as u64;
@@ -257,7 +257,10 @@ fn process_request(req: RemoteFetchRequest) -> Option<RemoteFetchResult> {
     }
 
     if need_cover {
-        if let Some(mbid) = release_mbid.clone().or_else(|| musicbrainz_release_id(&title, &artist, &album)) {
+        if let Some(mbid) = release_mbid
+            .clone()
+            .or_else(|| musicbrainz_release_id(&title, &artist, &album))
+        {
             if let Some((bytes, content_type)) = cover_art_archive_fetch(&mbid) {
                 let cover_hash = hash_bytes(&bytes);
                 if let Some(path) = req.path.as_deref() {
@@ -278,7 +281,11 @@ fn process_request(req: RemoteFetchRequest) -> Option<RemoteFetchResult> {
         }
     }
 
-    let changed = out.title.is_some() || out.artist.is_some() || out.album.is_some() || out.lyrics.is_some() || out.cover.is_some();
+    let changed = out.title.is_some()
+        || out.artist.is_some()
+        || out.album.is_some()
+        || out.lyrics.is_some()
+        || out.cover.is_some();
     if changed { Some(out) } else { None }
 }
 
@@ -330,7 +337,11 @@ fn musicbrainz_release_id(title: &str, artist: &str, album: &str) -> Option<Stri
         return None;
     }
 
-    let mut query = format!("recording:\"{}\" AND artist:\"{}\"", sanitize_mb(title), sanitize_mb(artist));
+    let mut query = format!(
+        "recording:\"{}\" AND artist:\"{}\"",
+        sanitize_mb(title),
+        sanitize_mb(artist)
+    );
     if !is_unknown(album) {
         query.push_str(&format!(" AND release:\"{}\"", sanitize_mb(album)));
     }
@@ -380,8 +391,15 @@ struct MbRelease {
 
 fn cover_art_archive_fetch(release_id: &str) -> Option<(Vec<u8>, Option<String>)> {
     let agent = "tmplayer/0.1.0 (https://github.com)";
-    let url = format!("https://coverartarchive.org/release/{}/front-500", release_id);
-    let resp = http_agent().get(&url).set("User-Agent", agent).call().ok()?;
+    let url = format!(
+        "https://coverartarchive.org/release/{}/front-500",
+        release_id
+    );
+    let resp = http_agent()
+        .get(&url)
+        .set("User-Agent", agent)
+        .call()
+        .ok()?;
     if resp.status() != 200 {
         return None;
     }

@@ -1,10 +1,10 @@
 use crate::app::App;
 use crate::data::config::Language;
 use crate::tmplayer::ui::borders::SOLID_BORDER;
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use ratatui::Frame;
 use unicode_width::UnicodeWidthChar;
 
 pub const TARGET_HEIGHT: u16 = 3;
@@ -15,7 +15,10 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
         return;
     }
 
-    let visible_h = app.search_box_anim_height.min(TARGET_HEIGHT).min(size.height);
+    let visible_h = app
+        .search_box_anim_height
+        .min(TARGET_HEIGHT)
+        .min(size.height);
     if visible_h == 0 {
         return;
     }
@@ -53,7 +56,9 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
     let input = app.search_box_input.clone();
     let content = if input.trim().is_empty() {
         match app.config.language {
-            Language::Zh => "请输入搜索内容（后缀 @single/@album/@list，或仅输入 @author）".to_string(),
+            Language::Zh => {
+                "请输入搜索内容（后缀 @single/@album/@list，或仅输入 @author）".to_string()
+            }
             Language::En => {
                 "Type to search (suffix @single/@album/@list, or only @author)".to_string()
             }
@@ -73,7 +78,9 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
     };
 
     frame.render_widget(
-        Paragraph::new(content).style(style).alignment(Alignment::Left),
+        Paragraph::new(content)
+            .style(style)
+            .alignment(Alignment::Left),
         inner,
     );
 

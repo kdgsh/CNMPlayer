@@ -93,7 +93,9 @@ fn migrate_legacy_local_assets(sys_root: &Path) -> Result<()> {
     // Copy themes best-effort.
     let legacy_themes = legacy_root.join("themes");
     if legacy_themes.is_dir() {
-        for entry in fs::read_dir(&legacy_themes).with_context(|| format!("read_dir {}", legacy_themes.display()))? {
+        for entry in fs::read_dir(&legacy_themes)
+            .with_context(|| format!("read_dir {}", legacy_themes.display()))?
+        {
             let entry = entry?;
             let p = entry.path();
             if p.is_file() {
@@ -126,7 +128,10 @@ fn ensure_themes(root: &Path) -> Result<()> {
 
     write_if_missing(&root.join("themes/system.toml"), THEME_SYSTEM_TOML)?;
     write_if_missing(&root.join("themes/catppuccin_latte.toml"), THEME_LATTE_TOML)?;
-    write_if_missing(&root.join("themes/catppuccin_frappe.toml"), THEME_FRAPPE_TOML)?;
+    write_if_missing(
+        &root.join("themes/catppuccin_frappe.toml"),
+        THEME_FRAPPE_TOML,
+    )?;
     write_if_missing(
         &root.join("themes/catppuccin_macchiato.toml"),
         THEME_MACCHIATO_TOML,

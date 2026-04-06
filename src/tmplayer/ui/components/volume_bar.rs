@@ -1,9 +1,9 @@
 use crate::tmplayer::app::state::AppState;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use ratatui::Frame;
 
 pub fn render(f: &mut Frame, area: Rect, app: &AppState, vol: f32) {
     let w = area.width as usize;

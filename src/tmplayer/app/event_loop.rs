@@ -1,18 +1,23 @@
 use crate::tmplayer::app::mode_manager::ModeManager;
-use crate::tmplayer::app::state::{AppState, CoverSnapshot, LocalFolderKind, Overlay, PlayMode, PlaybackState, RepeatMode};
+use crate::tmplayer::app::state::{
+    AppState, CoverSnapshot, LocalFolderKind, Overlay, PlayMode, PlaybackState, RepeatMode,
+};
 use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
-use crate::tmplayer::data::theme_loader::ThemeLoader;
 use crate::tmplayer::data::config::{AudioQuality, BarChannels, BarNumber, VisualizeMode};
-use crate::tmplayer::ui::tui::{Tui, UiLayout};
+use crate::tmplayer::data::theme_loader::ThemeLoader;
 use crate::tmplayer::ui::theme::ThemeName;
-use crate::tmplayer::utils::input::{map_key, map_mouse, Action};
+use crate::tmplayer::ui::tui::{Tui, UiLayout};
+use crate::tmplayer::utils::input::{Action, map_key, map_mouse};
 use crate::tmplayer::utils::system_volume::SystemVolume;
-use crate::tmplayer::{HostConfigSync, HostPlaybackBridge, HostPlaybackRuntimeSnapshot, HostPlaybackSnapshot, HostPlaybackState, HostRepeatMode};
+use crate::tmplayer::{
+    HostConfigSync, HostPlaybackBridge, HostPlaybackRuntimeSnapshot, HostPlaybackSnapshot,
+    HostPlaybackState, HostRepeatMode,
+};
 use anyhow::Result;
 use crossterm::event::{self, Event};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use std::fs;
 use std::collections::hash_map::DefaultHasher;
+use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -46,7 +51,11 @@ fn has_spectrum_data(app: &AppState) -> bool {
         || app.spectrum.stereo_right.iter().any(|&v| v > 0.0)
 }
 
-fn open_local_folder(app: &mut AppState, mode_manager: &mut ModeManager, folder: &std::path::Path) -> Result<()> {
+fn open_local_folder(
+    app: &mut AppState,
+    mode_manager: &mut ModeManager,
+    folder: &std::path::Path,
+) -> Result<()> {
     let res = mode_manager.local.load_path(folder)?;
     mode_manager.pause_other(PlayMode::LocalPlayback);
     app.player.mode = PlayMode::LocalPlayback;
@@ -72,8 +81,13 @@ fn open_local_folder(app: &mut AppState, mode_manager: &mut ModeManager, folder:
     app.local_view_album_cover_hash = res.album_cover.map(|(_, h)| Some(h)).unwrap_or(None);
 
     if app.config.resume_last_position {
-        if let (Some(folder), Some(cur_path)) = (app.local_folder.as_deref(), app.playlist.current_path().cloned()) {
-            if let Some(sec) = crate::tmplayer::playback::local_player::read_last_position_for_song(folder, &cur_path) {
+        if let (Some(folder), Some(cur_path)) = (
+            app.local_folder.as_deref(),
+            app.playlist.current_path().cloned(),
+        ) {
+            if let Some(sec) = crate::tmplayer::playback::local_player::read_last_position_for_song(
+                folder, &cur_path,
+            ) {
                 if sec > 0 {
                     let target = Duration::from_secs(sec);
                     if mode_manager.local.seek(target).is_ok() {
@@ -90,12 +104,19 @@ fn open_local_folder(app: &mut AppState, mode_manager: &mut ModeManager, folder:
 
     // Ensure .order.toml exists and tracks last album/song for local browsing.
     if app.local_folder_kind == LocalFolderKind::MultiAlbum {
-        if let (Some(root), Some(play_folder)) = (app.local_root_folder.as_deref(), app.local_folder.as_deref()) {
+        if let (Some(root), Some(play_folder)) = (
+            app.local_root_folder.as_deref(),
+            app.local_folder.as_deref(),
+        ) {
             let _ = crate::tmplayer::playback::local_player::write_last_album(root, play_folder);
         }
     }
-    if let (Some(play_folder), Some(cur_path)) = (app.local_folder.as_deref(), app.playlist.current_path().cloned()) {
-        let _ = crate::tmplayer::playback::local_player::write_last_opened_song(play_folder, &cur_path);
+    if let (Some(play_folder), Some(cur_path)) = (
+        app.local_folder.as_deref(),
+        app.playlist.current_path().cloned(),
+    ) {
+        let _ =
+            crate::tmplayer::playback::local_player::write_last_opened_song(play_folder, &cur_path);
     }
 
     Ok(())
@@ -392,10 +413,12 @@ fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
             item.title.clone()
         };
 
-        playlist.items.push(crate::tmplayer::data::playlist::PlaylistItem {
-            path: PathBuf::from(format!("ncm://{id}")),
-            title,
-        });
+        playlist
+            .items
+            .push(crate::tmplayer::data::playlist::PlaylistItem {
+                path: PathBuf::from(format!("ncm://{id}")),
+                title,
+            });
 
         tracks.push(crate::tmplayer::app::state::TrackMetadata {
             title: item.title.clone(),
@@ -409,9 +432,15 @@ fn sync_from_host_snapshot(app: &mut AppState, snapshot: HostPlaybackSnapshot) {
         });
     }
 
-    let mut current = snapshot.current_index.unwrap_or(0).min(queue_len.saturating_sub(1));
+    let mut current = snapshot
+        .current_index
+        .unwrap_or(0)
+        .min(queue_len.saturating_sub(1));
     let current_track = if let Some(track) = snapshot.current_track.as_ref() {
-        let idx = track.playlist_index.unwrap_or(current).min(queue_len.saturating_sub(1));
+        let idx = track
+            .playlist_index
+            .unwrap_or(current)
+            .min(queue_len.saturating_sub(1));
         current = idx;
         let cover_hash = track.cover.as_deref().map(hash_cover_bytes);
         let mapped = crate::tmplayer::app::state::TrackMetadata {
@@ -570,7 +599,11 @@ pub fn run(
     let mut last_layout = UiLayout::default();
 
     // Initialize cava with the current desired config (best-effort).
-    ensure_cava(&mut cava, &mut cava_cfg, desired_cava_config(app, &last_layout));
+    ensure_cava(
+        &mut cava,
+        &mut cava_cfg,
+        desired_cava_config(app, &last_layout),
+    );
 
     let _ = sync_from_host_bridge(
         app,
@@ -583,7 +616,8 @@ pub fn run(
         let frame_start = Instant::now();
         let mut state_changed = false;
 
-        let sync_config = frame_start.duration_since(last_host_config_sync) >= Duration::from_millis(250);
+        let sync_config =
+            frame_start.duration_since(last_host_config_sync) >= Duration::from_millis(250);
         if sync_config {
             last_host_config_sync = frame_start;
         }
@@ -637,7 +671,11 @@ pub fn run(
             }
         }
 
-        ensure_cava(&mut cava, &mut cava_cfg, desired_cava_config(app, &last_layout));
+        ensure_cava(
+            &mut cava,
+            &mut cava_cfg,
+            desired_cava_config(app, &last_layout),
+        );
 
         if app.config.visualize == VisualizeMode::Bars {
             let bars = desired_bar_count(app, &last_layout);
@@ -646,7 +684,8 @@ pub fn run(
 
         // mpris poll (only when explicitly in system monitor mode)
         if app.player.mode == PlayMode::SystemMonitor
-            && frame_start.duration_since(last_mpris) >= Duration::from_millis(app.config.mpris_poll_ms)
+            && frame_start.duration_since(last_mpris)
+                >= Duration::from_millis(app.config.mpris_poll_ms)
         {
             last_mpris = frame_start;
             if let Ok(Some(snapshot)) = mode_manager.mpris.poll_snapshot() {
@@ -727,8 +766,14 @@ pub fn run(
                     }
 
                     let dt = 1.0 / app.config.spectrum_hz.max(1) as f32;
-                    crate::tmplayer::render::oscilloscope_renderer::advance_phases(&mut app.spectrum.osc_phase_left, dt);
-                    crate::tmplayer::render::oscilloscope_renderer::advance_phases(&mut app.spectrum.osc_phase_right, dt);
+                    crate::tmplayer::render::oscilloscope_renderer::advance_phases(
+                        &mut app.spectrum.osc_phase_left,
+                        dt,
+                    );
+                    crate::tmplayer::render::oscilloscope_renderer::advance_phases(
+                        &mut app.spectrum.osc_phase_right,
+                        dt,
+                    );
                 }
             }
         }
@@ -862,7 +907,8 @@ fn handle_local_track_finished(app: &mut AppState, mode_manager: &mut ModeManage
             app.queue_remote_fetch(Some(&path));
 
             if let Some(folder) = app.local_folder.as_deref() {
-                let _ = crate::tmplayer::playback::local_player::write_last_opened_song(folder, &path);
+                let _ =
+                    crate::tmplayer::playback::local_player::write_last_opened_song(folder, &path);
             }
         }
         Err(e) => {
@@ -926,9 +972,14 @@ fn handle_action(
     match action {
         Action::Quit => {
             if app.player.mode == PlayMode::LocalPlayback && app.config.resume_last_position {
-                if let (Some(folder), Some(cur_path)) = (app.local_folder.as_deref(), app.playlist.current_path().cloned()) {
+                if let (Some(folder), Some(cur_path)) = (
+                    app.local_folder.as_deref(),
+                    app.playlist.current_path().cloned(),
+                ) {
                     let pos = mode_manager.local.position().unwrap_or(app.player.position);
-                    let _ = crate::tmplayer::playback::local_player::write_last_position(folder, &cur_path, pos);
+                    let _ = crate::tmplayer::playback::local_player::write_last_position(
+                        folder, &cur_path, pos,
+                    );
                 }
             }
             // handled by tui flag
@@ -1030,200 +1081,202 @@ fn handle_action(
                 app.playlist_slide_target_x = 0;
             }
         }
-        Action::Confirm => {
-            match app.overlay {
-                Overlay::FolderInput => {
-                    let folder = app.folder_input.buf.trim().to_string();
-                    app.close_overlay();
-                    if folder.is_empty() {
-                        return Ok(());
-                    }
-                    let p = PathBuf::from(&folder);
-                    if let Err(e) = open_local_folder(app, mode_manager, &p) {
-                        app.set_toast(format!("Folder error: {e}"));
-                    }
+        Action::Confirm => match app.overlay {
+            Overlay::FolderInput => {
+                let folder = app.folder_input.buf.trim().to_string();
+                app.close_overlay();
+                if folder.is_empty() {
+                    return Ok(());
                 }
-                Overlay::Playlist => {
-                    if let Some(bridge) = host_bridge.as_mut() {
-                        let idx = app.playlist_view.selected.min(app.playlist_view.len().saturating_sub(1));
-                        (*bridge).play_queue_index(idx);
-                        let snapshot = (*bridge).snapshot();
-                        sync_from_host_snapshot(app, snapshot);
-                        return Ok(());
-                    }
+                let p = PathBuf::from(&folder);
+                if let Err(e) = open_local_folder(app, mode_manager, &p) {
+                    app.set_toast(format!("Folder error: {e}"));
+                }
+            }
+            Overlay::Playlist => {
+                if let Some(bridge) = host_bridge.as_mut() {
+                    let idx = app
+                        .playlist_view
+                        .selected
+                        .min(app.playlist_view.len().saturating_sub(1));
+                    (*bridge).play_queue_index(idx);
+                    let snapshot = (*bridge).snapshot();
+                    sync_from_host_snapshot(app, snapshot);
+                    return Ok(());
+                }
 
-                    app.playlist_view.set_current_selected();
-                    if app.player.mode == PlayMode::Idle {
-                        if let Some(idx) = app.playlist_view.current {
-                            app.playlist.current = Some(idx);
-                            app.playlist.selected = idx;
-                            app.playlist_view.current = Some(idx);
-                            app.playlist_view.selected = idx;
+                app.playlist_view.set_current_selected();
+                if app.player.mode == PlayMode::Idle {
+                    if let Some(idx) = app.playlist_view.current {
+                        app.playlist.current = Some(idx);
+                        app.playlist.selected = idx;
+                        app.playlist_view.current = Some(idx);
+                        app.playlist_view.selected = idx;
 
-                            if let Some(track) = app.api_tracks.get(idx).cloned() {
-                                let from = CoverSnapshot::from(&app.player.track);
-                                app.player.track = track;
-                                app.player.position = Duration::from_secs(0);
-                                app.player.playback = PlaybackState::Playing;
-                                let to = CoverSnapshot::from(&app.player.track);
-                                app.start_cover_anim(from, to, -1, Instant::now());
-                            }
-                        }
-                    } else if let Some(path) = app.playlist_view.current_path().cloned() {
-                        let view_folder = app.local_view_album_folder.clone();
-                        if let Ok(track) = mode_manager.local.play_file(&path) {
-                            app.player.mode = PlayMode::LocalPlayback;
+                        if let Some(track) = app.api_tracks.get(idx).cloned() {
+                            let from = CoverSnapshot::from(&app.player.track);
                             app.player.track = track;
+                            app.player.position = Duration::from_secs(0);
+                            app.player.playback = PlaybackState::Playing;
+                            let to = CoverSnapshot::from(&app.player.track);
+                            app.start_cover_anim(from, to, -1, Instant::now());
+                        }
+                    }
+                } else if let Some(path) = app.playlist_view.current_path().cloned() {
+                    let view_folder = app.local_view_album_folder.clone();
+                    if let Ok(track) = mode_manager.local.play_file(&path) {
+                        app.player.mode = PlayMode::LocalPlayback;
+                        app.player.track = track;
 
-                            app.queue_remote_fetch(Some(&path));
+                        app.queue_remote_fetch(Some(&path));
 
-                            if let Some(folder) = view_folder {
-                                app.local_folder = Some(folder.clone());
-                                app.playlist = app.playlist_view.clone();
-                                let _ = crate::tmplayer::playback::local_player::write_last_opened_song(&folder, &path);
+                        if let Some(folder) = view_folder {
+                            app.local_folder = Some(folder.clone());
+                            app.playlist = app.playlist_view.clone();
+                            let _ = crate::tmplayer::playback::local_player::write_last_opened_song(
+                                &folder, &path,
+                            );
 
-                                if app.local_folder_kind == LocalFolderKind::MultiAlbum {
-                                    if let Some(root) = app.local_root_folder.as_deref() {
-                                        let _ = crate::tmplayer::playback::local_player::write_last_album(root, &folder);
-                                    }
+                            if app.local_folder_kind == LocalFolderKind::MultiAlbum {
+                                if let Some(root) = app.local_root_folder.as_deref() {
+                                    let _ =
+                                        crate::tmplayer::playback::local_player::write_last_album(
+                                            root, &folder,
+                                        );
                                 }
                             }
                         }
                     }
                 }
-                Overlay::SettingsModal => {
-                    match app.settings_selected {
-                        0 | 1 | 2 | 3 => {
-                            apply_settings_delta(app, host_bridge, 1);
-                        }
-                        4 => {
-                            app.bar_settings_selected = 0;
-                            app.overlay = Overlay::BarSettingsModal;
-                        }
-                        5 => {
-                            app.overlay = Overlay::HelpModal;
-                        }
-                        6 => {
-                            apply_settings_delta(app, host_bridge, 1);
-                        }
-                        7 => {
-                            apply_settings_delta(app, host_bridge, 1);
-                        }
-                        8 => {
-                            app.set_toast("Logout is unavailable in fullscreen");
-                        }
-                        9 => {
-                            app.overlay = Overlay::AboutModal;
-                        }
-                        _ => {}
-                    }
+            }
+            Overlay::SettingsModal => match app.settings_selected {
+                0 | 1 | 2 | 3 => {
+                    apply_settings_delta(app, host_bridge, 1);
                 }
-                Overlay::BarSettingsModal => {
-                    match app.bar_settings_selected {
-                        0 => {
-                            if crate::tmplayer::audio::cava::is_available() {
-                                app.config.visualize = app.config.visualize.cycle(1);
-                                save_and_sync_host_config(app, host_bridge);
-                            } else if app.config.visualize != crate::tmplayer::data::config::VisualizeMode::Off {
-                                app.config.visualize = crate::tmplayer::data::config::VisualizeMode::Off;
-                                save_and_sync_host_config(app, host_bridge);
-                            }
-                        }
-                        1 => {
-                            app.config.super_smooth_bar = !app.config.super_smooth_bar;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        2 => {
-                            app.config.bars_gap = !app.config.bars_gap;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        3 => {
-                            app.config.bar_number = cycle_bar_number(app.config.bar_number, 1);
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        4 => {
-                            app.config.bar_channels = toggle_bar_channels(app.config.bar_channels);
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        5 => {
-                            app.config.album_border = !app.config.album_border;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        6 => {
-                            app.config.page_lyrics = !app.config.page_lyrics;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        7 => {
-                            app.config.audio_quality =
-                                app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        8 => {
-                            app.config.audio_preload = !app.config.audio_preload;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        9 => {
-                            app.config.playback_memory = !app.config.playback_memory;
-                            save_and_sync_host_config(app, host_bridge);
-                        }
-                        _ => {}
-                    }
+                4 => {
+                    app.bar_settings_selected = 0;
+                    app.overlay = Overlay::BarSettingsModal;
                 }
-                Overlay::LocalAudioSettingsModal => {
-                    match app.local_audio_settings_selected {
-                        0 => {
-                            app.config.lyrics_cover_fetch = !app.config.lyrics_cover_fetch;
-                            let _ = app.config.save();
-                            if app.config.lyrics_cover_fetch {
-                                app.reset_remote_fetch_state();
-                                if app.player.mode == PlayMode::LocalPlayback {
-                                    if let Some(cur_path) = app.playlist.current_path().cloned() {
-                                        app.queue_remote_fetch(Some(&cur_path));
-                                    }
-                                } else if app.player.mode == PlayMode::SystemMonitor {
-                                    app.queue_remote_fetch(None);
-                                }
-                            }
-                        }
-                        1 => {
-                            app.config.lyrics_cover_download = !app.config.lyrics_cover_download;
-                            let _ = app.config.save();
-                        }
-                        2 => {
-                            if !app.config.acoustid_api_key.trim().is_empty() {
-                                app.config.audio_fingerprint = !app.config.audio_fingerprint;
-                                let _ = app.config.save();
-                            }
-                        }
-                        3 => {
-                            app.acoustid_input = app.config.acoustid_api_key.clone();
-                            app.overlay = Overlay::AcoustIdModal;
-                        }
-                        4 => {
-                            app.config.resume_last_position = !app.config.resume_last_position;
-                            let _ = app.config.save();
-                        }
-                        _ => {}
-                    }
+                5 => {
+                    app.overlay = Overlay::HelpModal;
                 }
-                Overlay::AcoustIdModal => {
-                    let key = app.acoustid_input.trim().to_string();
-                    app.config.acoustid_api_key = key.clone();
-                    if key.is_empty() {
-                        app.config.audio_fingerprint = false;
-                    }
-                    let _ = app.config.save();
-                    app.overlay = Overlay::SettingsModal;
+                6 => {
+                    apply_settings_delta(app, host_bridge, 1);
                 }
-                Overlay::HelpModal => {
-                    app.close_overlay();
+                7 => {
+                    apply_settings_delta(app, host_bridge, 1);
                 }
-                Overlay::EqModal => {
-                    app.close_overlay();
+                8 => {
+                    app.set_toast("Logout is unavailable in fullscreen");
+                }
+                9 => {
+                    app.overlay = Overlay::AboutModal;
                 }
                 _ => {}
+            },
+            Overlay::BarSettingsModal => match app.bar_settings_selected {
+                0 => {
+                    if crate::tmplayer::audio::cava::is_available() {
+                        app.config.visualize = app.config.visualize.cycle(1);
+                        save_and_sync_host_config(app, host_bridge);
+                    } else if app.config.visualize
+                        != crate::tmplayer::data::config::VisualizeMode::Off
+                    {
+                        app.config.visualize = crate::tmplayer::data::config::VisualizeMode::Off;
+                        save_and_sync_host_config(app, host_bridge);
+                    }
+                }
+                1 => {
+                    app.config.super_smooth_bar = !app.config.super_smooth_bar;
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                2 => {
+                    app.config.bars_gap = !app.config.bars_gap;
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                3 => {
+                    app.config.bar_number = cycle_bar_number(app.config.bar_number, 1);
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                4 => {
+                    app.config.bar_channels = toggle_bar_channels(app.config.bar_channels);
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                5 => {
+                    app.config.album_border = !app.config.album_border;
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                6 => {
+                    app.config.page_lyrics = !app.config.page_lyrics;
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                7 => {
+                    app.config.audio_quality =
+                        app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                8 => {
+                    app.config.audio_preload = !app.config.audio_preload;
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                9 => {
+                    app.config.playback_memory = !app.config.playback_memory;
+                    save_and_sync_host_config(app, host_bridge);
+                }
+                _ => {}
+            },
+            Overlay::LocalAudioSettingsModal => match app.local_audio_settings_selected {
+                0 => {
+                    app.config.lyrics_cover_fetch = !app.config.lyrics_cover_fetch;
+                    let _ = app.config.save();
+                    if app.config.lyrics_cover_fetch {
+                        app.reset_remote_fetch_state();
+                        if app.player.mode == PlayMode::LocalPlayback {
+                            if let Some(cur_path) = app.playlist.current_path().cloned() {
+                                app.queue_remote_fetch(Some(&cur_path));
+                            }
+                        } else if app.player.mode == PlayMode::SystemMonitor {
+                            app.queue_remote_fetch(None);
+                        }
+                    }
+                }
+                1 => {
+                    app.config.lyrics_cover_download = !app.config.lyrics_cover_download;
+                    let _ = app.config.save();
+                }
+                2 => {
+                    if !app.config.acoustid_api_key.trim().is_empty() {
+                        app.config.audio_fingerprint = !app.config.audio_fingerprint;
+                        let _ = app.config.save();
+                    }
+                }
+                3 => {
+                    app.acoustid_input = app.config.acoustid_api_key.clone();
+                    app.overlay = Overlay::AcoustIdModal;
+                }
+                4 => {
+                    app.config.resume_last_position = !app.config.resume_last_position;
+                    let _ = app.config.save();
+                }
+                _ => {}
+            },
+            Overlay::AcoustIdModal => {
+                let key = app.acoustid_input.trim().to_string();
+                app.config.acoustid_api_key = key.clone();
+                if key.is_empty() {
+                    app.config.audio_fingerprint = false;
+                }
+                let _ = app.config.save();
+                app.overlay = Overlay::SettingsModal;
             }
-        }
+            Overlay::HelpModal => {
+                app.close_overlay();
+            }
+            Overlay::EqModal => {
+                app.close_overlay();
+            }
+            _ => {}
+        },
         Action::PlaylistUp => {
             app.playlist_view.move_up();
             app.playlist_view.clamp_selected();
@@ -1238,7 +1291,10 @@ fn handle_action(
             if app.overlay == Overlay::Playlist && app.player.mode == PlayMode::LocalPlayback {
                 if app.playlist_view.move_selected_item_up() {
                     if let Some(folder) = app.local_view_album_folder.as_deref() {
-                        if let Err(e) = crate::tmplayer::playback::local_player::write_order_file(folder, &app.playlist_view) {
+                        if let Err(e) = crate::tmplayer::playback::local_player::write_order_file(
+                            folder,
+                            &app.playlist_view,
+                        ) {
                             app.set_toast(format!("Order save error: {e}"));
                         }
                     }
@@ -1250,7 +1306,10 @@ fn handle_action(
             if app.overlay == Overlay::Playlist && app.player.mode == PlayMode::LocalPlayback {
                 if app.playlist_view.move_selected_item_down() {
                     if let Some(folder) = app.local_view_album_folder.as_deref() {
-                        if let Err(e) = crate::tmplayer::playback::local_player::write_order_file(folder, &app.playlist_view) {
+                        if let Err(e) = crate::tmplayer::playback::local_player::write_order_file(
+                            folder,
+                            &app.playlist_view,
+                        ) {
                             app.set_toast(format!("Order save error: {e}"));
                         }
                     }
@@ -1283,7 +1342,7 @@ fn handle_action(
                 if idx != app.local_view_album_index {
                     let from_cover = app.local_view_album_cover.clone();
                     let from_hash = app.local_view_album_cover_hash;
-                        let from_folder = app.local_view_album_folder.clone();
+                    let from_folder = app.local_view_album_folder.clone();
 
                     app.local_view_album_index = idx;
                     let folder = app.local_album_folders[idx].clone();
@@ -1294,27 +1353,32 @@ fn handle_action(
                         app.playlist_view = pl;
                         app.local_view_album_folder = Some(folder.clone());
 
-                        let cover = crate::tmplayer::playback::metadata::read_cover_from_folder(&folder);
+                        let cover =
+                            crate::tmplayer::playback::metadata::read_cover_from_folder(&folder);
                         app.local_view_album_cover = cover.as_ref().map(|(b, _)| b.clone());
-                        app.local_view_album_cover_hash = cover.map(|(_, h)| Some(h)).unwrap_or(None);
+                        app.local_view_album_cover_hash =
+                            cover.map(|(_, h)| Some(h)).unwrap_or(None);
 
                         // Start cover slide animation (playlist overlay)
                         let dir = if action == Action::NextAlbum { -1 } else { 1 };
-                        app.playlist_album_anim = Some(crate::tmplayer::app::state::PlaylistAlbumAnim {
-                            from_cover,
-                            from_hash,
-                            from_folder,
-                            to_cover: app.local_view_album_cover.clone(),
-                            to_hash: app.local_view_album_cover_hash,
-                            to_folder: app.local_view_album_folder.clone(),
-                            dir,
-                            started_at: Instant::now(),
-                            duration: Duration::from_millis(220),
-                        });
+                        app.playlist_album_anim =
+                            Some(crate::tmplayer::app::state::PlaylistAlbumAnim {
+                                from_cover,
+                                from_hash,
+                                from_folder,
+                                to_cover: app.local_view_album_cover.clone(),
+                                to_hash: app.local_view_album_cover_hash,
+                                to_folder: app.local_view_album_folder.clone(),
+                                dir,
+                                started_at: Instant::now(),
+                                duration: Duration::from_millis(220),
+                            });
 
                         // Record last visited album even if not playing.
                         if let Some(root) = app.local_root_folder.as_deref() {
-                            let _ = crate::tmplayer::playback::local_player::write_last_album(root, &folder);
+                            let _ = crate::tmplayer::playback::local_player::write_last_album(
+                                root, &folder,
+                            );
                         }
                     }
                 }
@@ -1565,91 +1629,99 @@ fn handle_action(
                 }
             }
         }
-        Action::Prev => match app.player.mode {
-            _ if host_bridge.is_some() => {
-                if let Some(bridge) = host_bridge.as_mut() {
-                    (*bridge).play_previous();
-                    let snapshot = (*bridge).snapshot();
-                    sync_from_host_snapshot(app, snapshot);
+        Action::Prev => {
+            match app.player.mode {
+                _ if host_bridge.is_some() => {
+                    if let Some(bridge) = host_bridge.as_mut() {
+                        (*bridge).play_previous();
+                        let snapshot = (*bridge).snapshot();
+                        sync_from_host_snapshot(app, snapshot);
+                    }
                 }
-            }
-            PlayMode::LocalPlayback => {
-                let from = CoverSnapshot::from(&app.player.track);
-                let i = match app.player.repeat_mode {
-                    RepeatMode::Sequence => app.playlist.prev_index_no_wrap(),
-                    RepeatMode::LoopAll => app.playlist.prev_index_sequence(),
-                    RepeatMode::LoopOne => app.playlist.current,
-                    RepeatMode::Shuffle => pick_shuffle_index(&app.playlist),
-                };
-                if let Some(i) = i {
-                    app.playlist.current = Some(i);
-                    if let Some(path) = app.playlist.current_path().cloned() {
-                        if let Ok(track) = mode_manager.local.play_file(&path) {
-                            app.player.track = track;
-                            let to = CoverSnapshot::from(&app.player.track);
-                            app.start_cover_anim(from, to, 1, Instant::now());
+                PlayMode::LocalPlayback => {
+                    let from = CoverSnapshot::from(&app.player.track);
+                    let i = match app.player.repeat_mode {
+                        RepeatMode::Sequence => app.playlist.prev_index_no_wrap(),
+                        RepeatMode::LoopAll => app.playlist.prev_index_sequence(),
+                        RepeatMode::LoopOne => app.playlist.current,
+                        RepeatMode::Shuffle => pick_shuffle_index(&app.playlist),
+                    };
+                    if let Some(i) = i {
+                        app.playlist.current = Some(i);
+                        if let Some(path) = app.playlist.current_path().cloned() {
+                            if let Ok(track) = mode_manager.local.play_file(&path) {
+                                app.player.track = track;
+                                let to = CoverSnapshot::from(&app.player.track);
+                                app.start_cover_anim(from, to, 1, Instant::now());
 
-                            app.queue_remote_fetch(Some(&path));
+                                app.queue_remote_fetch(Some(&path));
 
-                            if let Some(folder) = app.local_folder.as_deref() {
-                                let _ = crate::tmplayer::playback::local_player::write_last_opened_song(folder, &path);
+                                if let Some(folder) = app.local_folder.as_deref() {
+                                    let _ = crate::tmplayer::playback::local_player::write_last_opened_song(folder, &path);
+                                }
                             }
                         }
                     }
                 }
-            }
-            PlayMode::SystemMonitor => {
-                app.pending_system_cover_anim = Some((CoverSnapshot::from(&app.player.track), 1, Instant::now()));
-                let _ = mode_manager.mpris.prev();
-            }
-            PlayMode::Idle => {
-                switch_idle_track(app, 1);
-            }
-        },
-        Action::Next => match app.player.mode {
-            _ if host_bridge.is_some() => {
-                if let Some(bridge) = host_bridge.as_mut() {
-                    (*bridge).play_next();
-                    let snapshot = (*bridge).snapshot();
-                    sync_from_host_snapshot(app, snapshot);
+                PlayMode::SystemMonitor => {
+                    app.pending_system_cover_anim =
+                        Some((CoverSnapshot::from(&app.player.track), 1, Instant::now()));
+                    let _ = mode_manager.mpris.prev();
+                }
+                PlayMode::Idle => {
+                    switch_idle_track(app, 1);
                 }
             }
-            PlayMode::LocalPlayback => {
-                let from = CoverSnapshot::from(&app.player.track);
-                let next = match app.player.repeat_mode {
-                    RepeatMode::Sequence => app.playlist.next_index_no_wrap(),
-                    RepeatMode::LoopAll => app.playlist.next_index_sequence(),
-                    RepeatMode::LoopOne => app.playlist.current,
-                    RepeatMode::Shuffle => pick_shuffle_index(&app.playlist),
-                };
-                if let Some(i) = next {
-                    app.playlist.current = Some(i);
-                    if let Some(path) = app.playlist.current_path().cloned() {
-                        if let Ok(track) = mode_manager.local.play_file(&path) {
-                            app.player.track = track;
-                            let to = CoverSnapshot::from(&app.player.track);
-                            app.start_cover_anim(from, to, -1, Instant::now());
+        }
+        Action::Next => {
+            match app.player.mode {
+                _ if host_bridge.is_some() => {
+                    if let Some(bridge) = host_bridge.as_mut() {
+                        (*bridge).play_next();
+                        let snapshot = (*bridge).snapshot();
+                        sync_from_host_snapshot(app, snapshot);
+                    }
+                }
+                PlayMode::LocalPlayback => {
+                    let from = CoverSnapshot::from(&app.player.track);
+                    let next = match app.player.repeat_mode {
+                        RepeatMode::Sequence => app.playlist.next_index_no_wrap(),
+                        RepeatMode::LoopAll => app.playlist.next_index_sequence(),
+                        RepeatMode::LoopOne => app.playlist.current,
+                        RepeatMode::Shuffle => pick_shuffle_index(&app.playlist),
+                    };
+                    if let Some(i) = next {
+                        app.playlist.current = Some(i);
+                        if let Some(path) = app.playlist.current_path().cloned() {
+                            if let Ok(track) = mode_manager.local.play_file(&path) {
+                                app.player.track = track;
+                                let to = CoverSnapshot::from(&app.player.track);
+                                app.start_cover_anim(from, to, -1, Instant::now());
 
-                            app.queue_remote_fetch(Some(&path));
+                                app.queue_remote_fetch(Some(&path));
 
-                            if let Some(folder) = app.local_folder.as_deref() {
-                                let _ = crate::tmplayer::playback::local_player::write_last_opened_song(folder, &path);
+                                if let Some(folder) = app.local_folder.as_deref() {
+                                    let _ = crate::tmplayer::playback::local_player::write_last_opened_song(folder, &path);
+                                }
                             }
                         }
                     }
                 }
+                PlayMode::SystemMonitor => {
+                    app.pending_system_cover_anim =
+                        Some((CoverSnapshot::from(&app.player.track), -1, Instant::now()));
+                    let _ = mode_manager.mpris.next();
+                }
+                PlayMode::Idle => {
+                    switch_idle_track(app, -1);
+                }
             }
-            PlayMode::SystemMonitor => {
-                app.pending_system_cover_anim = Some((CoverSnapshot::from(&app.player.track), -1, Instant::now()));
-                let _ = mode_manager.mpris.next();
-            }
-            PlayMode::Idle => {
-                switch_idle_track(app, -1);
-            }
-        },
+        }
         Action::VolumeUp => match app.player.mode {
             PlayMode::LocalPlayback => {
-                mode_manager.local.set_volume((mode_manager.local.volume() + 0.05).min(1.0));
+                mode_manager
+                    .local
+                    .set_volume((mode_manager.local.volume() + 0.05).min(1.0));
             }
             PlayMode::SystemMonitor => {
                 if let Some(sysvol) = system_volume {
@@ -1672,7 +1744,9 @@ fn handle_action(
         },
         Action::VolumeDown => match app.player.mode {
             PlayMode::LocalPlayback => {
-                mode_manager.local.set_volume((mode_manager.local.volume() - 0.05).max(0.0));
+                mode_manager
+                    .local
+                    .set_volume((mode_manager.local.volume() - 0.05).max(0.0));
             }
             PlayMode::SystemMonitor => {
                 if let Some(sysvol) = system_volume {
@@ -1814,13 +1888,20 @@ fn theme_key(name: ThemeName) -> &'static str {
     }
 }
 
-fn apply_remote_fetch_results(app: &mut AppState, mode_manager: &mut ModeManager, results: Vec<crate::tmplayer::playback::remote_fetch::RemoteFetchResult>) {
+fn apply_remote_fetch_results(
+    app: &mut AppState,
+    mode_manager: &mut ModeManager,
+    results: Vec<crate::tmplayer::playback::remote_fetch::RemoteFetchResult>,
+) {
     let current_path = if app.player.mode == PlayMode::LocalPlayback {
         app.playlist.current_path().cloned()
     } else {
         None
     };
-    let current_key = crate::tmplayer::playback::remote_fetch::TrackKey::from_track(&app.player.track, current_path.as_deref());
+    let current_key = crate::tmplayer::playback::remote_fetch::TrackKey::from_track(
+        &app.player.track,
+        current_path.as_deref(),
+    );
 
     for res in results {
         if res.key == current_key {
@@ -2023,7 +2104,11 @@ fn desired_cava_config(app: &AppState, layout: &UiLayout) -> Option<CavaConfig> 
     }
 }
 
-fn ensure_cava(cava: &mut Option<CavaRunner>, cfg: &mut Option<CavaConfig>, desired: Option<CavaConfig>) {
+fn ensure_cava(
+    cava: &mut Option<CavaRunner>,
+    cfg: &mut Option<CavaConfig>,
+    desired: Option<CavaConfig>,
+) {
     if cfg.as_ref() == desired.as_ref() {
         return;
     }

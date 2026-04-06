@@ -87,7 +87,9 @@ mod imp {
                             continue;
                         };
 
-                        if let Err(err) = apply_snapshot(&player, &art_dir, &cache_policy, payload).await {
+                        if let Err(err) =
+                            apply_snapshot(&player, &art_dir, &cache_policy, payload).await
+                        {
                             log::debug!("mpris sync failed: {err}");
                         }
                     }
@@ -177,7 +179,11 @@ mod imp {
         Ok(())
     }
 
-    fn build_metadata(art_dir: &Path, cache_policy: &CacheConfig, track: &super::PlaybackTrack) -> Metadata {
+    fn build_metadata(
+        art_dir: &Path,
+        cache_policy: &CacheConfig,
+        track: &super::PlaybackTrack,
+    ) -> Metadata {
         let mut metadata = Metadata::new();
 
         if !track.title.trim().is_empty() {
@@ -200,7 +206,10 @@ mod imp {
         }
 
         if !track.song_id.trim().is_empty() {
-            metadata.set_url(Some(format!("https://music.163.com/#/song?id={}", track.song_id)));
+            metadata.set_url(Some(format!(
+                "https://music.163.com/#/song?id={}",
+                track.song_id
+            )));
             metadata.set_comment(Some([format!("song_id={}", track.song_id)]));
         }
 
@@ -220,7 +229,9 @@ mod imp {
 
         if let Some(bytes) = track.cover.as_deref() {
             if !bytes.is_empty() {
-                if let Some(art_url) = persist_cover_as_file_url(art_dir, cache_policy, &track.song_id, bytes) {
+                if let Some(art_url) =
+                    persist_cover_as_file_url(art_dir, cache_policy, &track.song_id, bytes)
+                {
                     metadata.set_art_url(Some(art_url));
                 }
             }

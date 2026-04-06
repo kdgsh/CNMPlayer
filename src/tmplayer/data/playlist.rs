@@ -78,7 +78,9 @@ impl Playlist {
     }
 
     pub fn current_path(&self) -> Option<&PathBuf> {
-        self.current.and_then(|i| self.items.get(i)).map(|it| &it.path)
+        self.current
+            .and_then(|i| self.items.get(i))
+            .map(|it| &it.path)
     }
 
     pub fn selected_path(&self) -> Option<&PathBuf> {
@@ -128,10 +130,6 @@ impl Playlist {
         if self.items.is_empty() {
             return None;
         }
-        if cur == 0 {
-            None
-        } else {
-            Some(cur - 1)
-        }
+        if cur == 0 { None } else { Some(cur - 1) }
     }
 }
