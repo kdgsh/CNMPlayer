@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthChar;
 pub const TARGET_HEIGHT: u16 = 3;
 
 pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
-    let size = frame.size();
+    let size = frame.area();
     if size.width < 20 || size.height < 2 {
         return;
     }
@@ -45,7 +45,7 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
         return;
     }
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -95,7 +95,7 @@ pub fn draw_search_box_overlay(frame: &mut Frame, app: &App) {
     let cursor_x = inner
         .x
         .saturating_add(cursor_offset.min(inner.width.saturating_sub(1)));
-    frame.set_cursor(cursor_x, inner.y);
+    frame.set_cursor_position((cursor_x, inner.y));
 }
 
 fn base_bg_style(app: &App) -> Style {

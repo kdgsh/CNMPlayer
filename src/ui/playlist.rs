@@ -13,7 +13,7 @@ pub fn draw_playlist(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
     app.clear_content_hits();
 
-    let size = frame.size();
+    let size = frame.area();
     frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 40 || size.height < 14 {
@@ -64,7 +64,7 @@ pub fn draw_playlist(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -89,7 +89,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
             cover_block,
         );
 
-        let cover_area = cover_block.inner(&ratatui::layout::Margin {
+        let cover_area = cover_block.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });
@@ -142,7 +142,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(info).wrap(Wrap { trim: true }),
-        cols[1].inner(&ratatui::layout::Margin {
+        cols[1].inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 0,
         }),
@@ -150,7 +150,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 0,
     });

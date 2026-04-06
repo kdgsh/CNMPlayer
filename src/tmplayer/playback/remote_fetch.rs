@@ -298,7 +298,7 @@ fn lrclib_fetch(title: &str, artist: &str, album: &str, duration_secs: u64) -> O
     let agent = "tmplayer/0.1.0 (https://github.com)";
     let resp = http_agent()
         .get("https://lrclib.net/api/get")
-        .set("User-Agent", agent)
+        .header("User-Agent", agent)
         .query("track_name", title)
         .query("artist_name", artist)
         .query("album_name", album)
@@ -310,7 +310,7 @@ fn lrclib_fetch(title: &str, artist: &str, album: &str, duration_secs: u64) -> O
         return None;
     }
 
-    let body: LrclibResponse = resp.into_json().ok()?;
+    let body: LrclibResponse = resp.into_body().read_json().ok()?;
     if let Some(s) = body.synced_lyrics {
         if !s.trim().is_empty() {
             return Some(s);
@@ -349,7 +349,7 @@ fn musicbrainz_release_id(title: &str, artist: &str, album: &str) -> Option<Stri
     let agent = "tmplayer/0.1.0 (https://github.com)";
     let resp = http_agent()
         .get("https://musicbrainz.org/ws/2/recording/")
-        .set("User-Agent", agent)
+        .header("User-Agent", agent)
         .query("query", &query)
         .query("fmt", "json")
         .query("limit", "1")
@@ -361,7 +361,7 @@ fn musicbrainz_release_id(title: &str, artist: &str, album: &str) -> Option<Stri
         return None;
     }
 
-    let body: MbRecordingResponse = resp.into_json().ok()?;
+    let body: MbRecordingResponse = resp.into_body().read_json().ok()?;
     let rec = body.recordings?.into_iter().next()?;
     if let Some(releases) = rec.releases {
         return releases.into_iter().next().map(|r| r.id);
@@ -397,21 +397,31 @@ fn cover_art_archive_fetch(release_id: &str) -> Option<(Vec<u8>, Option<String>)
     );
     let resp = http_agent()
         .get(&url)
-        .set("User-Agent", agent)
+        .header("User-Agent", agent)
         .call()
         .ok()?;
     if resp.status() != 200 {
         return None;
     }
-    if let Some(len) = resp.header("Content-Length") {
-        if let Ok(n) = len.parse::<u64>() {
-            if n > MAX_REMOTE_COVER_BYTES as u64 {
-                return None;
-            }
+    let content_length = resp
+        .headers()
+        .get("Content-Length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    if let Some(n) = content_length {
+        if n > MAX_REMOTE_COVER_BYTES as u64 {
+            return None;
         }
     }
-    let content_type = resp.header("Content-Type").map(|s| s.to_string());
-    let mut reader = resp.into_reader().take(MAX_REMOTE_COVER_BYTES as u64 + 1);
+    let content_type = resp
+        .headers()
+        .get("Content-Type")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    let mut reader = resp
+        .into_body()
+        .into_reader()
+        .take(MAX_REMOTE_COVER_BYTES as u64 + 1);
     let mut bytes = Vec::with_capacity(64 * 1024);
     reader.read_to_end(&mut bytes).ok()?;
     if bytes.is_empty() || bytes.len() > MAX_REMOTE_COVER_BYTES {
@@ -464,7 +474,7 @@ fn acoustid_lookup(api_key: &str, fingerprint: &str, duration_secs: u32) -> Opti
     let agent = "tmplayer/0.1.0 (https://github.com)";
     let resp = http_agent()
         .get("https://api.acoustid.org/v2/lookup")
-        .set("User-Agent", agent)
+        .header("User-Agent", agent)
         .query("client", api_key)
         .query("meta", "recordings+releases")
         .query("duration", &duration_secs.to_string())
@@ -477,7 +487,7 @@ fn acoustid_lookup(api_key: &str, fingerprint: &str, duration_secs: u32) -> Opti
         return None;
     }
 
-    let body: AcoustidResponse = resp.into_json().ok()?;
+    let body: AcoustidResponse = resp.into_body().read_json().ok()?;
     if body.status != "ok" {
         return None;
     }
@@ -624,7 +634,8 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
 }
 
 fn http_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(8))
-        .build()
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(8)))
+        .build();
+    ureq::Agent::new_with_config(config)
 }

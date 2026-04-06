@@ -3,37 +3,33 @@ name = "cnmplayer"
 version = "0.3.0"
 edition = "2024"
 
-[features]
-bundle-cava = []
-
 [dependencies]
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1.1"
 log = "0.4"
 env_logger = "0.11"
 libc = "0.2"
-tempfile = "3"
-ratatui = "0.26"
-crossterm = "0.27"
+ratatui = "0.30"
+crossterm = "0.29"
 directories = "6"
 tokio = { version = "1", features = ["full"] }
 ncm-api = { path = "./ncm-api-rs" }
 qrcode = "0.14"
-image = "0.24"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-unicode-width = "0.1"
+image = "0.25"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+unicode-width = "0.2"
 rodio = "0.22"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "wav", "vorbis"] }
-lofty = "0.18"
+lofty = "0.23"
 base64 = "0.22"
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 chromaprint = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2.0"
-alsa = "0.10"
+alsa = "0.11"
 mpris-server = "0.9"
 

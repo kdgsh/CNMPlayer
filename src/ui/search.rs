@@ -13,7 +13,7 @@ pub fn draw_search(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
     app.clear_content_hits();
 
-    let size = frame.size();
+    let size = frame.area();
     frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 42 || size.height < 14 {
@@ -46,7 +46,7 @@ pub fn draw_search(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_result_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });

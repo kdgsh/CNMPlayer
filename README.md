@@ -45,7 +45,7 @@ When you switch into fullscreen playback, CNMPlayer uses the embedded TMPlayer p
 - Networking: tokio + reqwest + ncm-api-rs
 - Playback: rodio + symphonia + cpal
 - Metadata and artwork: lofty + image + qrcode
-- Visualization: cava, with optional `bundle-cava` embedding
+- Visualization: external `cava`
 - Fullscreen playback integration: TMPlayer
 
 <h2 align="center">Development Setup</h2>
@@ -60,26 +60,21 @@ Install the build dependencies provided by your distribution. On Debian/Ubuntu, 
 
 ```bash
 sudo apt update
-sudo apt install -y pkg-config libasound2-dev libdbus-1-dev libchromaprint-dev
+sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-dev libchromaprint-dev
 ```
 
 ### Spectrum Visualization (`cava`)
 
-CNMPlayer uses `cava` for the live spectrum visualizer.
-If `cava` is not available, the app still runs, but the spectrum bars stay empty.
+CNMPlayer looks for an external `cava` binary for the live spectrum visualizer.
+If `cava` is not available, the app still runs, but the bars visualizer stays empty.
 
 The executable lookup order is:
 
 1. `TMPLAYER_CAVA`
-2. `./cava`
-3. `./third_party/cava/cava`
-4. `cava` in `PATH`
-
-If you want to bundle a `cava` binary into the build, enable:
-
-```bash
-cargo build --release --features bundle-cava
-```
+2. `<executable dir>/cava`
+3. `<executable dir>/third_party/cava/cava`
+4. `<current working directory>/third_party/cava/cava`
+5. `cava` in `PATH`
 
 ### Run
 
@@ -113,12 +108,16 @@ Audio cache files are stored under your OS cache directory unless you set `cache
 
 Important settings in `config/default.toml`:
 
-- Interface: `theme`, `language`, `transparent_background`, `show_hints`
+- Runtime: `ui_fps`, `spectrum_hz`, `mpris_poll_ms`
+- Interface: `theme`, `language`, `transparent_background`, `show_hints`, `home_more_recommend`
 - Login banner: `default_opening_title`
 - Playback layout: `visualize`, `page_lyrics`, `album_border`, `kitty_graphics`, `kitty_cover_scale_percent`
 - Bars mode: `super_smooth_bar`, `bars_gap`, `bar_number`, `bar_channels`, `bar_channel_reverse`
-- Audio quality: `audio_quality`
-- Keybinds: `keybind_search_box`, `keybind_fullscreen`, `keybind_settings`, `keybind_sidebar`, `keybind_quit`, `keybind_prev`, `keybind_next`, `keybind_toggle_play_pause`, `keybind_toggle_mode`
+- Playback behavior: `audio_quality`, `audio_preload`, `playback_memory`, `resume_last_position`
+- Lyrics and recognition: `lyrics_cover_fetch`, `lyrics_cover_download`, `audio_fingerprint`, `acoustid_api_key`
+- Global keybinds: `keybind_search_box`, `keybind_fullscreen`, `keybind_settings`, `keybind_sidebar`, `keybind_quit`, `keybind_prev`, `keybind_next`, `keybind_toggle_play_pause`, `keybind_toggle_mode`
+- Fullscreen keybinds: `keybind_fullscreen_prev`, `keybind_fullscreen_next`, `keybind_fullscreen_toggle_play_pause`, `keybind_fullscreen_toggle_mode`, `keybind_fullscreen_eq`, `keybind_fullscreen_eq_reset`, `keybind_toggle_like_fullscreen`
+- Collapsed player keybind: `keybind_toggle_like_collapsed`
 - Cache policy: `cache.path`, `cache.clean_strategy`, `cache.max_size_mb`, `cache.max_age_days`, `cache.clean_on_startup`
 
 The available audio quality levels are:
@@ -137,20 +136,31 @@ If the current account does not have VIP access, CNMPlayer clamps the quality to
 
 <h2 align="center">Keyboard Shortcuts</h2>
 
-Global shortcuts:
+Configurable shortcuts (default bindings):
 
 - `Ctrl+S`: open the search box
 - `Ctrl+F`: open fullscreen playback
 - `T`: open settings
 - `P`: toggle the sidebar
-- `Ctrl+Up` / `Ctrl+Down`: switch sidebar playlist section (Created / Collected) when the sidebar is expanded
 - `Q`: quit the host app
 - `Esc`: close overlays or go back from the current page
-- `Ctrl+K`: open help
 - `Alt+Space`: toggle play/pause
 - `Alt+Left`: previous track
 - `Alt+Right`: next track
 - `Alt+M`: toggle repeat mode
+- `Left`: fullscreen previous track
+- `Right`: fullscreen next track
+- `Space`: fullscreen play/pause
+- `M`: toggle fullscreen playback mode
+- `E`: toggle fullscreen EQ
+- `Alt+R`: reset fullscreen EQ
+- `L`: toggle like/unlike in fullscreen
+- `Alt+L`: toggle like/unlike in the collapsed player bar
+
+Additional fixed shortcuts:
+
+- `Ctrl+Up` / `Ctrl+Down`: switch sidebar playlist section (Created / Collected) when the sidebar is expanded
+- `Ctrl+K`: open help
 
 Login page:
 

@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
-    let size = frame.size();
+    let size = frame.area();
 
     if matches!(app.overlay, Some(Overlay::SettingsAbout)) {
         draw_about_modal(frame, app, size);
@@ -38,7 +38,7 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
         area,
     );
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 2,
         vertical: 1,
     });
@@ -361,7 +361,7 @@ fn draw_about_modal(frame: &mut Frame, app: &App, size: Rect) {
         .style(base_bg_style(app));
     frame.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });

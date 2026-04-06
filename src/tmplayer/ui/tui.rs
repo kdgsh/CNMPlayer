@@ -163,7 +163,7 @@ impl Tui {
         let mut layout_out = UiLayout::default();
 
         self.terminal.draw(|f| {
-            let size = f.size();
+            let size = f.area();
             layout_out.full = size;
 
             // small terminal: keep stable, hide secondary panels
@@ -210,7 +210,7 @@ impl Tui {
                 width: rows[0].width,
                 height: rows[0].height.saturating_add(rows[1].height),
             };
-            let inner = outer.inner(&ratatui::layout::Margin {
+            let inner = outer.inner(ratatui::layout::Margin {
                 horizontal: 1,
                 vertical: 1,
             });
@@ -229,13 +229,13 @@ impl Tui {
 
             // For kitty graphics, we draw into the inner area (optional border).
             layout_out.info_cover_image = if app.config.album_border {
-                info_l.cover.inner(&ratatui::layout::Margin {
+                info_l.cover.inner(ratatui::layout::Margin {
                     horizontal: 1,
                     vertical: 1,
                 })
             } else {
                 // Reserve one ring for visual breathing room even without border.
-                info_l.cover.inner(&ratatui::layout::Margin {
+                info_l.cover.inner(ratatui::layout::Margin {
                     horizontal: 1,
                     vertical: 1,
                 })
@@ -871,7 +871,7 @@ fn render_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 2,
         vertical: 1,
     });
@@ -957,7 +957,7 @@ fn render_acoustid_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState)
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -1005,7 +1005,7 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 2,
         vertical: 1,
     });
@@ -1151,7 +1151,7 @@ fn render_local_audio_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &m
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -1280,7 +1280,7 @@ fn render_about_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -1523,7 +1523,7 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 2,
         vertical: 1,
     });
@@ -1651,7 +1651,7 @@ fn render_eq_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
         );
     f.render_widget(block, area);
 
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -1908,7 +1908,7 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
     // Eq modal consumes clicks first
     if app.overlay == Overlay::EqModal {
         let area = centered_rect(layout.full, 44, 31);
-        let inner = area.inner(&ratatui::layout::Margin {
+        let inner = area.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });

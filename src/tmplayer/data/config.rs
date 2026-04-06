@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 const DEFAULT_EQ_BANDS_DB: [f32; crate::tmplayer::app::state::EQ_BANDS] =
     [0.0; crate::tmplayer::app::state::EQ_BANDS];
+const LEGACY_STARTUP_FOLDER_KEY: &str = concat!("default", "_opening", "_folder");
+const LEGACY_STARTUP_FOLDER_KEY_KEBAB: &str = concat!("default", "-opening", "-folder");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -127,13 +129,6 @@ pub struct Config {
 
     #[serde(default = "default_keybind_toggle_like_fullscreen")]
     pub keybind_toggle_like_fullscreen: String,
-
-    #[serde(
-        default,
-        rename = "default-opening-folder",
-        skip_serializing_if = "String::is_empty"
-    )]
-    pub default_opening_folder: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,7 +393,6 @@ impl Default for Config {
             keybind_fullscreen_eq: default_keybind_fullscreen_eq(),
             keybind_fullscreen_eq_reset: default_keybind_fullscreen_eq_reset(),
             keybind_toggle_like_fullscreen: default_keybind_toggle_like_fullscreen(),
-            default_opening_folder: String::new(),
         }
     }
 }
@@ -413,6 +407,9 @@ impl Config {
             return Ok(Self::default());
         }
         let raw = fs::read_to_string(path)?;
+        let legacy_startup_folder_key_present =
+            raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
+                || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
         let cfg: Config = toml::from_str(&raw).unwrap_or_default();
         let mut cfg = cfg;
         if cfg.ui_fps == 0 {
@@ -461,6 +458,7 @@ impl Config {
             || !raw.contains("keybind_fullscreen_eq")
             || !raw.contains("keybind_fullscreen_eq_reset")
             || !raw.contains("keybind_toggle_like_fullscreen")
+            || legacy_startup_folder_key_present
             || !raw.contains("spectrum_hz")
             || forced_visualize_off
             || migrated_legacy_sidebar

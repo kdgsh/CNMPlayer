@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 const DEFAULT_EQ_BANDS_DB: [f32; crate::tmplayer::app::state::EQ_BANDS] =
     [0.0; crate::tmplayer::app::state::EQ_BANDS];
+const LEGACY_STARTUP_FOLDER_KEY: &str = concat!("default", "_opening", "_folder");
+const LEGACY_STARTUP_FOLDER_KEY_KEBAB: &str = concat!("default", "-opening", "-folder");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -61,13 +63,6 @@ pub struct Config {
 
     #[serde(default)]
     pub resume_last_position: bool,
-
-    #[serde(
-        default,
-        rename = "default-opening-folder",
-        skip_serializing_if = "String::is_empty"
-    )]
-    pub default_opening_folder: String,
 
     #[serde(default)]
     pub default_opening_title: String,
@@ -476,7 +471,6 @@ impl Default for Config {
             audio_fingerprint: false,
             acoustid_api_key: String::new(),
             resume_last_position: false,
-            default_opening_folder: String::new(),
             default_opening_title: String::new(),
             language: default_language(),
             page_lyrics: default_page_lyrics(),
@@ -518,6 +512,9 @@ impl Config {
         }
 
         let raw = fs::read_to_string(path)?;
+        let legacy_startup_folder_key_present =
+            raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
+                || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
         let mut cfg: Config = toml::from_str(&raw).unwrap_or_default();
 
         if cfg.ui_fps == 0 {
@@ -570,6 +567,7 @@ impl Config {
             || !raw.contains("keybind_fullscreen_eq_reset")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("keybind_toggle_like_collapsed")
+            || legacy_startup_folder_key_present
             || migrated_legacy_sidebar
         {
             let _ = cfg.save();

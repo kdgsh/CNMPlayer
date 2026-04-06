@@ -122,25 +122,6 @@ fn open_local_folder(
     Ok(())
 }
 
-fn maybe_open_default_folder(app: &mut AppState, mode_manager: &mut ModeManager) {
-    let raw = app.config.default_opening_folder.trim().to_string();
-    if raw.is_empty() {
-        return;
-    }
-
-    let p = PathBuf::from(&raw);
-    if !p.is_dir() {
-        app.set_toast("Default folder not found; cleared setting");
-        app.config.default_opening_folder.clear();
-        let _ = app.config.save();
-        return;
-    }
-
-    if let Err(e) = open_local_folder(app, mode_manager, &p) {
-        app.set_toast(format!("Default folder error: {e}"));
-    }
-}
-
 fn map_host_state(state: HostPlaybackState) -> PlaybackState {
     match state {
         HostPlaybackState::Playing => PlaybackState::Playing,
@@ -578,10 +559,6 @@ pub fn run(
     // If cava isn't installed, we leave the spectrum empty.
     let mut cava: Option<CavaRunner> = None;
     let mut cava_cfg: Option<CavaConfig> = None;
-
-    if host_bridge.is_none() {
-        maybe_open_default_folder(app, &mut mode_manager);
-    }
 
     let system_volume = SystemVolume::try_new().ok();
 

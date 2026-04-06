@@ -1,6 +1,7 @@
 use crate::tmplayer::app::state::{LyricLine, TrackMetadata};
 use anyhow::Result;
-use lofty::{Accessor, AudioFile, ItemKey, Tag, TaggedFileExt};
+use lofty::file::{AudioFile, TaggedFile, TaggedFileExt};
+use lofty::tag::{Accessor, ItemKey, Tag};
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -68,7 +69,7 @@ pub fn read_metadata(path: &Path) -> Result<TrackMetadata> {
     Ok(meta)
 }
 
-fn read_embedded_cover(tagged: &lofty::TaggedFile) -> Option<(Vec<u8>, u64)> {
+fn read_embedded_cover(tagged: &TaggedFile) -> Option<(Vec<u8>, u64)> {
     // Try primary tag first, then other tags.
     if let Some(t) = tagged.primary_tag() {
         if let Some((b, h)) = read_cover_from_tag(t) {
@@ -150,7 +151,7 @@ fn read_cover_file(path: &Path) -> Option<(Vec<u8>, u64)> {
     Some((bytes, hash))
 }
 
-fn read_embedded_lyrics(tagged: &lofty::TaggedFile) -> Option<Vec<LyricLine>> {
+fn read_embedded_lyrics(tagged: &TaggedFile) -> Option<Vec<LyricLine>> {
     // Try primary tag first, then other tags.
     if let Some(t) = tagged.primary_tag() {
         if let Some(lines) = read_lyrics_from_tag(t) {
@@ -166,7 +167,7 @@ fn read_embedded_lyrics(tagged: &lofty::TaggedFile) -> Option<Vec<LyricLine>> {
 }
 
 fn read_lyrics_from_tag(tag: &Tag) -> Option<Vec<LyricLine>> {
-    let raw = tag.get_string(&ItemKey::Lyrics)?.trim();
+    let raw = tag.get_string(ItemKey::Lyrics)?.trim();
     if raw.is_empty() {
         return None;
     }

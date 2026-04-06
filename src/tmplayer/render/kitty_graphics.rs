@@ -58,7 +58,7 @@ pub fn encode_image_bytes_to_png_base64(
     let mut png = Vec::new();
     {
         let enc = PngEncoder::new(&mut png);
-        if enc.write_image(&rgba, w, h, ColorType::Rgba8).is_err() {
+        if enc.write_image(&rgba, w, h, ColorType::Rgba8.into()).is_err() {
             return None;
         }
     }

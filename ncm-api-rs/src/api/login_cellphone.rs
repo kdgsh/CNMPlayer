@@ -27,7 +27,7 @@ impl ApiClient {
             let password = if let Some(md5_pwd) = query.get("md5_password") {
                 md5_pwd.to_string()
             } else if let Some(pwd) = query.get("password") {
-                format!("{:x}", Md5::digest(pwd.as_bytes()))
+                hex::encode(Md5::digest(pwd.as_bytes()))
             } else {
                 String::new()
             };

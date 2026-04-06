@@ -50,7 +50,7 @@ fn list_only_layout(inner: Rect) -> PlaylistPanelLayout {
 }
 
 pub fn compute_layout(area: Rect, app: &AppState) -> PlaylistPanelLayout {
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -641,7 +641,7 @@ mod tests {
             height: 6,
         };
         let layout = compute_layout(area, &app);
-        let inner = area.inner(&ratatui::layout::Margin {
+        let inner = area.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });

@@ -13,7 +13,7 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
     app.clear_content_hits();
 
-    let size = frame.size();
+    let size = frame.area();
     frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 32 || size.height < 12 {
@@ -66,7 +66,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
         horizontal: 1,
         vertical: 1,
     };
-    let inner = area.inner(&margin);
+    let inner = area.inner(margin);
     if inner.width < 14 || inner.height < 8 {
         return;
     }
@@ -143,7 +143,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             rect,
         );
 
-        let inner_rect = rect.inner(&ratatui::layout::Margin {
+        let inner_rect = rect.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });
@@ -297,7 +297,7 @@ fn draw_home_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
         sidebar,
     );
 
-    let inner = sidebar.inner(&ratatui::layout::Margin {
+    let inner = sidebar.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });

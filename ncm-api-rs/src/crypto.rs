@@ -6,7 +6,7 @@
 /// - linuxapi: AES-128-ECB
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit};
 use md5::{Digest, Md5};
-use rand::Rng;
+use rand::RngExt;
 use rsa::traits::PublicKeyParts;
 use rsa::{BigUint, RsaPublicKey};
 use std::collections::HashMap;
@@ -81,11 +81,11 @@ fn rsa_encrypt_no_padding(plaintext: &[u8]) -> String {
 /// 双层 AES-128-CBC + RSA 加密随机密钥
 pub fn weapi(object: &serde_json::Value) -> HashMap<String, String> {
     let text = serde_json::to_string(object).unwrap();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // 生成 16 位随机密钥
     let secret_key: String = (0..16)
-        .map(|_| BASE62[rng.gen_range(0..62)] as char)
+        .map(|_| BASE62[rng.random_range(0..62)] as char)
         .collect();
 
     // 第一层 AES-CBC：preset_key + iv
@@ -120,7 +120,7 @@ pub fn linuxapi(object: &serde_json::Value) -> HashMap<String, String> {
 pub fn eapi(url: &str, object: &serde_json::Value) -> HashMap<String, String> {
     let text = serde_json::to_string(object).unwrap();
     let message = format!("nobody{}use{}md5forencrypt", url, text);
-    let digest = format!("{:x}", Md5::digest(message.as_bytes()));
+    let digest = hex::encode(Md5::digest(message.as_bytes()));
     let data = format!("{}-36cd479b6b5-{}-36cd479b6b5-{}", url, text, digest);
 
     let mut result = HashMap::new();

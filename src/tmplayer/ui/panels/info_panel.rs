@@ -26,7 +26,7 @@ pub struct InfoPanelLayout {
 
 pub fn layout(area: Rect) -> InfoPanelLayout {
     // Keep borders outside and reserve an inner content area.
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 2,
         vertical: 2,
     });
@@ -187,7 +187,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
                         .border_set(SOLID_BORDER)
                         .style(Style::default().fg(app.theme.color_subtext()));
                     f.render_widget(block, l.cover);
-                    let inner = l.cover.inner(&ratatui::layout::Margin {
+                    let inner = l.cover.inner(ratatui::layout::Margin {
                         horizontal: 1,
                         vertical: 1,
                     });
@@ -195,7 +195,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
                         f.render_widget(Block::default().style(Style::default().bg(bg)), inner);
                     }
                 } else {
-                    let inner = l.cover.inner(&ratatui::layout::Margin {
+                    let inner = l.cover.inner(ratatui::layout::Margin {
                         horizontal: 1,
                         vertical: 1,
                     });
@@ -224,7 +224,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
                         .border_set(SOLID_BORDER)
                         .style(Style::default().fg(app.theme.color_subtext()));
                     f.render_widget(block, l.cover);
-                    let inner = l.cover.inner(&ratatui::layout::Margin {
+                    let inner = l.cover.inner(ratatui::layout::Margin {
                         horizontal: 1,
                         vertical: 1,
                     });
@@ -235,7 +235,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
                         );
                     }
                 } else {
-                    let inner = l.cover.inner(&ratatui::layout::Margin {
+                    let inner = l.cover.inner(ratatui::layout::Margin {
                         horizontal: 1,
                         vertical: 1,
                     });

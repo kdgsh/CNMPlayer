@@ -325,7 +325,7 @@ fn playlist_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
         .split(content_area);
 
     let header = main[0];
-    let inner = header.inner(&ratatui::layout::Margin {
+    let inner = header.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -346,7 +346,7 @@ fn playlist_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
         return None;
     }
 
-    let cover_rect = cover_block.inner(&ratatui::layout::Margin {
+    let cover_rect = cover_block.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -391,7 +391,7 @@ fn author_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
         .split(content_area);
 
     let header = main[0];
-    let inner = header.inner(&ratatui::layout::Margin {
+    let inner = header.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -412,7 +412,7 @@ fn author_header_cover_rect(app: &App, size: Rect) -> Option<Rect> {
         return None;
     }
 
-    let cover_rect = cover_block.inner(&ratatui::layout::Margin {
+    let cover_rect = cover_block.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -450,7 +450,7 @@ fn tile_cover_rect(tile_rect: Rect) -> Rect {
         return Rect::default();
     }
 
-    let inner_rect = tile_rect.inner(&ratatui::layout::Margin {
+    let inner_rect = tile_rect.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });

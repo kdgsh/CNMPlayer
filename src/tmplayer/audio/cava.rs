@@ -7,7 +7,6 @@ use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tempfile::TempDir;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,12 +30,11 @@ pub struct CavaRunner {
     child: Child,
     _reader: thread::JoinHandle<()>,
     cfg_path: String,
-    _temp_dir: Option<TempDir>,
 }
 
 pub fn is_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
-    *AVAILABLE.get_or_init(|| find_cava_executable().is_some() || cfg!(feature = "bundle-cava"))
+    *AVAILABLE.get_or_init(|| find_cava_executable().is_some())
 }
 
 impl CavaRunner {
@@ -65,7 +63,7 @@ impl CavaRunner {
         let cfg_path = temp_cfg_path();
         fs::write(&cfg_path, cfg).with_context(|| format!("write cava config: {cfg_path}"))?;
 
-        let (cava_exe, temp_dir) = resolve_cava_executable()?;
+        let cava_exe = resolve_cava_executable()?;
         let mut child = Command::new(&cava_exe)
             .arg("-p")
             .arg(&cfg_path)
@@ -143,7 +141,6 @@ impl CavaRunner {
             child,
             _reader: reader,
             cfg_path,
-            _temp_dir: temp_dir,
         })
     }
 
@@ -205,30 +202,9 @@ fn find_cava_executable() -> Option<PathBuf> {
     None
 }
 
-fn resolve_cava_executable() -> Result<(PathBuf, Option<TempDir>)> {
+fn resolve_cava_executable() -> Result<PathBuf> {
     if let Some(p) = find_cava_executable() {
-        return Ok((p, None));
-    }
-
-    #[cfg(feature = "bundle-cava")]
-    {
-        let temp_dir = tempfile::Builder::new()
-            .prefix("tmplayer-cava-")
-            .tempdir()
-            .context("create temp dir for cava")?;
-        let path = temp_dir.path().join("cava");
-        fs::write(&path, embedded_cava_bytes())
-            .with_context(|| format!("write temp cava: {}", path.display()))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&path)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&path, perms)?;
-        }
-
-        return Ok((path, Some(temp_dir)));
+        return Ok(p);
     }
 
     Err(anyhow::anyhow!("cava not found"))
@@ -243,11 +219,6 @@ fn which_in_path(bin: &str) -> Option<PathBuf> {
         }
     }
     None
-}
-
-#[cfg(feature = "bundle-cava")]
-fn embedded_cava_bytes() -> &'static [u8] {
-    include_bytes!(concat!(env!("OUT_DIR"), "/cava.bin"))
 }
 
 impl Drop for CavaRunner {

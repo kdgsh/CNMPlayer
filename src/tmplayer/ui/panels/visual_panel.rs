@@ -21,7 +21,7 @@ pub fn render(f: &mut Frame, lyric_area: Rect, spectrum_area: Rect, app: &mut Ap
         .style(Style::default().fg(app.theme.color_subtext()));
     f.render_widget(outer_block, outer);
 
-    let inner = outer.inner(&ratatui::layout::Margin {
+    let inner = outer.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });

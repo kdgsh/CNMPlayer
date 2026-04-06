@@ -45,7 +45,7 @@ CNMPlayer（Customized Netease Music Player）是一个运行在终端中的网�
 - 网络：tokio + reqwest + ncm-api-rs
 - 播放：rodio + symphonia + cpal
 - 元数据与封面：lofty + image + qrcode
-- 可视化：cava，并支持可选的 `bundle-cava` 内置方式
+- 可视化：外部 `cava`
 - 全屏播放整合：TMPlayer
 
 <h2 align="center">开发与运行</h2>
@@ -60,26 +60,21 @@ CNMPlayer（Customized Netease Music Player）是一个运行在终端中的网�
 
 ```bash
 sudo apt update
-sudo apt install -y pkg-config libasound2-dev libdbus-1-dev libchromaprint-dev
+sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-dev libchromaprint-dev
 ```
 
 ### 频谱可视化（`cava`）
 
-CNMPlayer 使用 `cava` 生成实时频谱可视化。
-如果系统里没有 `cava`，程序仍然可以运行，但频谱条会保持空白。
+CNMPlayer 会查找外部 `cava` 可执行文件来生成实时频谱可视化。
+如果系统里没有 `cava`，程序仍然可以运行，但条形频谱会保持空白。
 
 可执行文件的查找顺序如下：
 
 1. `TMPLAYER_CAVA`
-2. `./cava`
-3. `./third_party/cava/cava`
-4. `PATH` 里的 `cava`
-
-如果你希望把 `cava` 直接打包进构建结果，可以启用：
-
-```bash
-cargo build --release --features bundle-cava
-```
+2. `<可执行文件目录>/cava`
+3. `<可执行文件目录>/third_party/cava/cava`
+4. `<当前工作目录>/third_party/cava/cava`
+5. `PATH` 里的 `cava`
 
 ### 运行
 
@@ -113,12 +108,16 @@ cargo build --release
 
 `config/default.toml` 里比较重要的配置项：
 
-- 界面：`theme`、`language`、`transparent_background`、`show_hints`
+- 运行参数：`ui_fps`、`spectrum_hz`、`mpris_poll_ms`
+- 界面：`theme`、`language`、`transparent_background`、`show_hints`、`home_more_recommend`
 - 登录标题：`default_opening_title`
 - 播放布局：`visualize`、`page_lyrics`、`album_border`、`kitty_graphics`、`kitty_cover_scale_percent`
 - Bars 模式：`super_smooth_bar`、`bars_gap`、`bar_number`、`bar_channels`、`bar_channel_reverse`
-- 音质：`audio_quality`
-- 快捷键：`keybind_search_box`、`keybind_fullscreen`、`keybind_settings`、`keybind_sidebar`、`keybind_quit`、`keybind_prev`、`keybind_next`、`keybind_toggle_play_pause`、`keybind_toggle_mode`
+- 播放行为：`audio_quality`、`audio_preload`、`playback_memory`、`resume_last_position`
+- 歌词与识别：`lyrics_cover_fetch`、`lyrics_cover_download`、`audio_fingerprint`、`acoustid_api_key`
+- 全局快捷键：`keybind_search_box`、`keybind_fullscreen`、`keybind_settings`、`keybind_sidebar`、`keybind_quit`、`keybind_prev`、`keybind_next`、`keybind_toggle_play_pause`、`keybind_toggle_mode`
+- 全屏快捷键：`keybind_fullscreen_prev`、`keybind_fullscreen_next`、`keybind_fullscreen_toggle_play_pause`、`keybind_fullscreen_toggle_mode`、`keybind_fullscreen_eq`、`keybind_fullscreen_eq_reset`、`keybind_toggle_like_fullscreen`
+- 折叠栏快捷键：`keybind_toggle_like_collapsed`
 - 缓存策略：`cache.path`、`cache.clean_strategy`、`cache.max_size_mb`、`cache.max_age_days`、`cache.clean_on_startup`
 
 可用的音质档位：
@@ -137,20 +136,31 @@ cargo build --release
 
 <h2 align="center">快捷键</h2>
 
-全局快捷键：
+可配置快捷键（默认值）：
 
 - `Ctrl+S`：打开搜索框
 - `Ctrl+F`：打开全屏播放页
 - `T`：打开设置
 - `P`：切换侧边栏
-- `Ctrl+Up` / `Ctrl+Down`：在侧边栏展开时切换歌单分区（用户创建 / 用户收藏）
 - `Q`：退出主程序
 - `Esc`：关闭浮层或返回当前页面
-- `Ctrl+K`：打开帮助
 - `Alt+Space`：播放 / 暂停
 - `Alt+Left`：上一首
 - `Alt+Right`：下一首
 - `Alt+M`：切换循环模式
+- `Left`：全屏上一首
+- `Right`：全屏下一首
+- `Space`：全屏播放 / 暂停
+- `M`：切换全屏播放模式
+- `E`：切换全屏 EQ
+- `Alt+R`：重置全屏 EQ
+- `L`：在全屏页切换收藏状态
+- `Alt+L`：在折叠播放器栏切换收藏状态
+
+额外的固定快捷键：
+
+- `Ctrl+Up` / `Ctrl+Down`：在侧边栏展开时切换歌单分区（用户创建 / 用户收藏）
+- `Ctrl+K`：打开帮助
 
 登录页：
 

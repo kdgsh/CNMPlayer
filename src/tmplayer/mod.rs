@@ -236,7 +236,6 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         keybind_fullscreen_eq: host.keybind_fullscreen_eq.clone(),
         keybind_fullscreen_eq_reset: host.keybind_fullscreen_eq_reset.clone(),
         keybind_toggle_like_fullscreen: host.keybind_toggle_like_fullscreen.clone(),
-        default_opening_folder: String::new(),
     }
 }
 

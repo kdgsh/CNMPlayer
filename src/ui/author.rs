@@ -12,7 +12,7 @@ pub fn draw_author(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
     app.clear_content_hits();
 
-    let size = frame.size();
+    let size = frame.area();
     frame.render_widget(Block::default().style(base_bg_style(app)), size);
 
     if size.width < 40 || size.height < 14 {
@@ -65,7 +65,7 @@ pub fn draw_author(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
-    let inner = area.inner(&ratatui::layout::Margin {
+    let inner = area.inner(ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
     });
@@ -90,7 +90,7 @@ fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
             cover_block,
         );
 
-        let cover_area = cover_block.inner(&ratatui::layout::Margin {
+        let cover_area = cover_block.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });
@@ -149,7 +149,7 @@ fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(info).wrap(Wrap { trim: true }),
-        cols[1].inner(&ratatui::layout::Margin {
+        cols[1].inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 0,
         }),
@@ -161,7 +161,7 @@ fn draw_author_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
         horizontal: 1,
         vertical: 1,
     };
-    let inner = area.inner(&margin);
+    let inner = area.inner(margin);
     if inner.width < 14 || inner.height < 8 {
         return;
     }
@@ -237,7 +237,7 @@ fn draw_author_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             rect,
         );
 
-        let inner_rect = rect.inner(&ratatui::layout::Margin {
+        let inner_rect = rect.inner(ratatui::layout::Margin {
             horizontal: 1,
             vertical: 1,
         });

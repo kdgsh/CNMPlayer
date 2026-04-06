@@ -305,7 +305,7 @@ fn play_fullscreen_transition(
         terminal.draw(|frame| {
             ui::draw(frame, app);
 
-            let full = frame.size();
+            let full = frame.area();
             if full.height == 0 || full.width == 0 {
                 return;
             }
