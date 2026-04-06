@@ -1,5 +1,6 @@
 use anyhow::Result;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use rodio::cpal;
+use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

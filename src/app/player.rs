@@ -3,7 +3,7 @@ use crate::data::assets;
 use crate::data::config::{CacheCleanStrategy, Config};
 use anyhow::{anyhow, Context, Result};
 use directories::BaseDirs;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
+use rodio::{Decoder, MixerDeviceSink, Player, Source};
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
@@ -18,9 +18,8 @@ pub enum AudioPlayerState {
 }
 
 pub struct AudioPlayer {
-    stream: Option<OutputStream>,
-    handle: Option<OutputStreamHandle>,
-    sink: Option<Sink>,
+    device_sink: Option<MixerDeviceSink>,
+    sink: Option<Player>,
     cache_dir: PathBuf,
     current_song_id: Option<String>,
     current_file_path: Option<PathBuf>,
@@ -40,8 +39,7 @@ impl AudioPlayer {
         let _ = fs::create_dir_all(&cache_dir);
 
         let mut player = Self {
-            stream: None,
-            handle: None,
+            device_sink: None,
             sink: None,
             cache_dir,
             current_song_id: None,
@@ -51,7 +49,7 @@ impl AudioPlayer {
             started_at: None,
         };
 
-        if let Err(err) = player.ensure_output_stream() {
+        if let Err(err) = player.ensure_output_device_sink() {
             log::warn!("audio output unavailable at startup: {}", err);
         }
 
@@ -59,14 +57,14 @@ impl AudioPlayer {
     }
 
     pub fn play_song(&mut self, api: &mut ApiState, song_id: &str, quality_level: &str) -> Result<()> {
-        self.ensure_output_stream()?;
+        self.ensure_output_device_sink()?;
 
         let file_path = self.ensure_cached_song(api, song_id, quality_level)?;
         self.play_from_file(song_id, file_path)
     }
 
     pub fn play_cached_song(&mut self, song_id: &str, quality_level: &str) -> Result<bool> {
-        self.ensure_output_stream()?;
+        self.ensure_output_device_sink()?;
         let file_path = self.cached_song_path(song_id, quality_level);
         if !is_nonempty_file(&file_path) {
             return Ok(false);
@@ -87,19 +85,19 @@ impl AudioPlayer {
             .with_context(|| format!("decode cached audio failed: {}", file_path.display()))?;
         let total_duration = decoder.total_duration();
 
-        let handle = self
-            .handle
+        let device_sink = self
+            .device_sink
             .as_ref()
-            .ok_or_else(|| anyhow!("audio output handle not initialized"))?;
-        let sink = Sink::try_new(handle).context("create audio sink failed")?;
-        sink.append(decoder);
-        sink.play();
+            .ok_or_else(|| anyhow!("audio output device_sink not initialized"))?;
+        let player = Player::connect_new(device_sink.mixer());
+        player.append(decoder);
+        player.play();
 
         if let Some(old) = self.sink.take() {
             old.stop();
         }
 
-        self.sink = Some(sink);
+        self.sink = Some(player);
         self.current_song_id = Some(song_id.to_string());
         self.current_file_path = Some(file_path);
         self.total_duration = total_duration;
@@ -175,23 +173,23 @@ impl AudioPlayer {
         let decoder = Decoder::new(BufReader::new(file))
             .with_context(|| format!("decode cached audio failed: {}", path.display()))?;
 
-        let handle = self
-            .handle
+        let device_sink = self
+            .device_sink
             .as_ref()
-            .ok_or_else(|| anyhow!("audio output handle not initialized"))?;
-        let sink = Sink::try_new(handle).context("create audio sink failed")?;
-        sink.append(decoder.skip_duration(target));
+            .ok_or_else(|| anyhow!("audio output device_sink not initialized"))?;
+        let player = Player::connect_new(device_sink.mixer());
+        player.append(decoder.skip_duration(target));
         if was_paused {
-            sink.pause();
+            player.pause();
         } else {
-            sink.play();
+            player.play();
         }
 
         if let Some(old) = self.sink.take() {
             old.stop();
         }
 
-        self.sink = Some(sink);
+        self.sink = Some(player);
         self.paused_position = target;
         self.started_at = if was_paused { None } else { Some(Instant::now()) };
         Ok(())
@@ -207,14 +205,13 @@ impl AudioPlayer {
         }
     }
 
-    fn ensure_output_stream(&mut self) -> Result<()> {
-        if self.stream.is_some() && self.handle.is_some() {
+    fn ensure_output_device_sink(&mut self) -> Result<()> {
+        if self.device_sink.is_some() {
             return Ok(());
         }
 
-        let (stream, handle) = OutputStream::try_default().context("open default audio output failed")?;
-        self.stream = Some(stream);
-        self.handle = Some(handle);
+        let device_sink = rodio::DeviceSinkBuilder::open_default_sink().context("open default audio output failed")?;
+        self.device_sink = Some(device_sink);
         Ok(())
     }
 
