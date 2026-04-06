@@ -134,8 +134,23 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VisualizeMode {
+    Off,
     Bars,
     Oscilloscope,
+}
+
+impl VisualizeMode {
+    pub fn cycle(self, delta: i32) -> Self {
+        const MODES: [VisualizeMode; 3] = [
+            VisualizeMode::Off,
+            VisualizeMode::Bars,
+            VisualizeMode::Oscilloscope,
+        ];
+
+        let index = MODES.iter().position(|mode| *mode == self).unwrap_or(1) as i32;
+        let next = (index + delta).rem_euclid(MODES.len() as i32) as usize;
+        MODES[next]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -228,7 +243,11 @@ impl AudioQuality {
 }
 
 fn default_visualize() -> VisualizeMode {
-    VisualizeMode::Bars
+    if crate::tmplayer::audio::cava::is_available() {
+        VisualizeMode::Bars
+    } else {
+        VisualizeMode::Off
+    }
 }
 
 fn default_album_border() -> bool {
@@ -401,6 +420,12 @@ impl Config {
             cfg.spectrum_hz = 60;
         }
 
+        let mut forced_visualize_off = false;
+        if !crate::tmplayer::audio::cava::is_available() && cfg.visualize != VisualizeMode::Off {
+            cfg.visualize = VisualizeMode::Off;
+            forced_visualize_off = true;
+        }
+
         let mut migrated_legacy_sidebar = false;
         if is_legacy_sidebar_default(&cfg.keybind_sidebar) {
             cfg.keybind_sidebar = default_keybind_sidebar();
@@ -435,6 +460,7 @@ impl Config {
             || !raw.contains("keybind_fullscreen_eq_reset")
             || !raw.contains("keybind_toggle_like_fullscreen")
             || !raw.contains("spectrum_hz")
+            || forced_visualize_off
             || migrated_legacy_sidebar
         {
             let _ = cfg.save();

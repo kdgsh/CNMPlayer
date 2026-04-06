@@ -951,6 +951,7 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             "{}: {}",
             lang_text(app, "可视化", "Visualization"),
             match app.config.visualize {
+                crate::tmplayer::data::config::VisualizeMode::Off => lang_text(app, "关闭", "Off"),
                 crate::tmplayer::data::config::VisualizeMode::Bars => lang_text(app, "频谱", "Bars"),
                 crate::tmplayer::data::config::VisualizeMode::Oscilloscope => {
                     lang_text(app, "示波器", "Oscilloscope")
@@ -1011,7 +1012,9 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
     ];
 
     for (idx, text) in items.iter().enumerate() {
-        let style = if idx == app.bar_settings_selected {
+        let style = if idx == 0 && !crate::tmplayer::audio::cava::is_available() {
+            Style::default().fg(app.theme.color_subtext())
+        } else if idx == app.bar_settings_selected {
             Style::default()
                 .fg(app.theme.color_accent2())
                 .add_modifier(Modifier::BOLD)

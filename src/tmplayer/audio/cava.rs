@@ -3,6 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,6 +32,11 @@ pub struct CavaRunner {
     _reader: thread::JoinHandle<()>,
     cfg_path: String,
     _temp_dir: Option<TempDir>,
+}
+
+pub fn is_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| find_cava_executable().is_some() || cfg!(feature = "bundle-cava"))
 }
 
 impl CavaRunner {

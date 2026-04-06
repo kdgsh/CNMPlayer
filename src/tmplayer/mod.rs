@@ -177,6 +177,7 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         spectrum_hz: host.spectrum_hz,
         mpris_poll_ms: host.mpris_poll_ms,
         visualize: match host.visualize {
+            HostVisualizeMode::Off => data::config::VisualizeMode::Off,
             HostVisualizeMode::Bars => data::config::VisualizeMode::Bars,
             HostVisualizeMode::Oscilloscope => data::config::VisualizeMode::Oscilloscope,
         },

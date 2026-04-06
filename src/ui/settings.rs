@@ -152,6 +152,7 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             "{}: {}",
             l(app, "可视化", "Visualization"),
             match app.config.visualize {
+                VisualizeMode::Off => l(app, "关闭", "Off"),
                 VisualizeMode::Bars => l(app, "频谱", "Bars"),
                 VisualizeMode::Oscilloscope => l(app, "示波器", "Oscilloscope"),
             }
@@ -195,7 +196,9 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         .iter()
         .enumerate()
         .map(|(idx, text)| {
-            let style = if idx == app.settings_playback_selected {
+            let style = if idx == 0 && !crate::tmplayer::audio::cava::is_available() {
+                Style::default().fg(app.theme.color_subtext())
+            } else if idx == app.settings_playback_selected {
                 Style::default()
                     .fg(app.theme.color_accent2())
                     .add_modifier(Modifier::BOLD)

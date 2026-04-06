@@ -3,7 +3,7 @@ mod mpris_bridge;
 pub(crate) mod player;
 
 use crate::data::config::Config;
-use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
+use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
 use crate::data::playback_session;
 use crate::data::session;
 use crate::data::theme_loader::ThemeLoader;
@@ -2184,6 +2184,12 @@ impl App {
     }
 
     fn ensure_main_cava(&mut self) {
+        if !crate::tmplayer::audio::cava::is_available() {
+            self.main_cava = None;
+            self.main_cava_bars.fill(0.0);
+            return;
+        }
+
         if self.main_cava.is_some() {
             return;
         }
@@ -2208,6 +2214,12 @@ impl App {
     }
 
     fn tick_main_cava(&mut self) {
+        if !crate::tmplayer::audio::cava::is_available() {
+            self.main_cava = None;
+            self.main_cava_bars.fill(0.0);
+            return;
+        }
+
         let now = Instant::now();
         let interval = Duration::from_millis((1000 / self.config.spectrum_hz.max(1)) as u64);
         if now.duration_since(self.main_cava_last_tick) < interval {
@@ -4366,11 +4378,13 @@ impl App {
 
         match self.settings_playback_selected {
             0 => {
-                self.config.visualize = match self.config.visualize {
-                    VisualizeMode::Bars => VisualizeMode::Oscilloscope,
-                    VisualizeMode::Oscilloscope => VisualizeMode::Bars,
-                };
-                let _ = self.config.save();
+                if crate::tmplayer::audio::cava::is_available() {
+                    self.config.visualize = self.config.visualize.cycle(delta);
+                    let _ = self.config.save();
+                } else if self.config.visualize != crate::data::config::VisualizeMode::Off {
+                    self.config.visualize = crate::data::config::VisualizeMode::Off;
+                    let _ = self.config.save();
+                }
             }
             1 => {
                 self.config.super_smooth_bar = !self.config.super_smooth_bar;

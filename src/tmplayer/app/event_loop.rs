@@ -38,6 +38,14 @@ fn clear_spectrum(app: &mut AppState) {
     app.spectrum.stereo_right = [0.0; 64];
 }
 
+fn has_spectrum_data(app: &AppState) -> bool {
+    app.spectrum.bars.iter().any(|&v| v > 0.0)
+        || app.spectrum.bars_left.iter().any(|&v| v > 0.0)
+        || app.spectrum.bars_right.iter().any(|&v| v > 0.0)
+        || app.spectrum.stereo_left.iter().any(|&v| v > 0.0)
+        || app.spectrum.stereo_right.iter().any(|&v| v > 0.0)
+}
+
 fn open_local_folder(app: &mut AppState, mode_manager: &mut ModeManager, folder: &std::path::Path) -> Result<()> {
     let res = mode_manager.local.load_path(folder)?;
     mode_manager.pause_other(PlayMode::LocalPlayback);
@@ -154,6 +162,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         show_hints: app.config.show_hints,
         home_more_recommend: app.config.home_more_recommend,
         visualize: match app.config.visualize {
+            VisualizeMode::Off => crate::data::config::VisualizeMode::Off,
             VisualizeMode::Bars => crate::data::config::VisualizeMode::Bars,
             VisualizeMode::Oscilloscope => crate::data::config::VisualizeMode::Oscilloscope,
         },
@@ -209,6 +218,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     app.config.show_hints = config.show_hints;
     app.config.home_more_recommend = config.home_more_recommend;
     app.config.visualize = match config.visualize {
+        crate::data::config::VisualizeMode::Off => VisualizeMode::Off,
         crate::data::config::VisualizeMode::Bars => VisualizeMode::Bars,
         crate::data::config::VisualizeMode::Oscilloscope => VisualizeMode::Oscilloscope,
     };
@@ -682,13 +692,19 @@ pub fn run(
         }
 
         // spectrum update
-        if frame_start.duration_since(last_spectrum)
+        if app.config.visualize == VisualizeMode::Off {
+            if has_spectrum_data(app) {
+                clear_spectrum(app);
+                state_changed = true;
+            }
+        } else if frame_start.duration_since(last_spectrum)
             >= Duration::from_millis((1000 / app.config.spectrum_hz.max(1)) as u64)
         {
             last_spectrum = frame_start;
             state_changed = true;
 
             match app.config.visualize {
+                VisualizeMode::Off => clear_spectrum(app),
                 VisualizeMode::Bars => {
                     if let Some(c) = cava.as_ref() {
                         let (l, r) = c.latest_stereo_bars();
@@ -1105,11 +1121,13 @@ fn handle_action(
                 Overlay::BarSettingsModal => {
                     match app.bar_settings_selected {
                         0 => {
-                            app.config.visualize = match app.config.visualize {
-                                crate::tmplayer::data::config::VisualizeMode::Bars => crate::tmplayer::data::config::VisualizeMode::Oscilloscope,
-                                crate::tmplayer::data::config::VisualizeMode::Oscilloscope => crate::tmplayer::data::config::VisualizeMode::Bars,
-                            };
-                            save_and_sync_host_config(app, host_bridge);
+                            if crate::tmplayer::audio::cava::is_available() {
+                                app.config.visualize = app.config.visualize.cycle(1);
+                                save_and_sync_host_config(app, host_bridge);
+                            } else if app.config.visualize != crate::tmplayer::data::config::VisualizeMode::Off {
+                                app.config.visualize = crate::tmplayer::data::config::VisualizeMode::Off;
+                                save_and_sync_host_config(app, host_bridge);
+                            }
                         }
                         1 => {
                             app.config.super_smooth_bar = !app.config.super_smooth_bar;
@@ -1366,11 +1384,10 @@ fn handle_action(
             } else if app.overlay == Overlay::BarSettingsModal {
                 match app.bar_settings_selected {
                     0 => {
-                        app.config.visualize = match app.config.visualize {
-                            crate::tmplayer::data::config::VisualizeMode::Bars => crate::tmplayer::data::config::VisualizeMode::Oscilloscope,
-                            crate::tmplayer::data::config::VisualizeMode::Oscilloscope => crate::tmplayer::data::config::VisualizeMode::Bars,
-                        };
-                        save_and_sync_host_config(app, host_bridge);
+                        if crate::tmplayer::audio::cava::is_available() {
+                            app.config.visualize = app.config.visualize.cycle(-1);
+                            save_and_sync_host_config(app, host_bridge);
+                        }
                     }
                     1 => {
                         app.config.super_smooth_bar = !app.config.super_smooth_bar;
@@ -1428,11 +1445,10 @@ fn handle_action(
             } else if app.overlay == Overlay::BarSettingsModal {
                 match app.bar_settings_selected {
                     0 => {
-                        app.config.visualize = match app.config.visualize {
-                            crate::tmplayer::data::config::VisualizeMode::Bars => crate::tmplayer::data::config::VisualizeMode::Oscilloscope,
-                            crate::tmplayer::data::config::VisualizeMode::Oscilloscope => crate::tmplayer::data::config::VisualizeMode::Bars,
-                        };
-                        save_and_sync_host_config(app, host_bridge);
+                        if crate::tmplayer::audio::cava::is_available() {
+                            app.config.visualize = app.config.visualize.cycle(1);
+                            save_and_sync_host_config(app, host_bridge);
+                        }
                     }
                     1 => {
                         app.config.super_smooth_bar = !app.config.super_smooth_bar;
@@ -1986,9 +2002,10 @@ fn desired_bar_count(app: &AppState, layout: &UiLayout) -> usize {
     raw.min(max_per_side).max(1)
 }
 
-fn desired_cava_config(app: &AppState, layout: &UiLayout) -> CavaConfig {
+fn desired_cava_config(app: &AppState, layout: &UiLayout) -> Option<CavaConfig> {
     match app.config.visualize {
-        VisualizeMode::Bars => {
+        VisualizeMode::Off => None,
+        VisualizeMode::Bars => Some({
             let bars = desired_bar_count(app, layout);
             CavaConfig {
                 framerate_hz: app.config.spectrum_hz,
@@ -1996,24 +2013,28 @@ fn desired_cava_config(app: &AppState, layout: &UiLayout) -> CavaConfig {
                 channels: CavaChannels::Mono,
                 reverse: app.config.bar_channel_reverse,
             }
-        }
-        VisualizeMode::Oscilloscope => CavaConfig {
+        }),
+        VisualizeMode::Oscilloscope => Some(CavaConfig {
             framerate_hz: app.config.spectrum_hz,
             bars: 64,
             channels: CavaChannels::Mono,
             reverse: app.config.bar_channel_reverse,
-        },
+        }),
     }
 }
 
-fn ensure_cava(cava: &mut Option<CavaRunner>, cfg: &mut Option<CavaConfig>, desired: CavaConfig) {
-    if cfg.as_ref() == Some(&desired) {
+fn ensure_cava(cava: &mut Option<CavaRunner>, cfg: &mut Option<CavaConfig>, desired: Option<CavaConfig>) {
+    if cfg.as_ref() == desired.as_ref() {
         return;
     }
 
     // Drop old process first to avoid short-lived overlap when recreating cava.
     *cava = None;
     *cfg = None;
+
+    let Some(desired) = desired else {
+        return;
+    };
 
     match CavaRunner::start(desired) {
         Ok(c) => {
