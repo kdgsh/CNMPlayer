@@ -241,15 +241,9 @@ pub enum LocalFolderKind {
     MultiAlbum,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FolderInput {
     pub buf: String,
-}
-
-impl Default for FolderInput {
-    fn default() -> Self {
-        Self { buf: String::new() }
-    }
 }
 
 #[derive(Debug)]

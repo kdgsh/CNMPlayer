@@ -18,8 +18,3 @@ pub mod server;
 pub use api::Query;
 pub use error::NcmError;
 pub use request::{ApiClient, ApiResponse, CryptoType, RequestOption};
-
-/// 创建一个新的 API 客户端
-pub fn create_client(cookie: Option<String>) -> ApiClient {
-    ApiClient::new(cookie)
-}

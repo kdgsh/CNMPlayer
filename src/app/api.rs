@@ -1,10 +1,9 @@
 use anyhow::{Context, Result, anyhow};
-use ncm_api::{ApiClient, ApiResponse, Query, create_client};
-use reqwest::{Client, header};
+use ncm_api::{ApiClient, ApiResponse, Query};
+use reqwest::Client;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::time::Duration;
 use tokio::runtime::{Builder, Runtime};
 
 const MAX_COVER_IMAGE_BYTES: usize = 5 * 1024 * 1024;
@@ -17,24 +16,9 @@ pub struct ApiState {
 }
 
 impl ApiState {
-    pub fn new(cookie: Option<String>) -> Result<Self> {
+    pub fn new(cookie: Option<String>, http: Client) -> Result<Self> {
         let runtime = Builder::new_multi_thread().enable_all().build()?;
-        let client = create_client(cookie.clone());
-
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("Mozilla/5.0 CNMPlayer/0.1"),
-        );
-        headers.insert(
-            header::REFERER,
-            header::HeaderValue::from_static("https://music.163.com/"),
-        );
-        let http = Client::builder()
-            .default_headers(headers)
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(12))
-            .build()?;
+        let client = ApiClient::new(cookie.clone(), http.clone());
 
         Ok(Self {
             runtime,

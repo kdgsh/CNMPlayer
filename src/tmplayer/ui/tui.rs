@@ -1471,11 +1471,11 @@ fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn select_about_braille_art<'a>(
+fn select_about_braille_art(
     width: usize,
     height: usize,
-    arts: &'a [crate::tmplayer::data::about::BrailleImage],
-) -> Option<&'a crate::tmplayer::data::about::BrailleImage> {
+    arts: &[crate::tmplayer::data::about::BrailleImage],
+) -> Option<&crate::tmplayer::data::about::BrailleImage> {
     let mut best_fit: Option<(&crate::tmplayer::data::about::BrailleImage, u128)> = None;
     for art in arts {
         if art.width == 0 || art.height == 0 {

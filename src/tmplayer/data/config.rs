@@ -407,9 +407,8 @@ impl Config {
             return Ok(Self::default());
         }
         let raw = fs::read_to_string(path)?;
-        let legacy_startup_folder_key_present =
-            raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
-                || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
+        let legacy_startup_folder_key_present = raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
+            || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
         let cfg: Config = toml::from_str(&raw).unwrap_or_default();
         let mut cfg = cfg;
         if cfg.ui_fps == 0 {

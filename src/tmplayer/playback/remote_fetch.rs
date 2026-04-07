@@ -302,7 +302,7 @@ fn lrclib_fetch(title: &str, artist: &str, album: &str, duration_secs: u64) -> O
         .query("track_name", title)
         .query("artist_name", artist)
         .query("album_name", album)
-        .query("duration", &duration_secs.to_string())
+        .query("duration", duration_secs.to_string())
         .call()
         .ok()?;
 
@@ -477,7 +477,7 @@ fn acoustid_lookup(api_key: &str, fingerprint: &str, duration_secs: u32) -> Opti
         .header("User-Agent", agent)
         .query("client", api_key)
         .query("meta", "recordings+releases")
-        .query("duration", &duration_secs.to_string())
+        .query("duration", duration_secs.to_string())
         .query("fingerprint", fingerprint)
         .query("format", "json")
         .call()

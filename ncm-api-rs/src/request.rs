@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use std::time::Duration;
 
 /// 特殊状态码集合（视为 200）
 static SPECIAL_STATUS_CODES: LazyLock<std::collections::HashSet<i64>> =
@@ -27,9 +26,6 @@ static WNMCID: LazyLock<String> = LazyLock::new(generate_wnmcid);
 static DOMAIN_REGEX: LazyLock<regex_lite::Regex> =
     LazyLock::new(|| regex_lite::Regex::new(r"\s*Domain=[^;]+;?").unwrap());
 
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
-
 /// 安全创建 HeaderValue，无效字符会被过滤
 fn header_value(s: &str) -> HeaderValue {
     HeaderValue::from_str(s).unwrap_or_else(|_| {
@@ -40,18 +36,6 @@ fn header_value(s: &str) -> HeaderValue {
             .collect();
         HeaderValue::from_str(&safe).unwrap_or_else(|_| HeaderValue::from_static(""))
     })
-}
-
-fn build_http_client(proxy: Option<reqwest::Proxy>) -> std::result::Result<reqwest::Client, reqwest::Error> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
-        .timeout(DEFAULT_REQUEST_TIMEOUT);
-
-    if let Some(proxy) = proxy {
-        builder = builder.proxy(proxy);
-    }
-
-    builder.build()
 }
 
 /// 加密类型
@@ -120,30 +104,14 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    /// 创建新的 API 客户端
-    pub fn new(cookie: Option<String>) -> Self {
-        let client = build_http_client(None).expect("Failed to create HTTP client");
-
+    /// 使用外部提供的 Client 创建 API 客户端
+    pub fn new(cookie: Option<String>, client: reqwest::Client) -> Self {
         Self {
             client,
             cookie,
             anonymous_token: None,
             device_id: None,
         }
-    }
-
-    /// 创建带代理的 API 客户端
-    pub fn with_proxy(cookie: Option<String>, proxy_url: &str) -> Result<Self> {
-        let proxy = reqwest::Proxy::all(proxy_url)
-            .map_err(|e| NcmError::Unknown(format!("Invalid proxy URL: {}", e)))?;
-        let client = build_http_client(Some(proxy)).map_err(NcmError::Http)?;
-
-        Ok(Self {
-            client,
-            cookie,
-            anonymous_token: None,
-            device_id: None,
-        })
     }
 
     /// 设置 cookie
@@ -433,25 +401,19 @@ impl ApiClient {
             HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
 
-        // 构造请求并发送（按需使用代理）
-        let response = if let Some(ref proxy_url) = options.proxy {
-            let proxy = reqwest::Proxy::all(proxy_url)
-                .map_err(|e| NcmError::Unknown(format!("Invalid proxy URL: {}", e)))?;
-            let proxy_client = build_http_client(Some(proxy)).map_err(NcmError::Http)?;
-            proxy_client
-                .post(&url)
-                .headers(headers)
-                .body(body)
-                .send()
-                .await?
-        } else {
-            self.client
-                .post(&url)
-                .headers(headers)
-                .body(body)
-                .send()
-                .await?
-        };
+        if options.proxy.is_some() {
+            return Err(NcmError::Unknown(
+                "proxy is no longer supported, configure proxy in the Client upfront".to_string(),
+            ));
+        }
+
+        let response = self
+            .client
+            .post(&url)
+            .headers(headers)
+            .body(body)
+            .send()
+            .await?;
 
         // 处理响应 cookie
         let resp_cookies: Vec<String> = response

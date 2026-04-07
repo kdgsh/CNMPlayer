@@ -321,10 +321,8 @@ fn detect_folder_kind(folder: &Path) -> (LocalFolderKind, Vec<PathBuf>) {
             }
             continue;
         }
-        if p.is_dir() {
-            if detect_album_folder(&p) {
-                album_folders.push(p);
-            }
+        if p.is_dir() && detect_album_folder(&p) {
+            album_folders.push(p);
         }
     }
     album_folders.sort();

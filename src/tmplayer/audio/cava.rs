@@ -95,7 +95,7 @@ impl CavaRunner {
                         let frames = parse_frames_ascii(&line, bars);
                         match channels {
                             CavaChannels::Mono => {
-                                if let Some(frame) = frames.get(0) {
+                                if let Some(frame) = frames.first() {
                                     let mut g = left_cloned.lock().unwrap();
                                     *g = frame.clone();
                                     let mut r = right_cloned.lock().unwrap();
@@ -233,7 +233,7 @@ fn parse_frames_ascii(s: &str, bars: usize) -> Vec<Vec<f32>> {
     // ascii_max_range=1000, bar_delimiter=';'
     // Can be N values (one channel) or 2N values (two channels) on a single line.
     let mut vals: Vec<f32> = Vec::new();
-    for part in s.split(|c: char| c == ';' || c == '\n' || c == '\r' || c == ' ' || c == '\t') {
+    for part in s.split([';', '\n', '\r', ' ', '\t']) {
         if part.is_empty() {
             continue;
         }

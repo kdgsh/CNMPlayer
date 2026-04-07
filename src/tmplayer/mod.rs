@@ -53,31 +53,21 @@ pub enum FullscreenExit {
     BackToHostOpenSettings,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostPlaybackState {
     Playing,
     Paused,
+    #[default]
     Stopped,
 }
 
-impl Default for HostPlaybackState {
-    fn default() -> Self {
-        Self::Stopped
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostRepeatMode {
+    #[default]
     Sequence,
     Shuffle,
     LoopAll,
     LoopOne,
-}
-
-impl Default for HostRepeatMode {
-    fn default() -> Self {
-        Self::Sequence
-    }
 }
 
 #[derive(Debug, Clone, Default)]

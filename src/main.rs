@@ -161,7 +161,9 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
 }
 
 fn main() -> Result<()> {
-    ring::default_provider().install_default().map_err(|_| anyhow!("Failed to install default crypto provider"))?;
+    ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow!("Failed to install default crypto provider"))?;
     let config = Config::load_or_default()?;
     let theme = ThemeLoader::load(&config.theme).unwrap_or_default();
     let mut app = App::new(config, theme)?;

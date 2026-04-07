@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CoverKey {
@@ -34,8 +34,8 @@ impl CoverCache {
     }
 
     pub fn put(&mut self, key: CoverKey, val: String) {
-        if self.map.contains_key(&key) {
-            self.map.insert(key, val);
+        if let Entry::Occupied(mut e) = self.map.entry(key) {
+            e.insert(val);
             self.touch(key);
             return;
         }

@@ -553,11 +553,11 @@ fn about_braille_lines(width: usize, height: usize) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn select_about_braille_art<'a>(
+fn select_about_braille_art(
     width: usize,
     height: usize,
-    arts: &'a [BrailleImage],
-) -> Option<&'a BrailleImage> {
+    arts: &[BrailleImage],
+) -> Option<&BrailleImage> {
     let mut best_fit: Option<(&BrailleImage, u128)> = None;
     for art in arts {
         if art.width == 0 || art.height == 0 {

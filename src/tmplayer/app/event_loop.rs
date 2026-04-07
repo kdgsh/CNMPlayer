@@ -535,7 +535,7 @@ fn sync_from_host_bridge(
     changed |= apply_host_runtime_snapshot(app, runtime);
 
     let metadata_signature = (*bridge).metadata_signature();
-    if last_metadata_signature.map_or(true, |sig| sig != metadata_signature) {
+    if last_metadata_signature.is_none_or(|sig| sig != metadata_signature) {
         let snapshot = (*bridge).snapshot();
         sync_from_host_snapshot(app, snapshot);
         *last_metadata_signature = Some(metadata_signature);
@@ -1304,9 +1304,7 @@ fn handle_action(
                 let mut idx = app.local_view_album_index;
                 match action {
                     Action::PrevAlbum => {
-                        if idx > 0 {
-                            idx -= 1;
-                        }
+                        idx = idx.saturating_sub(1);
                     }
                     Action::NextAlbum => {
                         if idx + 1 < count {
@@ -2128,7 +2126,7 @@ fn max_display_bars(width_cells: u16, gap: bool) -> usize {
     }
     let w = width_cells as usize;
     if gap {
-        ((w + 1) / 2).max(1)
+        w.div_ceil(2).max(1)
     } else {
         (w / 2).max(1)
     }

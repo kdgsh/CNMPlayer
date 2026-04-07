@@ -1550,43 +1550,27 @@ struct PendingPlayRequest {
     announce: bool,
 }
 
-fn spawn_cover_fetch_worker(req_rx: Receiver<CoverFetchRequest>, res_tx: Sender<CoverFetchResult>) {
+fn spawn_cover_fetch_worker(
+    req_rx: Receiver<CoverFetchRequest>,
+    res_tx: Sender<CoverFetchResult>,
+    http_client: Client,
+) {
     thread::spawn(move || {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("Mozilla/5.0 CNMPlayer/0.1"),
-        );
-        headers.insert(
-            header::REFERER,
-            header::HeaderValue::from_static("https://music.163.com/"),
-        );
-
-        let client = Client::builder()
-            .default_headers(headers)
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-            .ok();
         let runtime = Builder::new_current_thread().enable_all().build().ok();
 
         while let Ok(req) = req_rx.recv() {
-            let bytes = if req.url.trim().is_empty() {
-                None
-            } else if let (Some(client), Some(runtime)) = (client.as_ref(), runtime.as_ref()) {
-                runtime.block_on(async {
-                    let response = client.get(req.url.as_str()).send().await.ok()?;
+            let bytes = match (&runtime, req.url.is_empty()) {
+                (Some(runtime), false) => runtime.block_on(async {
+                    let response = http_client.get(req.url.as_str()).send().await.ok()?;
                     let response = response.error_for_status().ok()?;
                     let bytes = response.bytes().await.ok()?;
                     if bytes.is_empty() {
                         return None;
                     }
                     Some(bytes.to_vec())
-                })
-            } else {
-                None
+                }),
+                _ => None,
             };
-
             let _ = res_tx.send(CoverFetchResult {
                 song_id: req.song_id,
                 url: req.url,
@@ -1599,11 +1583,12 @@ fn spawn_cover_fetch_worker(req_rx: Receiver<CoverFetchRequest>, res_tx: Sender<
 fn spawn_audio_prefetch_worker(
     req_rx: Receiver<AudioPrefetchRequest>,
     res_tx: Sender<AudioPrefetchResult>,
+    http_client: Client,
 ) {
     thread::spawn(move || {
         while let Ok(req) = req_rx.recv() {
             let result = (|| -> Result<()> {
-                let mut api = ApiState::new(req.cookie.clone())?;
+                let mut api = ApiState::new(req.cookie.clone(), http_client.clone())?;
                 if let Some(cookie) = req.cookie.as_deref() {
                     api.set_cookie(cookie.to_string());
                 }
@@ -1623,11 +1608,15 @@ fn spawn_audio_prefetch_worker(
     });
 }
 
-fn spawn_lyric_fetch_worker(req_rx: Receiver<LyricFetchRequest>, res_tx: Sender<LyricFetchResult>) {
+fn spawn_lyric_fetch_worker(
+    req_rx: Receiver<LyricFetchRequest>,
+    res_tx: Sender<LyricFetchResult>,
+    http_client: Client,
+) {
     thread::spawn(move || {
         while let Ok(req) = req_rx.recv() {
             let lyrics = (|| -> Option<Vec<LyricLine>> {
-                let mut api = ApiState::new(req.cookie.clone()).ok()?;
+                let mut api = ApiState::new(req.cookie.clone(), http_client.clone()).ok()?;
                 if let Some(cookie) = req.cookie.as_deref() {
                     api.set_cookie(cookie.to_string());
                 }
@@ -1729,6 +1718,21 @@ impl App {
     pub fn new(config: Config, theme: Theme) -> Result<Self> {
         let saved_cookie = session::load_cookie().ok().flatten();
         let audio_player = AudioPlayer::new(&config);
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            header::HeaderValue::from_static("Mozilla/5.0 CNMPlayer/0.1"),
+        );
+        headers.insert(
+            header::REFERER,
+            header::HeaderValue::from_static("https://music.163.com/"),
+        );
+        let http_client = Client::builder()
+            .default_headers(headers)
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(12))
+            .build()?;
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
         let mpris_bridge = MprisBridge::new(&cache_root, &config.cache);
@@ -1739,15 +1743,19 @@ impl App {
 
         let (cover_fetch_tx, cover_fetch_req_rx) = mpsc::channel::<CoverFetchRequest>();
         let (cover_fetch_res_tx, cover_fetch_rx) = mpsc::channel::<CoverFetchResult>();
-        spawn_cover_fetch_worker(cover_fetch_req_rx, cover_fetch_res_tx);
+        spawn_cover_fetch_worker(cover_fetch_req_rx, cover_fetch_res_tx, http_client.clone());
 
         let (lyric_fetch_tx, lyric_fetch_req_rx) = mpsc::channel::<LyricFetchRequest>();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
-        spawn_lyric_fetch_worker(lyric_fetch_req_rx, lyric_fetch_res_tx);
+        spawn_lyric_fetch_worker(lyric_fetch_req_rx, lyric_fetch_res_tx, http_client.clone());
 
         let (audio_prefetch_tx, audio_prefetch_req_rx) = mpsc::channel::<AudioPrefetchRequest>();
         let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
-        spawn_audio_prefetch_worker(audio_prefetch_req_rx, audio_prefetch_res_tx);
+        spawn_audio_prefetch_worker(
+            audio_prefetch_req_rx,
+            audio_prefetch_res_tx,
+            http_client.clone(),
+        );
 
         let mut app = Self {
             config,
@@ -1821,7 +1829,7 @@ impl App {
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
             mpris_last_playback: PlaybackRuntimeState::Stopped,
-            api: ApiState::new(saved_cookie.clone())?,
+            api: ApiState::new(saved_cookie.clone(), http_client.clone())?,
             audio_player,
         };
 
@@ -2646,13 +2654,9 @@ impl App {
             KeybindAction::ToggleLikeCollapsed,
         ];
 
-        for action in actions {
-            if keybind_matches(self.keybind_value_for_action(action), key) {
-                return Some(action);
-            }
-        }
-
-        None
+        actions
+            .into_iter()
+            .find(|&action| keybind_matches(self.keybind_value_for_action(action), key))
     }
 
     fn keybind_value_for_action(&self, action: KeybindAction) -> &str {
@@ -3463,7 +3467,7 @@ impl App {
 
         let req = CoverFetchRequest {
             song_id,
-            url: url.clone(),
+            url: url.trim().into(),
         };
         if self.cover_fetch_tx.send(req).is_ok() {
             self.cover_fetch_inflight_url = Some(url);
@@ -4698,7 +4702,6 @@ impl App {
             self.startup_loading_started_at = None;
             self.startup_loading_complete_started_at = None;
             self.startup_loading_complete_requested = false;
-            return;
         }
     }
 
@@ -5350,10 +5353,8 @@ impl App {
             unlocked = response_indicates_vip(&response);
         }
 
-        if !unlocked {
-            if let Ok(response) = self.api.vip_info() {
-                unlocked = response_indicates_vip(&response);
-            }
+        if !unlocked && let Ok(response) = self.api.vip_info() {
+            unlocked = response_indicates_vip(&response);
         }
 
         self.vip_audio_unlocked = unlocked;
@@ -6733,7 +6734,7 @@ struct RecommendCard {
     cover_url: Option<String>,
 }
 
-fn home_daily_song_items<'a>(body: &'a Value) -> Option<&'a [Value]> {
+fn home_daily_song_items(body: &Value) -> Option<&[Value]> {
     body.pointer("/data/dailySongs")
         .and_then(|value| value.as_array().map(Vec::as_slice))
         .or_else(|| {
@@ -7635,9 +7636,7 @@ fn normalize_keybind_text(raw: &str) -> Option<String> {
             return None;
         }
         key_token = normalize_keybind_token(token);
-        if key_token.is_none() {
-            return None;
-        }
+        key_token.as_ref()?;
     }
 
     let key_token = key_token?;
