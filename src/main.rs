@@ -4,7 +4,7 @@ mod render;
 mod tmplayer;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use app::App;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use crossterm::execute;
@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
 use render::main_kitty_overlay::MainKittyOverlay;
+use rustls::crypto::ring;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
 
@@ -160,6 +161,7 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
 }
 
 fn main() -> Result<()> {
+    ring::default_provider().install_default().map_err(|_| anyhow!("Failed to install default crypto provider"))?;
     let config = Config::load_or_default()?;
     let theme = ThemeLoader::load(&config.theme).unwrap_or_default();
     let mut app = App::new(config, theme)?;
