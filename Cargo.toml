@@ -18,7 +18,8 @@ tokio = { version = "1", features = ["full"] }
 ncm-api = { path = "./ncm-api-rs" }
 qrcode = "0.14"
 image = "0.25"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 unicode-width = "0.2"
 rodio = "0.22"
 symphonia = { version = "0.5", features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "wav", "vorbis"] }
