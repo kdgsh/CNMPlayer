@@ -10,6 +10,7 @@ use crate::data::theme_loader::ThemeLoader;
 use crate::render::cover_renderer::render_cover_ascii;
 use crate::tmplayer::app::state::LyricLine;
 use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
+use crate::tmplayer::playback::metadata::{parse_lrc, parse_plain_lyrics};
 use crate::ui::theme::Theme;
 use anyhow::{Result, anyhow};
 use crossterm::event::{
@@ -24,9 +25,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::runtime::{Builder, Handle, Runtime};
+use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use unicode_width::UnicodeWidthChar;
 
@@ -1581,7 +1581,7 @@ async fn loop_audio_prefetch(
     mut api: ApiState,
 ) {
     let mut process_fn = async move |req: &AudioPrefetchRequest| {
-        if let Some(cookie) = req.cookie.as_deref() {
+        if let Some(cookie) = &req.cookie {
             api.set_cookie(cookie.to_string());
         }
         let stream_url = api
@@ -1599,36 +1599,27 @@ async fn loop_audio_prefetch(
     }
 }
 
-fn spawn_lyric_fetch_worker(
-    req_rx: Receiver<LyricFetchRequest>,
-    res_tx: Sender<LyricFetchResult>,
-    http_client: Client,
-    hnd: Handle,
+async fn loop_lyric_fetch(
+    mut rx: UnboundedReceiver<LyricFetchRequest>,
+    tx: Sender<LyricFetchResult>,
+    mut api: ApiState,
 ) {
-    thread::spawn(move || {
-        while let Ok(req) = req_rx.recv() {
-            let lyrics = (|| -> Option<Vec<LyricLine>> {
-                let mut api =
-                    ApiState::new(req.cookie.clone(), http_client.clone(), hnd.clone()).ok()?;
-                if let Some(cookie) = req.cookie.as_deref() {
-                    api.set_cookie(cookie.to_string());
-                }
-
-                let lyric = api.lyric(&req.song_id).ok()?;
-                let raw_lrc = lyric
-                    .body
-                    .pointer("/lrc/lyric")
-                    .and_then(|value| value.as_str())?;
-                crate::tmplayer::playback::metadata::parse_lrc(raw_lrc)
-                    .or_else(|| crate::tmplayer::playback::metadata::parse_plain_lyrics(raw_lrc))
-            })();
-
-            let _ = res_tx.send(LyricFetchResult {
-                song_id: req.song_id,
-                lyrics,
-            });
+    let mut process_fn = async move |req: &LyricFetchRequest| {
+        if let Some(cookie) = &req.cookie {
+            api.set_cookie(cookie.to_string());
         }
-    });
+
+        let lyric = api.lyric_async(&req.song_id).await.ok()?;
+        let lrc = lyric.body.pointer("/lrc/lyric")?.as_str()?;
+        parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc))
+    };
+    while let Some(req) = rx.recv().await {
+        let lyrics = process_fn(&req).await;
+        let _ = tx.send(LyricFetchResult {
+            song_id: req.song_id,
+            lyrics,
+        });
+    }
 }
 
 pub struct App {
@@ -1686,7 +1677,7 @@ pub struct App {
     cover_fetch_rx: Receiver<CoverFetchResult>,
     cover_fetch_inflight_url: Option<String>,
     cover_fetch_last_attempt_at: Option<Instant>,
-    lyric_fetch_tx: Sender<LyricFetchRequest>,
+    lyric_fetch_tx: UnboundedSender<LyricFetchRequest>,
     lyric_fetch_rx: Receiver<LyricFetchResult>,
     lyric_fetch_inflight_song_id: Option<String>,
     lyric_fetch_last_attempt_at: Option<Instant>,
@@ -1705,7 +1696,7 @@ pub struct App {
     mpris_last_playback: PlaybackRuntimeState,
     api: ApiState,
     audio_player: AudioPlayer,
-    rt: Runtime,
+    _rt: Runtime,
 }
 
 impl App {
@@ -1741,20 +1732,17 @@ impl App {
         let worker = loop_cover_fetch(cover_fetch_req_rx, cover_fetch_res_tx, http_client.clone());
         rt.spawn(worker);
 
-        let (lyric_fetch_tx, lyric_fetch_req_rx) = mpsc::channel::<LyricFetchRequest>();
-        let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
-        spawn_lyric_fetch_worker(
-            lyric_fetch_req_rx,
-            lyric_fetch_res_tx,
-            http_client.clone(),
-            rt.handle().clone(),
-        );
-
         let api = ApiState::new(
             saved_cookie.clone(),
             http_client.clone(),
             rt.handle().clone(),
         )?;
+
+        let (lyric_fetch_tx, lyric_fetch_req_rx) = unbounded_channel();
+        let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
+        let worker = loop_lyric_fetch(lyric_fetch_req_rx, lyric_fetch_res_tx, api.clone());
+        rt.spawn(worker);
+
         let (audio_prefetch_tx, audio_prefetch_req_rx) = unbounded_channel();
         let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
         let worker = loop_audio_prefetch(audio_prefetch_req_rx, audio_prefetch_res_tx, api.clone());
@@ -1834,7 +1822,7 @@ impl App {
             mpris_last_playback: PlaybackRuntimeState::Stopped,
             api,
             audio_player,
-            rt,
+            _rt: rt,
         };
 
         app.ensure_main_cava();

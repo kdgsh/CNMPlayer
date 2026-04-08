@@ -223,6 +223,12 @@ impl ApiState {
         Ok(response)
     }
 
+    pub async fn lyric_async(&mut self, song_id: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("id", song_id);
+        let response = self.client.lyric(&query).await?;
+        Ok(response)
+    }
+
     pub fn lyric(&mut self, song_id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", song_id);
         let response = self.hnd.block_on(self.client.lyric(&query))?;
