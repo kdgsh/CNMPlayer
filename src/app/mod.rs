@@ -27,7 +27,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::runtime::{Builder, Handle, Runtime};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
@@ -1551,11 +1551,10 @@ struct PendingPlayRequest {
     announce: bool,
 }
 
-fn spawn_cover_fetch_worker(
-    mut req_rx: UnboundedReceiver<CoverFetchRequest>,
-    res_tx: Sender<CoverFetchResult>,
+async fn loop_cover_fetch(
+    mut rx: UnboundedReceiver<CoverFetchRequest>,
+    tx: Sender<CoverFetchResult>,
     client: Client,
-    rt: &Runtime,
 ) {
     let process_fn = async move |req: &CoverFetchRequest| {
         if req.url.is_empty() {
@@ -1566,46 +1565,38 @@ fn spawn_cover_fetch_worker(
         let bytes = resp.bytes().await.ok()?;
         (!bytes.is_empty()).then(|| bytes.to_vec())
     };
-    let loop_fut = async move {
-        while let Some(req) = req_rx.recv().await {
-            let bytes = process_fn(&req).await;
-            let _ = res_tx.send(CoverFetchResult {
-                song_id: req.song_id,
-                url: req.url,
-                bytes: bytes,
-            });
-        }
-    };
-    rt.spawn(loop_fut);
+    while let Some(req) = rx.recv().await {
+        let bytes = process_fn(&req).await;
+        let _ = tx.send(CoverFetchResult {
+            song_id: req.song_id,
+            url: req.url,
+            bytes: bytes,
+        });
+    }
 }
 
-fn spawn_audio_prefetch_worker(
-    req_rx: Receiver<AudioPrefetchRequest>,
-    res_tx: Sender<AudioPrefetchResult>,
-    http_client: Client,
-    hnd: Handle,
+async fn loop_audio_prefetch(
+    mut rx: UnboundedReceiver<AudioPrefetchRequest>,
+    tx: Sender<AudioPrefetchResult>,
+    mut api: ApiState,
 ) {
-    thread::spawn(move || {
-        while let Ok(req) = req_rx.recv() {
-            let result = (|| -> Result<()> {
-                let mut api = ApiState::new(req.cookie.clone(), http_client.clone(), hnd.clone())?;
-                if let Some(cookie) = req.cookie.as_deref() {
-                    api.set_cookie(cookie.to_string());
-                }
-
-                let stream_url =
-                    api.song_stream_url_with_quality(&req.song_id, &req.quality_level)?;
-                api.fetch_audio_to_path(&stream_url, &req.cache_path)?;
-                Ok(())
-            })();
-
-            let _ = res_tx.send(AudioPrefetchResult {
-                request_id: req.request_id,
-                success: result.is_ok(),
-                error: result.err().map(|e| e.to_string()),
-            });
+    let mut process_fn = async move |req: &AudioPrefetchRequest| {
+        if let Some(cookie) = req.cookie.as_deref() {
+            api.set_cookie(cookie.to_string());
         }
-    });
+        let stream_url = api
+            .song_stream_url_with_quality(&req.song_id, &req.quality_level)
+            .await?;
+        api.fetch_audio_to_path(&stream_url, &req.cache_path).await
+    };
+    while let Some(req) = rx.recv().await {
+        let result = process_fn(&req).await;
+        let _ = tx.send(AudioPrefetchResult {
+            request_id: req.request_id,
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()),
+        });
+    }
 }
 
 fn spawn_lyric_fetch_worker(
@@ -1699,7 +1690,7 @@ pub struct App {
     lyric_fetch_rx: Receiver<LyricFetchResult>,
     lyric_fetch_inflight_song_id: Option<String>,
     lyric_fetch_last_attempt_at: Option<Instant>,
-    audio_prefetch_tx: Sender<AudioPrefetchRequest>,
+    audio_prefetch_tx: UnboundedSender<AudioPrefetchRequest>,
     audio_prefetch_rx: Receiver<AudioPrefetchResult>,
     audio_prefetch_pending: Option<PendingPlayRequest>,
     audio_prefetch_inflight_id: Option<u64>,
@@ -1745,14 +1736,10 @@ impl App {
         }
         let _ = fs::create_dir_all(&cover_cache_dir);
 
-        let (cover_fetch_tx, cover_fetch_req_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cover_fetch_tx, cover_fetch_req_rx) = unbounded_channel();
         let (cover_fetch_res_tx, cover_fetch_rx) = mpsc::channel::<CoverFetchResult>();
-        spawn_cover_fetch_worker(
-            cover_fetch_req_rx,
-            cover_fetch_res_tx,
-            http_client.clone(),
-            &rt,
-        );
+        let worker = loop_cover_fetch(cover_fetch_req_rx, cover_fetch_res_tx, http_client.clone());
+        rt.spawn(worker);
 
         let (lyric_fetch_tx, lyric_fetch_req_rx) = mpsc::channel::<LyricFetchRequest>();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
@@ -1763,14 +1750,15 @@ impl App {
             rt.handle().clone(),
         );
 
-        let (audio_prefetch_tx, audio_prefetch_req_rx) = mpsc::channel::<AudioPrefetchRequest>();
-        let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
-        spawn_audio_prefetch_worker(
-            audio_prefetch_req_rx,
-            audio_prefetch_res_tx,
+        let api = ApiState::new(
+            saved_cookie.clone(),
             http_client.clone(),
             rt.handle().clone(),
-        );
+        )?;
+        let (audio_prefetch_tx, audio_prefetch_req_rx) = unbounded_channel();
+        let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
+        let worker = loop_audio_prefetch(audio_prefetch_req_rx, audio_prefetch_res_tx, api.clone());
+        rt.spawn(worker);
 
         let mut app = Self {
             config,
@@ -1844,11 +1832,7 @@ impl App {
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
             mpris_last_playback: PlaybackRuntimeState::Stopped,
-            api: ApiState::new(
-                saved_cookie.clone(),
-                http_client.clone(),
-                rt.handle().clone(),
-            )?,
+            api,
             audio_player,
             rt,
         };

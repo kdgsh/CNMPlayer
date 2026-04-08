@@ -8,6 +8,7 @@ use tokio::runtime::Handle;
 
 const MAX_COVER_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
+#[derive(Clone)]
 pub struct ApiState {
     hnd: Handle,
     client: ApiClient,
@@ -249,26 +250,30 @@ impl ApiState {
         Ok(response)
     }
 
-    pub fn song_url(&mut self, song_id: &str) -> Result<ApiResponse> {
+    pub async fn song_url(&mut self, song_id: &str) -> Result<ApiResponse> {
         let query = self
             .query_with_cookie()
             .param("id", song_id)
             .param("br", "320000");
-        let response = self.hnd.block_on(self.client.song_url(&query))?;
+        let response = self.client.song_url(&query).await?;
         Ok(response)
     }
 
-    pub fn song_url_v1(&mut self, song_id: &str, level: &str) -> Result<ApiResponse> {
+    pub async fn song_url_v1(&mut self, song_id: &str, level: &str) -> Result<ApiResponse> {
         let query = self
             .query_with_cookie()
             .param("id", song_id)
             .param("level", level);
-        let response = self.hnd.block_on(self.client.song_url_v1(&query))?;
+        let response = self.client.song_url_v1(&query).await?;
         Ok(response)
     }
 
-    pub fn song_stream_url_with_quality(&mut self, song_id: &str, level: &str) -> Result<String> {
-        let response = self.song_url_v1(song_id, level)?;
+    pub async fn song_stream_url_with_quality(
+        &mut self,
+        song_id: &str,
+        level: &str,
+    ) -> Result<String> {
+        let response = self.song_url_v1(song_id, level).await?;
         if let Some(url) = response
             .body
             .pointer("/data/0/url")
@@ -280,7 +285,7 @@ impl ApiState {
         }
 
         // Keep backward compatibility for songs that only expose legacy stream URLs.
-        let fallback = self.song_url(song_id)?;
+        let fallback = self.song_url(song_id).await?;
         if let Some(url) = fallback
             .body
             .pointer("/data/0/url")
@@ -371,7 +376,7 @@ impl ApiState {
         Ok(bytes)
     }
 
-    pub fn fetch_audio_to_path(&self, url: &str, path: &Path) -> Result<()> {
+    pub async fn fetch_audio_to_path(&self, url: &str, path: &Path) -> Result<()> {
         let url = url.trim();
         if url.is_empty() {
             return Err(anyhow!("audio url is empty"));
@@ -383,38 +388,36 @@ impl ApiState {
         }
 
         let tmp_path = path.with_extension("part");
-        let result = self
-            .hnd
-            .block_on(async {
-                let response = self.http.get(url).send().await?;
-                let mut response = response.error_for_status()?;
+        let result = async {
+            let response = self.http.get(url).send().await?;
+            let mut response = response.error_for_status()?;
 
-                let mut file = File::create(&tmp_path).with_context(|| {
-                    format!("create temp audio file failed: {}", tmp_path.display())
-                })?;
+            let mut file = File::create(&tmp_path).with_context(|| {
+                format!("create temp audio file failed: {}", tmp_path.display())
+            })?;
 
-                let mut written = 0u64;
-                while let Some(chunk) = response.chunk().await? {
-                    if chunk.is_empty() {
-                        continue;
-                    }
-                    file.write_all(&chunk).with_context(|| {
-                        format!("write temp audio file failed: {}", tmp_path.display())
-                    })?;
-                    written = written.saturating_add(chunk.len() as u64);
+            let mut written = 0u64;
+            while let Some(chunk) = response.chunk().await? {
+                if chunk.is_empty() {
+                    continue;
                 }
-
-                file.flush().with_context(|| {
-                    format!("flush temp audio file failed: {}", tmp_path.display())
+                file.write_all(&chunk).with_context(|| {
+                    format!("write temp audio file failed: {}", tmp_path.display())
                 })?;
+                written = written.saturating_add(chunk.len() as u64);
+            }
 
-                if written == 0 {
-                    return Err(anyhow!("song audio payload is empty"));
-                }
+            file.flush()
+                .with_context(|| format!("flush temp audio file failed: {}", tmp_path.display()))?;
 
-                Ok::<(), anyhow::Error>(())
-            })
-            .with_context(|| format!("stream audio to temp file failed: {}", url));
+            if written == 0 {
+                return Err(anyhow!("song audio payload is empty"));
+            }
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
+        .with_context(|| format!("stream audio to temp file failed: {}", url));
 
         if result.is_err() {
             let _ = fs::remove_file(&tmp_path);
