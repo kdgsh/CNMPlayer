@@ -26,7 +26,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Handle, Runtime};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
@@ -1551,44 +1552,43 @@ struct PendingPlayRequest {
 }
 
 fn spawn_cover_fetch_worker(
-    req_rx: Receiver<CoverFetchRequest>,
+    mut req_rx: UnboundedReceiver<CoverFetchRequest>,
     res_tx: Sender<CoverFetchResult>,
-    http_client: Client,
+    client: Client,
+    rt: &Runtime,
 ) {
-    thread::spawn(move || {
-        let runtime = Builder::new_current_thread().enable_all().build().ok();
-
-        while let Ok(req) = req_rx.recv() {
-            let bytes = match (&runtime, req.url.is_empty()) {
-                (Some(runtime), false) => runtime.block_on(async {
-                    let response = http_client.get(req.url.as_str()).send().await.ok()?;
-                    let response = response.error_for_status().ok()?;
-                    let bytes = response.bytes().await.ok()?;
-                    if bytes.is_empty() {
-                        return None;
-                    }
-                    Some(bytes.to_vec())
-                }),
-                _ => None,
-            };
+    let process_fn = async move |req: &CoverFetchRequest| {
+        if req.url.is_empty() {
+            return None;
+        }
+        let resp = client.get(req.url.as_str()).send().await.ok()?;
+        let resp = resp.error_for_status().ok()?;
+        let bytes = resp.bytes().await.ok()?;
+        (!bytes.is_empty()).then(|| bytes.to_vec())
+    };
+    let loop_fut = async move {
+        while let Some(req) = req_rx.recv().await {
+            let bytes = process_fn(&req).await;
             let _ = res_tx.send(CoverFetchResult {
                 song_id: req.song_id,
                 url: req.url,
-                bytes,
+                bytes: bytes,
             });
         }
-    });
+    };
+    rt.spawn(loop_fut);
 }
 
 fn spawn_audio_prefetch_worker(
     req_rx: Receiver<AudioPrefetchRequest>,
     res_tx: Sender<AudioPrefetchResult>,
     http_client: Client,
+    hnd: Handle,
 ) {
     thread::spawn(move || {
         while let Ok(req) = req_rx.recv() {
             let result = (|| -> Result<()> {
-                let mut api = ApiState::new(req.cookie.clone(), http_client.clone())?;
+                let mut api = ApiState::new(req.cookie.clone(), http_client.clone(), hnd.clone())?;
                 if let Some(cookie) = req.cookie.as_deref() {
                     api.set_cookie(cookie.to_string());
                 }
@@ -1612,11 +1612,13 @@ fn spawn_lyric_fetch_worker(
     req_rx: Receiver<LyricFetchRequest>,
     res_tx: Sender<LyricFetchResult>,
     http_client: Client,
+    hnd: Handle,
 ) {
     thread::spawn(move || {
         while let Ok(req) = req_rx.recv() {
             let lyrics = (|| -> Option<Vec<LyricLine>> {
-                let mut api = ApiState::new(req.cookie.clone(), http_client.clone()).ok()?;
+                let mut api =
+                    ApiState::new(req.cookie.clone(), http_client.clone(), hnd.clone()).ok()?;
                 if let Some(cookie) = req.cookie.as_deref() {
                     api.set_cookie(cookie.to_string());
                 }
@@ -1689,7 +1691,7 @@ pub struct App {
     main_cava_bars: [f32; 20],
     main_cava_last_tick: Instant,
     cover_cache_dir: PathBuf,
-    cover_fetch_tx: Sender<CoverFetchRequest>,
+    cover_fetch_tx: UnboundedSender<CoverFetchRequest>,
     cover_fetch_rx: Receiver<CoverFetchResult>,
     cover_fetch_inflight_url: Option<String>,
     cover_fetch_last_attempt_at: Option<Instant>,
@@ -1712,10 +1714,12 @@ pub struct App {
     mpris_last_playback: PlaybackRuntimeState,
     api: ApiState,
     audio_player: AudioPlayer,
+    rt: Runtime,
 }
 
 impl App {
     pub fn new(config: Config, theme: Theme) -> Result<Self> {
+        let rt = Builder::new_multi_thread().enable_all().build()?;
         let saved_cookie = session::load_cookie().ok().flatten();
         let audio_player = AudioPlayer::new(&config);
 
@@ -1741,13 +1745,23 @@ impl App {
         }
         let _ = fs::create_dir_all(&cover_cache_dir);
 
-        let (cover_fetch_tx, cover_fetch_req_rx) = mpsc::channel::<CoverFetchRequest>();
+        let (cover_fetch_tx, cover_fetch_req_rx) = tokio::sync::mpsc::unbounded_channel();
         let (cover_fetch_res_tx, cover_fetch_rx) = mpsc::channel::<CoverFetchResult>();
-        spawn_cover_fetch_worker(cover_fetch_req_rx, cover_fetch_res_tx, http_client.clone());
+        spawn_cover_fetch_worker(
+            cover_fetch_req_rx,
+            cover_fetch_res_tx,
+            http_client.clone(),
+            &rt,
+        );
 
         let (lyric_fetch_tx, lyric_fetch_req_rx) = mpsc::channel::<LyricFetchRequest>();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
-        spawn_lyric_fetch_worker(lyric_fetch_req_rx, lyric_fetch_res_tx, http_client.clone());
+        spawn_lyric_fetch_worker(
+            lyric_fetch_req_rx,
+            lyric_fetch_res_tx,
+            http_client.clone(),
+            rt.handle().clone(),
+        );
 
         let (audio_prefetch_tx, audio_prefetch_req_rx) = mpsc::channel::<AudioPrefetchRequest>();
         let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
@@ -1755,6 +1769,7 @@ impl App {
             audio_prefetch_req_rx,
             audio_prefetch_res_tx,
             http_client.clone(),
+            rt.handle().clone(),
         );
 
         let mut app = Self {
@@ -1829,8 +1844,13 @@ impl App {
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
             mpris_last_playback: PlaybackRuntimeState::Stopped,
-            api: ApiState::new(saved_cookie.clone(), http_client.clone())?,
+            api: ApiState::new(
+                saved_cookie.clone(),
+                http_client.clone(),
+                rt.handle().clone(),
+            )?,
             audio_player,
+            rt,
         };
 
         app.ensure_main_cava();

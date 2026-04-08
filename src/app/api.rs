@@ -4,24 +4,23 @@ use reqwest::Client;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::Handle;
 
 const MAX_COVER_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 pub struct ApiState {
-    runtime: Runtime,
+    hnd: Handle,
     client: ApiClient,
     cookie: Option<String>,
     http: Client,
 }
 
 impl ApiState {
-    pub fn new(cookie: Option<String>, http: Client) -> Result<Self> {
-        let runtime = Builder::new_multi_thread().enable_all().build()?;
+    pub fn new(cookie: Option<String>, http: Client, hnd: Handle) -> Result<Self> {
         let client = ApiClient::new(cookie.clone(), http.clone());
 
         Ok(Self {
-            runtime,
+            hnd,
             client,
             cookie,
             http,
@@ -44,7 +43,7 @@ impl ApiState {
 
     pub fn validate_cookie(&mut self, cookie: &str) -> Result<bool> {
         let query = Query::new().cookie(cookie);
-        let response = self.runtime.block_on(self.client.login_status(&query))?;
+        let response = self.hnd.block_on(self.client.login_status(&query))?;
         let code = response
             .body
             .get("code")
@@ -62,14 +61,14 @@ impl ApiState {
 
     pub fn login_status(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self.runtime.block_on(self.client.login_status(&query))?;
+        let response = self.hnd.block_on(self.client.login_status(&query))?;
         self.capture_cookie(&response);
         Ok(response)
     }
 
     pub fn user_account(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self.runtime.block_on(self.client.user_account(&query))?;
+        let response = self.hnd.block_on(self.client.user_account(&query))?;
         self.capture_cookie(&response);
         Ok(response)
     }
@@ -86,7 +85,7 @@ impl ApiState {
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
         let response = self
-            .runtime
+            .hnd
             .block_on(self.client.user_playlist_create(&query))?;
         Ok(response)
     }
@@ -103,7 +102,7 @@ impl ApiState {
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
         let response = self
-            .runtime
+            .hnd
             .block_on(self.client.user_playlist_collect(&query))?;
         Ok(response)
     }
@@ -112,91 +111,89 @@ impl ApiState {
         let query = Query::new()
             .param("email", email)
             .param("password", password);
-        let response = self.runtime.block_on(self.client.login(&query))?;
+        let response = self.hnd.block_on(self.client.login(&query))?;
         self.capture_cookie(&response);
         Ok(response)
     }
 
     pub fn captcha_sent(&mut self, phone: &str) -> Result<ApiResponse> {
         let query = Query::new().param("phone", phone);
-        let response = self.runtime.block_on(self.client.captcha_sent(&query))?;
+        let response = self.hnd.block_on(self.client.captcha_sent(&query))?;
         Ok(response)
     }
 
     pub fn login_phone_captcha(&mut self, phone: &str, captcha: &str) -> Result<ApiResponse> {
         let query = Query::new().param("phone", phone).param("captcha", captcha);
-        let response = self.runtime.block_on(self.client.login_cellphone(&query))?;
+        let response = self.hnd.block_on(self.client.login_cellphone(&query))?;
         self.capture_cookie(&response);
         Ok(response)
     }
 
     pub fn login_qr_key(&mut self) -> Result<ApiResponse> {
         let query = Query::new();
-        let response = self.runtime.block_on(self.client.login_qr_key(&query))?;
+        let response = self.hnd.block_on(self.client.login_qr_key(&query))?;
         Ok(response)
     }
 
     pub fn login_qr_create(&mut self, key: &str) -> Result<ApiResponse> {
         let query = Query::new().param("key", key);
-        let response = self.runtime.block_on(self.client.login_qr_create(&query))?;
+        let response = self.hnd.block_on(self.client.login_qr_create(&query))?;
         Ok(response)
     }
 
     pub fn login_qr_check(&mut self, key: &str) -> Result<ApiResponse> {
         let query = Query::new().param("key", key);
-        let response = self.runtime.block_on(self.client.login_qr_check(&query))?;
+        let response = self.hnd.block_on(self.client.login_qr_check(&query))?;
         self.capture_cookie(&response);
         Ok(response)
     }
 
     pub fn recommend_resource(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self
-            .runtime
-            .block_on(self.client.recommend_resource(&query))?;
+        let response = self.hnd.block_on(self.client.recommend_resource(&query))?;
         Ok(response)
     }
 
     pub fn recommend_songs(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self.runtime.block_on(self.client.recommend_songs(&query))?;
+        let response = self.hnd.block_on(self.client.recommend_songs(&query))?;
         Ok(response)
     }
 
     pub fn personalized(&mut self, limit: usize) -> Result<ApiResponse> {
         let limit = limit.max(1).to_string();
         let query = self.query_with_cookie().param("limit", &limit);
-        let response = self.runtime.block_on(self.client.personalized(&query))?;
+        let response = self.hnd.block_on(self.client.personalized(&query))?;
         Ok(response)
     }
 
     pub fn playlist_detail(&mut self, id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", id);
-        let response = self.runtime.block_on(self.client.playlist_detail(&query))?;
+        let response = self.hnd.block_on(self.client.playlist_detail(&query))?;
         Ok(response)
     }
 
     pub fn album(&mut self, id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", id);
-        let response = self.runtime.block_on(self.client.album(&query))?;
+        let response = self.hnd.block_on(self.client.album(&query))?;
         Ok(response)
     }
 
     pub fn artist_detail(&mut self, id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", id);
-        let response = self.runtime.block_on(self.client.artist_detail(&query))?;
+        let response = self.hnd.block_on(self.client.artist_detail(&query))?;
         Ok(response)
     }
 
     pub fn artist_desc(&mut self, id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", id);
-        let response = self.runtime.block_on(self.client.artist_desc(&query))?;
+        let response = self.hnd.block_on(self.client.artist_desc(&query))?;
         Ok(response)
     }
 
     pub fn artist_top_song(&mut self, id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", id);
-        let response = self.runtime.block_on(self.client.artist_top_song(&query))?;
+        let response = self.hnd.block_on(self.client.artist_top_song(&query))?;
         Ok(response)
     }
 
@@ -206,7 +203,7 @@ impl ApiState {
             .param("id", id)
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
-        let response = self.runtime.block_on(self.client.artist_album(&query))?;
+        let response = self.hnd.block_on(self.client.artist_album(&query))?;
         Ok(response)
     }
 
@@ -215,19 +212,19 @@ impl ApiState {
             .query_with_cookie()
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
-        let response = self.runtime.block_on(self.client.artist_sublist(&query))?;
+        let response = self.hnd.block_on(self.client.artist_sublist(&query))?;
         Ok(response)
     }
 
     pub fn song_detail(&mut self, song_id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("ids", song_id);
-        let response = self.runtime.block_on(self.client.song_detail(&query))?;
+        let response = self.hnd.block_on(self.client.song_detail(&query))?;
         Ok(response)
     }
 
     pub fn lyric(&mut self, song_id: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("id", song_id);
-        let response = self.runtime.block_on(self.client.lyric(&query))?;
+        let response = self.hnd.block_on(self.client.lyric(&query))?;
         Ok(response)
     }
 
@@ -236,19 +233,19 @@ impl ApiState {
             .query_with_cookie()
             .param("id", song_id)
             .param("like", if like { "true" } else { "false" });
-        let response = self.runtime.block_on(self.client.like(&query))?;
+        let response = self.hnd.block_on(self.client.like(&query))?;
         Ok(response)
     }
 
     pub fn likelist(&mut self, uid: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("uid", uid);
-        let response = self.runtime.block_on(self.client.likelist(&query))?;
+        let response = self.hnd.block_on(self.client.likelist(&query))?;
         Ok(response)
     }
 
     pub fn song_like_check(&mut self, ids_json: &str) -> Result<ApiResponse> {
         let query = self.query_with_cookie().param("ids", ids_json);
-        let response = self.runtime.block_on(self.client.song_like_check(&query))?;
+        let response = self.hnd.block_on(self.client.song_like_check(&query))?;
         Ok(response)
     }
 
@@ -257,7 +254,7 @@ impl ApiState {
             .query_with_cookie()
             .param("id", song_id)
             .param("br", "320000");
-        let response = self.runtime.block_on(self.client.song_url(&query))?;
+        let response = self.hnd.block_on(self.client.song_url(&query))?;
         Ok(response)
     }
 
@@ -266,7 +263,7 @@ impl ApiState {
             .query_with_cookie()
             .param("id", song_id)
             .param("level", level);
-        let response = self.runtime.block_on(self.client.song_url_v1(&query))?;
+        let response = self.hnd.block_on(self.client.song_url_v1(&query))?;
         Ok(response)
     }
 
@@ -303,13 +300,13 @@ impl ApiState {
 
     pub fn vip_info(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self.runtime.block_on(self.client.vip_info(&query))?;
+        let response = self.hnd.block_on(self.client.vip_info(&query))?;
         Ok(response)
     }
 
     pub fn vip_info_v2(&mut self) -> Result<ApiResponse> {
         let query = self.query_with_cookie();
-        let response = self.runtime.block_on(self.client.vip_info_v2(&query))?;
+        let response = self.hnd.block_on(self.client.vip_info_v2(&query))?;
         Ok(response)
     }
 
@@ -326,7 +323,7 @@ impl ApiState {
             .param("type", &search_type.to_string())
             .param("limit", &limit.max(1).to_string())
             .param("offset", &offset.to_string());
-        let response = self.runtime.block_on(self.client.search(&query))?;
+        let response = self.hnd.block_on(self.client.search(&query))?;
         Ok(response)
     }
 
@@ -337,7 +334,7 @@ impl ApiState {
         }
 
         let bytes = self
-            .runtime
+            .hnd
             .block_on(async {
                 let response = self.http.get(url).send().await?;
                 let mut response = response.error_for_status()?;
@@ -387,7 +384,7 @@ impl ApiState {
 
         let tmp_path = path.with_extension("part");
         let result = self
-            .runtime
+            .hnd
             .block_on(async {
                 let response = self.http.get(url).send().await?;
                 let mut response = response.error_for_status()?;
