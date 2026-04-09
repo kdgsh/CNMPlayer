@@ -1824,7 +1824,7 @@ impl App {
                 Ok(true) => {
                     app.session_cookie = app.api.session_cookie().map(|value| value.to_string());
                     app.refresh_vip_audio_access().await;
-                    let _ = app.refresh_liked_song_cache();
+                    let _ = app.refresh_liked_song_cache().await;
                     app.home.status_line = "已恢复上次登录，正在加载推荐歌单".to_string();
                     app.begin_startup_loading();
                     if let Err(err) = app.load_home_recommendations().await {
@@ -1975,10 +1975,10 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                let _ = self.handle_content_scroll(col, row, false);
+                self.handle_content_scroll(col, row, false).await;
             }
             MouseEventKind::ScrollDown => {
-                let _ = self.handle_content_scroll(col, row, true);
+                self.handle_content_scroll(col, row, true).await;
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if matches!(self.overlay, Some(Overlay::SearchBox)) {
@@ -2050,9 +2050,9 @@ impl App {
                 .unwrap_or(false)
     }
 
-    async fn handle_content_scroll(&mut self, col: u16, row: u16, forward: bool) -> bool {
+    async fn handle_content_scroll(&mut self, col: u16, row: u16, forward: bool) {
         if self.overlay.is_some() || self.player_bar_contains(col, row) {
-            return false;
+            return;
         }
 
         match self.page {
@@ -2062,7 +2062,6 @@ impl App {
                 } else {
                     let _ = self.search.focus_prev();
                 }
-                true
             }
             Page::Playlist => {
                 if forward {
@@ -2070,10 +2069,9 @@ impl App {
                 } else {
                     let _ = self.playlist.focus_prev();
                 }
-                true
             }
-            _ => false,
-        }
+            _ => {}
+        };
     }
 
     async fn advance_search_focus(&mut self) {
@@ -2593,7 +2591,7 @@ impl App {
         };
 
         if self.is_liked_playlist(&playlist_id, Some(&title)) {
-            let _ = self.refresh_liked_song_cache();
+            let _ = self.refresh_liked_song_cache().await;
             self.refresh_now_playing_like_state().await;
         }
 
@@ -5915,7 +5913,7 @@ impl App {
             .to_string();
 
         if self.is_liked_playlist(playlist_id, Some(&title)) {
-            let _ = self.refresh_liked_song_cache();
+            let _ = self.refresh_liked_song_cache().await;
         }
 
         let artist = playlist
@@ -6477,7 +6475,7 @@ impl App {
             let _ = session::save_cookie(cookie);
         }
         self.refresh_vip_audio_access().await;
-        let _ = self.refresh_liked_song_cache();
+        let _ = self.refresh_liked_song_cache().await;
         self.home_sidebar = HomeSidebarState::default();
         self.playlist_section_return_snapshot = None;
         self.home.status_line = text.to_string();
