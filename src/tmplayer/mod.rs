@@ -129,10 +129,10 @@ pub trait HostPlaybackBridge {
     async fn toggle_like_current(&mut self);
 }
 
-pub async fn run_fullscreen<T: HostPlaybackBridge>(
+pub async fn run_fullscreen(
     host_config: &HostConfig,
     bootstrap: FullscreenBootstrap,
-    host_bridge: Option<&mut T>,
+    host_bridge: Option<&mut impl HostPlaybackBridge>,
 ) -> Result<FullscreenExit> {
     let _ = env_logger::builder().is_test(false).try_init();
 

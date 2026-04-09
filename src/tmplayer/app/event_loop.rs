@@ -243,9 +243,9 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     app.config.kitty_graphics = config.kitty_graphics;
 }
 
-async fn save_and_sync_host_config<T: HostPlaybackBridge>(
+async fn save_and_sync_host_config(
     app: &mut AppState,
-    host_bridge: &mut Option<&mut T>,
+    host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
 ) {
     let _ = app.config.save();
     if let Some(bridge) = host_bridge.as_mut() {
@@ -255,10 +255,10 @@ async fn save_and_sync_host_config<T: HostPlaybackBridge>(
     }
 }
 
-async fn sync_eq_config<T: HostPlaybackBridge>(
+async fn sync_eq_config(
     app: &mut AppState,
     mode_manager: &mut ModeManager,
-    host_bridge: &mut Option<&mut T>,
+    host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
 ) {
     app.eq = app.eq.clamp();
     app.config.eq_bands_db = app.eq.bands_db;
@@ -514,9 +514,9 @@ fn apply_host_runtime_snapshot(app: &mut AppState, runtime: HostPlaybackRuntimeS
     changed
 }
 
-async fn sync_from_host_bridge<T: HostPlaybackBridge>(
+async fn sync_from_host_bridge(
     app: &mut AppState,
-    host_bridge: &mut Option<&mut T>,
+    host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
     last_metadata_signature: &mut Option<u64>,
     sync_config: bool,
 ) -> bool {
@@ -547,9 +547,9 @@ async fn sync_from_host_bridge<T: HostPlaybackBridge>(
     changed
 }
 
-pub async fn run<T: HostPlaybackBridge>(
+pub async fn run(
     app: &mut AppState,
-    mut host_bridge: Option<&mut T>,
+    mut host_bridge: Option<&mut impl HostPlaybackBridge>,
 ) -> Result<crate::tmplayer::FullscreenExit> {
     enable_raw_mode()?;
     let mut tui = Tui::new()?;
@@ -943,11 +943,11 @@ fn switch_idle_track(app: &mut AppState, dir: i8) {
     }
 }
 
-async fn handle_action<T: HostPlaybackBridge>(
+async fn handle_action(
     app: &mut AppState,
     mode_manager: &mut ModeManager,
     system_volume: Option<&SystemVolume>,
-    host_bridge: &mut Option<&mut T>,
+    host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
     action: Action,
     layout: &UiLayout,
 ) -> Result<()> {
@@ -1902,9 +1902,9 @@ fn apply_remote_fetch_results(
     }
 }
 
-async fn apply_settings_delta<T: HostPlaybackBridge>(
+async fn apply_settings_delta(
     app: &mut AppState,
-    host_bridge: &mut Option<&mut T>,
+    host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
     delta: i32,
 ) {
     match app.settings_selected {
