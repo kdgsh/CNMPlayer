@@ -114,25 +114,25 @@ pub struct HostConfigSync {
 }
 
 pub trait HostPlaybackBridge {
-    fn tick(&mut self);
+    async fn tick(&mut self);
     fn metadata_signature(&self) -> u64;
     fn runtime_snapshot(&self) -> HostPlaybackRuntimeSnapshot;
     fn snapshot(&mut self) -> HostPlaybackSnapshot;
     fn config_snapshot(&self) -> HostConfigSync;
-    fn apply_config_sync(&mut self, config: HostConfigSync);
-    fn toggle_play_pause(&mut self);
-    fn play_previous(&mut self);
-    fn play_next(&mut self);
-    fn play_queue_index(&mut self, index: usize);
+    async fn apply_config_sync(&mut self, config: HostConfigSync);
+    async fn toggle_play_pause(&mut self);
+    async fn play_previous(&mut self);
+    async fn play_next(&mut self);
+    async fn play_queue_index(&mut self, index: usize);
     fn seek_to_ratio(&mut self, ratio: f32);
     fn toggle_repeat_mode(&mut self);
-    fn toggle_like_current(&mut self);
+    async fn toggle_like_current(&mut self);
 }
 
-pub fn run_fullscreen(
+pub async fn run_fullscreen<T: HostPlaybackBridge>(
     host_config: &HostConfig,
     bootstrap: FullscreenBootstrap,
-    host_bridge: Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: Option<&mut T>,
 ) -> Result<FullscreenExit> {
     let _ = env_logger::builder().is_test(false).try_init();
 
@@ -153,7 +153,7 @@ pub fn run_fullscreen(
 
     apply_bootstrap(&mut app, bootstrap);
 
-    app::event_loop::run(&mut app, host_bridge)
+    app::event_loop::run(&mut app, host_bridge).await
 }
 
 fn tm_config_from_host(host: &HostConfig) -> data::config::Config {

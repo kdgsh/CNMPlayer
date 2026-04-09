@@ -4,7 +4,7 @@ mod render;
 mod tmplayer;
 mod ui;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use app::App;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use crossterm::execute;
@@ -22,14 +22,15 @@ use render::main_kitty_overlay::MainKittyOverlay;
 use rustls::crypto::ring;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
+use tokio::time::sleep;
 
 struct AppFullscreenBridge<'a> {
     app: &'a mut App,
 }
 
 impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
-    fn tick(&mut self) {
-        self.app.fullscreen_tick_playback();
+    async fn tick(&mut self) {
+        self.app.fullscreen_tick_playback().await;
     }
 
     fn metadata_signature(&self) -> u64 {
@@ -127,24 +128,24 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
         self.app.fullscreen_config_snapshot()
     }
 
-    fn apply_config_sync(&mut self, config: tmplayer::HostConfigSync) {
-        self.app.fullscreen_apply_config_sync(config);
+    async fn apply_config_sync(&mut self, config: tmplayer::HostConfigSync) {
+        self.app.fullscreen_apply_config_sync(config).await;
     }
 
-    fn toggle_play_pause(&mut self) {
-        self.app.fullscreen_toggle_play_pause();
+    async fn toggle_play_pause(&mut self) {
+        self.app.fullscreen_toggle_play_pause().await;
     }
 
-    fn play_previous(&mut self) {
-        self.app.fullscreen_play_previous();
+    async fn play_previous(&mut self) {
+        self.app.fullscreen_play_previous().await;
     }
 
-    fn play_next(&mut self) {
-        self.app.fullscreen_play_next();
+    async fn play_next(&mut self) {
+        self.app.fullscreen_play_next().await;
     }
 
-    fn play_queue_index(&mut self, index: usize) {
-        self.app.fullscreen_play_queue_index(index);
+    async fn play_queue_index(&mut self, index: usize) {
+        self.app.fullscreen_play_queue_index(index).await;
     }
 
     fn seek_to_ratio(&mut self, ratio: f32) {
@@ -155,21 +156,20 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
         self.app.fullscreen_toggle_repeat_mode();
     }
 
-    fn toggle_like_current(&mut self) {
-        self.app.fullscreen_toggle_like();
+    async fn toggle_like_current(&mut self) {
+        self.app.fullscreen_toggle_like().await;
     }
 }
 
-fn main() -> Result<()> {
-    ring::default_provider()
-        .install_default()
-        .map_err(|_| anyhow!("Failed to install default crypto provider"))?;
+#[tokio::main]
+async fn main() -> Result<()> {
+    ring::default_provider().install_default().unwrap();
     let config = Config::load_or_default()?;
     let theme = ThemeLoader::load(&config.theme).unwrap_or_default();
-    let mut app = App::new(config, theme)?;
+    let mut app = App::new(config, theme).await?;
 
     let mut terminal = init_terminal()?;
-    let run_result = run_app(&mut terminal, &mut app);
+    let run_result = run_app(&mut terminal, &mut app).await;
     restore_terminal(&mut terminal)?;
     run_result
 }
@@ -193,7 +193,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
     let mut kitty_overlay = MainKittyOverlay::new();
     let mut last_draw_at = Instant::now()
@@ -201,11 +201,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
         .unwrap_or_else(Instant::now);
 
     loop {
-        app.tick();
+        app.tick().await;
 
         if app.consume_fullscreen_launch_request() {
-            let bootstrap = app.build_fullscreen_bootstrap();
-            launch_tmplayer_fullscreen(terminal, app, bootstrap)?;
+            let bootstrap = app.build_fullscreen_bootstrap().await;
+            launch_tmplayer_fullscreen(terminal, app, bootstrap).await?;
             kitty_overlay.on_terminal_reset();
             needs_redraw = true;
             continue;
@@ -248,11 +248,11 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
         if event::poll(wait_timeout)? {
             match event::read()? {
                 Event::Key(key) => {
-                    app.handle_key(key);
+                    app.handle_key(key).await;
                     needs_redraw = true;
                 }
                 Event::Mouse(mouse) => {
-                    app.handle_mouse(mouse);
+                    app.handle_mouse(mouse).await;
                     needs_redraw = true;
                 }
                 Event::Resize(_, _) => {
@@ -268,18 +268,18 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> 
     Ok(())
 }
 
-fn launch_tmplayer_fullscreen(
+async fn launch_tmplayer_fullscreen(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     bootstrap: tmplayer::FullscreenBootstrap,
 ) -> Result<()> {
-    play_fullscreen_transition(terminal, app, true)?;
+    play_fullscreen_transition(terminal, app, true).await?;
     app.suspend_main_cava_for_fullscreen();
     restore_terminal(terminal)?;
 
     let config = app.config.clone();
     let mut bridge = AppFullscreenBridge { app };
-    let status_text = match tmplayer::run_fullscreen(&config, bootstrap, Some(&mut bridge)) {
+    let status_text = match tmplayer::run_fullscreen(&config, bootstrap, Some(&mut bridge)).await {
         Ok(tmplayer::FullscreenExit::BackToHost) => String::new(),
         Ok(tmplayer::FullscreenExit::BackToHostOpenSettings) => {
             bridge.app.open_settings_from_fullscreen();
@@ -290,14 +290,14 @@ fn launch_tmplayer_fullscreen(
 
     *terminal = init_terminal()?;
     app.resume_main_cava_after_fullscreen();
-    play_fullscreen_transition(terminal, app, false)?;
+    play_fullscreen_transition(terminal, app, false).await?;
     if !status_text.is_empty() {
         app.set_runtime_status(status_text);
     }
     Ok(())
 }
 
-fn play_fullscreen_transition(
+async fn play_fullscreen_transition(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
     opening: bool,
@@ -334,7 +334,7 @@ fn play_fullscreen_transition(
             );
         })?;
 
-        std::thread::sleep(Duration::from_millis(14));
+        sleep(Duration::from_millis(14)).await;
     }
 
     Ok(())

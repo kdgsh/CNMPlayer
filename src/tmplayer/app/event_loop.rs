@@ -243,20 +243,22 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     app.config.kitty_graphics = config.kitty_graphics;
 }
 
-fn save_and_sync_host_config(
+async fn save_and_sync_host_config<T: HostPlaybackBridge>(
     app: &mut AppState,
-    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: &mut Option<&mut T>,
 ) {
     let _ = app.config.save();
     if let Some(bridge) = host_bridge.as_mut() {
-        (*bridge).apply_config_sync(host_config_sync_from_app(app));
+        (*bridge)
+            .apply_config_sync(host_config_sync_from_app(app))
+            .await;
     }
 }
 
-fn sync_eq_config(
+async fn sync_eq_config<T: HostPlaybackBridge>(
     app: &mut AppState,
     mode_manager: &mut ModeManager,
-    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: &mut Option<&mut T>,
 ) {
     app.eq = app.eq.clamp();
     app.config.eq_bands_db = app.eq.bands_db;
@@ -265,7 +267,7 @@ fn sync_eq_config(
         let _ = mode_manager.local.set_eq(app.eq);
     }
 
-    save_and_sync_host_config(app, host_bridge);
+    save_and_sync_host_config(app, host_bridge).await;
 }
 
 fn empty_track_metadata() -> crate::tmplayer::app::state::TrackMetadata {
@@ -512,9 +514,9 @@ fn apply_host_runtime_snapshot(app: &mut AppState, runtime: HostPlaybackRuntimeS
     changed
 }
 
-fn sync_from_host_bridge(
+async fn sync_from_host_bridge<T: HostPlaybackBridge>(
     app: &mut AppState,
-    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: &mut Option<&mut T>,
     last_metadata_signature: &mut Option<u64>,
     sync_config: bool,
 ) -> bool {
@@ -523,7 +525,7 @@ fn sync_from_host_bridge(
     };
 
     let mut changed = false;
-    (*bridge).tick();
+    (*bridge).tick().await;
 
     if sync_config {
         let config = (*bridge).config_snapshot();
@@ -545,9 +547,9 @@ fn sync_from_host_bridge(
     changed
 }
 
-pub fn run(
+pub async fn run<T: HostPlaybackBridge>(
     app: &mut AppState,
-    mut host_bridge: Option<&mut dyn HostPlaybackBridge>,
+    mut host_bridge: Option<&mut T>,
 ) -> Result<crate::tmplayer::FullscreenExit> {
     enable_raw_mode()?;
     let mut tui = Tui::new()?;
@@ -604,7 +606,8 @@ pub fn run(
             &mut host_bridge,
             &mut last_host_metadata_signature,
             sync_config,
-        );
+        )
+        .await;
 
         // poll input (non-blocking-ish)
         // apply async remote metadata results (lyrics/cover/fingerprint)
@@ -624,7 +627,8 @@ pub fn run(
                         &mut host_bridge,
                         action,
                         &last_layout,
-                    )?;
+                    )
+                    .await?;
                     state_changed = true;
                 }
                 Event::Mouse(m) => {
@@ -636,7 +640,8 @@ pub fn run(
                         &mut host_bridge,
                         action,
                         &last_layout,
-                    )?;
+                    )
+                    .await?;
                     state_changed = true;
                 }
                 Event::Resize(_, _) => {
@@ -938,11 +943,11 @@ fn switch_idle_track(app: &mut AppState, dir: i8) {
     }
 }
 
-fn handle_action(
+async fn handle_action<T: HostPlaybackBridge>(
     app: &mut AppState,
     mode_manager: &mut ModeManager,
     system_volume: Option<&SystemVolume>,
-    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: &mut Option<&mut T>,
     action: Action,
     layout: &UiLayout,
 ) -> Result<()> {
@@ -983,14 +988,14 @@ fn handle_action(
                 if app.eq_selected < crate::tmplayer::app::state::EQ_BANDS {
                     app.eq.bands_db[app.eq_selected] = db;
                 }
-                sync_eq_config(app, mode_manager, host_bridge);
+                sync_eq_config(app, mode_manager, host_bridge).await;
             }
         }
         Action::EqResetDefault => {
             if app.overlay == Overlay::EqModal {
                 app.eq = crate::tmplayer::app::state::EqSettings::default();
                 app.eq_selected = 0;
-                sync_eq_config(app, mode_manager, host_bridge);
+                sync_eq_config(app, mode_manager, host_bridge).await;
             }
         }
         Action::FolderChar(c) => {
@@ -1076,7 +1081,7 @@ fn handle_action(
                         .playlist_view
                         .selected
                         .min(app.playlist_view.len().saturating_sub(1));
-                    (*bridge).play_queue_index(idx);
+                    (*bridge).play_queue_index(idx).await;
                     let snapshot = (*bridge).snapshot();
                     sync_from_host_snapshot(app, snapshot);
                     return Ok(());
@@ -1128,7 +1133,7 @@ fn handle_action(
             }
             Overlay::SettingsModal => match app.settings_selected {
                 0 | 1 | 2 | 3 => {
-                    apply_settings_delta(app, host_bridge, 1);
+                    apply_settings_delta(app, host_bridge, 1).await;
                 }
                 4 => {
                     app.bar_settings_selected = 0;
@@ -1138,10 +1143,10 @@ fn handle_action(
                     app.overlay = Overlay::HelpModal;
                 }
                 6 => {
-                    apply_settings_delta(app, host_bridge, 1);
+                    apply_settings_delta(app, host_bridge, 1).await;
                 }
                 7 => {
-                    apply_settings_delta(app, host_bridge, 1);
+                    apply_settings_delta(app, host_bridge, 1).await;
                 }
                 8 => {
                     app.set_toast("Logout is unavailable in fullscreen");
@@ -1155,50 +1160,50 @@ fn handle_action(
                 0 => {
                     if crate::tmplayer::audio::cava::is_available() {
                         app.config.visualize = app.config.visualize.cycle(1);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     } else if app.config.visualize
                         != crate::tmplayer::data::config::VisualizeMode::Off
                     {
                         app.config.visualize = crate::tmplayer::data::config::VisualizeMode::Off;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                 }
                 1 => {
                     app.config.super_smooth_bar = !app.config.super_smooth_bar;
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 2 => {
                     app.config.bars_gap = !app.config.bars_gap;
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 3 => {
                     app.config.bar_number = cycle_bar_number(app.config.bar_number, 1);
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 4 => {
                     app.config.bar_channels = toggle_bar_channels(app.config.bar_channels);
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 5 => {
                     app.config.album_border = !app.config.album_border;
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 6 => {
                     app.config.page_lyrics = !app.config.page_lyrics;
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 7 => {
                     app.config.audio_quality =
                         app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 8 => {
                     app.config.audio_preload = !app.config.audio_preload;
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 9 => {
                     app.config.playback_memory = !app.config.playback_memory;
-                    save_and_sync_host_config(app, host_bridge);
+                    save_and_sync_host_config(app, host_bridge).await;
                 }
                 _ => {}
             },
@@ -1387,7 +1392,7 @@ fn handle_action(
                     let v = app.eq.bands_db[app.eq_selected];
                     app.eq.bands_db[app.eq_selected] = (v + step).clamp(-12.0, 12.0);
                 }
-                sync_eq_config(app, mode_manager, host_bridge);
+                sync_eq_config(app, mode_manager, host_bridge).await;
             } else if app.overlay == Overlay::HelpModal {
                 if app.help_keybind_selected == 0 {
                     app.help_keybind_selected = HELP_MODAL_ITEMS - 1;
@@ -1412,58 +1417,58 @@ fn handle_action(
                     let v = app.eq.bands_db[app.eq_selected];
                     app.eq.bands_db[app.eq_selected] = (v - step).clamp(-12.0, 12.0);
                 }
-                sync_eq_config(app, mode_manager, host_bridge);
+                sync_eq_config(app, mode_manager, host_bridge).await;
             } else if app.overlay == Overlay::HelpModal {
                 app.help_keybind_selected = (app.help_keybind_selected + 1) % HELP_MODAL_ITEMS;
             }
         }
         Action::ModalLeft => {
             if app.overlay == Overlay::SettingsModal {
-                apply_settings_delta(app, host_bridge, -1);
+                apply_settings_delta(app, host_bridge, -1).await;
             } else if app.overlay == Overlay::BarSettingsModal {
                 match app.bar_settings_selected {
                     0 => {
                         if crate::tmplayer::audio::cava::is_available() {
                             app.config.visualize = app.config.visualize.cycle(-1);
-                            save_and_sync_host_config(app, host_bridge);
+                            save_and_sync_host_config(app, host_bridge).await;
                         }
                     }
                     1 => {
                         app.config.super_smooth_bar = !app.config.super_smooth_bar;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     2 => {
                         app.config.bars_gap = !app.config.bars_gap;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     3 => {
                         app.config.bar_number = cycle_bar_number(app.config.bar_number, -1);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     4 => {
                         app.config.bar_channels = toggle_bar_channels(app.config.bar_channels);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     5 => {
                         app.config.album_border = !app.config.album_border;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     6 => {
                         app.config.page_lyrics = !app.config.page_lyrics;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     7 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(-1, app.vip_audio_unlocked);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     8 => {
                         app.config.audio_preload = !app.config.audio_preload;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     9 => {
                         app.config.playback_memory = !app.config.playback_memory;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     _ => {}
                 }
@@ -1480,51 +1485,51 @@ fn handle_action(
         }
         Action::ModalRight => {
             if app.overlay == Overlay::SettingsModal {
-                apply_settings_delta(app, host_bridge, 1);
+                apply_settings_delta(app, host_bridge, 1).await;
             } else if app.overlay == Overlay::BarSettingsModal {
                 match app.bar_settings_selected {
                     0 => {
                         if crate::tmplayer::audio::cava::is_available() {
                             app.config.visualize = app.config.visualize.cycle(1);
-                            save_and_sync_host_config(app, host_bridge);
+                            save_and_sync_host_config(app, host_bridge).await;
                         }
                     }
                     1 => {
                         app.config.super_smooth_bar = !app.config.super_smooth_bar;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     2 => {
                         app.config.bars_gap = !app.config.bars_gap;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     3 => {
                         app.config.bar_number = cycle_bar_number(app.config.bar_number, 1);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     4 => {
                         app.config.bar_channels = toggle_bar_channels(app.config.bar_channels);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     5 => {
                         app.config.album_border = !app.config.album_border;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     6 => {
                         app.config.page_lyrics = !app.config.page_lyrics;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     7 => {
                         app.config.audio_quality =
                             app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     8 => {
                         app.config.audio_preload = !app.config.audio_preload;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     9 => {
                         app.config.playback_memory = !app.config.playback_memory;
-                        save_and_sync_host_config(app, host_bridge);
+                        save_and_sync_host_config(app, host_bridge).await;
                     }
                     _ => {}
                 }
@@ -1542,7 +1547,7 @@ fn handle_action(
                 sync_playlists_when_viewing_playback(app);
 
                 if let Some(bridge) = host_bridge.as_mut() {
-                    (*bridge).play_queue_index(idx);
+                    (*bridge).play_queue_index(idx).await;
                     let snapshot = (*bridge).snapshot();
                     sync_from_host_snapshot(app, snapshot);
                     return Ok(());
@@ -1554,14 +1559,15 @@ fn handle_action(
                     if now.duration_since(at) <= Duration::from_millis(400) {
                         // same row (best-effort)
                         if last_row == (layout.playlist_list_inner.y + idx as u16) {
-                            return handle_action(
+                            return Box::pin(handle_action(
                                 app,
                                 mode_manager,
                                 system_volume,
                                 host_bridge,
                                 Action::Confirm,
                                 layout,
-                            );
+                            ))
+                            .await;
                         }
                         let _ = last_col;
                     }
@@ -1571,7 +1577,7 @@ fn handle_action(
         }
         Action::TogglePlayPause => {
             if let Some(bridge) = host_bridge.as_mut() {
-                (*bridge).toggle_play_pause();
+                (*bridge).toggle_play_pause().await;
                 let snapshot = (*bridge).snapshot();
                 sync_from_host_snapshot(app, snapshot);
                 return Ok(());
@@ -1608,7 +1614,7 @@ fn handle_action(
             match app.player.mode {
                 _ if host_bridge.is_some() => {
                     if let Some(bridge) = host_bridge.as_mut() {
-                        (*bridge).play_previous();
+                        (*bridge).play_previous().await;
                         let snapshot = (*bridge).snapshot();
                         sync_from_host_snapshot(app, snapshot);
                     }
@@ -1652,7 +1658,7 @@ fn handle_action(
             match app.player.mode {
                 _ if host_bridge.is_some() => {
                     if let Some(bridge) = host_bridge.as_mut() {
-                        (*bridge).play_next();
+                        (*bridge).play_next().await;
                         let snapshot = (*bridge).snapshot();
                         sync_from_host_snapshot(app, snapshot);
                     }
@@ -1782,7 +1788,7 @@ fn handle_action(
         }
         Action::ToggleFavorite => {
             if let Some(bridge) = host_bridge.as_mut() {
-                (*bridge).toggle_like_current();
+                (*bridge).toggle_like_current().await;
                 let snapshot = (*bridge).snapshot();
                 sync_from_host_snapshot(app, snapshot);
                 return Ok(());
@@ -1821,7 +1827,15 @@ fn handle_action(
         Action::MouseClick { col, row } => {
             // map click to controls/progress/volume/playlist
             if let Some(a) = crate::tmplayer::ui::tui::hit_test(layout, app, col, row) {
-                handle_action(app, mode_manager, system_volume, host_bridge, a, layout)?;
+                Box::pin(handle_action(
+                    app,
+                    mode_manager,
+                    system_volume,
+                    host_bridge,
+                    a,
+                    layout,
+                ))
+                .await?;
             }
         }
         Action::None => {}
@@ -1888,9 +1902,9 @@ fn apply_remote_fetch_results(
     }
 }
 
-fn apply_settings_delta(
+async fn apply_settings_delta<T: HostPlaybackBridge>(
     app: &mut AppState,
-    host_bridge: &mut Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: &mut Option<&mut T>,
     delta: i32,
 ) {
     match app.settings_selected {
@@ -1907,7 +1921,7 @@ fn apply_settings_delta(
             if let Ok(theme) = ThemeLoader::load(key) {
                 app.theme = theme;
                 app.config.theme = key.to_string();
-                save_and_sync_host_config(app, host_bridge);
+                save_and_sync_host_config(app, host_bridge).await;
             } else {
                 app.set_toast("Theme load error");
             }
@@ -1916,7 +1930,7 @@ fn apply_settings_delta(
         1 => {
             if delta != 0 {
                 app.config.transparent_background = !app.config.transparent_background;
-                save_and_sync_host_config(app, host_bridge);
+                save_and_sync_host_config(app, host_bridge).await;
             }
         }
         // Language
@@ -1926,28 +1940,28 @@ fn apply_settings_delta(
                     crate::data::config::Language::Zh => crate::data::config::Language::En,
                     crate::data::config::Language::En => crate::data::config::Language::Zh,
                 };
-                save_and_sync_host_config(app, host_bridge);
+                save_and_sync_host_config(app, host_bridge).await;
             }
         }
         // Kitty graphics
         3 => {
             if delta != 0 && app.kitty_graphics_supported {
                 app.config.kitty_graphics = !app.config.kitty_graphics;
-                save_and_sync_host_config(app, host_bridge);
+                save_and_sync_host_config(app, host_bridge).await;
             }
         }
         // Show hints
         6 => {
             if delta != 0 {
                 app.config.show_hints = !app.config.show_hints;
-                save_and_sync_host_config(app, host_bridge);
+                save_and_sync_host_config(app, host_bridge).await;
             }
         }
         // Home more recommendations
         7 => {
             if delta != 0 {
                 app.config.home_more_recommend = !app.config.home_more_recommend;
-                save_and_sync_host_config(app, host_bridge);
+                save_and_sync_host_config(app, host_bridge).await;
             }
         }
         _ => {}
