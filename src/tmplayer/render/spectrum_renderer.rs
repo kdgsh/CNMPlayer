@@ -126,7 +126,7 @@ fn compute_bar_layout(
 
     // Enforce minimum width per bar when no gap.
     let max_total = if gap {
-        ((width + 1) / 2).max(1)
+        width.div_ceil(2).max(1)
     } else {
         (width / 2).max(1)
     };
@@ -159,7 +159,7 @@ fn compute_bar_layout(
         } else {
             let mut bar_w = width / bars;
             while bar_w >= 1 {
-                let gap_w = (bar_w + 1) / 2;
+                let gap_w = bar_w.div_ceil(2);
                 let needed = bars * bar_w + (bars.saturating_sub(1)) * gap_w;
                 if needed <= width {
                     let mut widths = vec![bar_w; bars];

@@ -364,7 +364,12 @@ pub fn build_app_with_config(client: ApiClient, config: &ServerConfig) -> Router
 
 /// 启动 HTTP 服务器
 pub async fn start_server(config: ServerConfig) {
-    let client = ApiClient::new(None);
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(3))
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+        .expect("Failed to create HTTP client");
+    let client = ApiClient::new(None, http_client);
     let app = build_app_with_config(client, &config);
 
     let addr = format!("{}:{}", config.host, config.port);

@@ -145,16 +145,12 @@ pub struct Config {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum CacheCleanStrategy {
     Size,
     Age,
+    #[default]
     Both,
-}
-
-impl Default for CacheCleanStrategy {
-    fn default() -> Self {
-        Self::Both
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -512,9 +508,8 @@ impl Config {
         }
 
         let raw = fs::read_to_string(path)?;
-        let legacy_startup_folder_key_present =
-            raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
-                || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
+        let legacy_startup_folder_key_present = raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
+            || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
         let mut cfg: Config = toml::from_str(&raw).unwrap_or_default();
 
         if cfg.ui_fps == 0 {

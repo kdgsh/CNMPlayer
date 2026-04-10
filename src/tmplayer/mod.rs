@@ -53,31 +53,21 @@ pub enum FullscreenExit {
     BackToHostOpenSettings,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostPlaybackState {
     Playing,
     Paused,
+    #[default]
     Stopped,
 }
 
-impl Default for HostPlaybackState {
-    fn default() -> Self {
-        Self::Stopped
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostRepeatMode {
+    #[default]
     Sequence,
     Shuffle,
     LoopAll,
     LoopOne,
-}
-
-impl Default for HostRepeatMode {
-    fn default() -> Self {
-        Self::Sequence
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -124,25 +114,25 @@ pub struct HostConfigSync {
 }
 
 pub trait HostPlaybackBridge {
-    fn tick(&mut self);
+    async fn tick(&mut self);
     fn metadata_signature(&self) -> u64;
     fn runtime_snapshot(&self) -> HostPlaybackRuntimeSnapshot;
     fn snapshot(&mut self) -> HostPlaybackSnapshot;
     fn config_snapshot(&self) -> HostConfigSync;
-    fn apply_config_sync(&mut self, config: HostConfigSync);
-    fn toggle_play_pause(&mut self);
-    fn play_previous(&mut self);
-    fn play_next(&mut self);
-    fn play_queue_index(&mut self, index: usize);
+    async fn apply_config_sync(&mut self, config: HostConfigSync);
+    async fn toggle_play_pause(&mut self);
+    async fn play_previous(&mut self);
+    async fn play_next(&mut self);
+    async fn play_queue_index(&mut self, index: usize);
     fn seek_to_ratio(&mut self, ratio: f32);
     fn toggle_repeat_mode(&mut self);
-    fn toggle_like_current(&mut self);
+    async fn toggle_like_current(&mut self);
 }
 
-pub fn run_fullscreen(
+pub async fn run_fullscreen(
     host_config: &HostConfig,
     bootstrap: FullscreenBootstrap,
-    host_bridge: Option<&mut dyn HostPlaybackBridge>,
+    host_bridge: Option<&mut impl HostPlaybackBridge>,
 ) -> Result<FullscreenExit> {
     let _ = env_logger::builder().is_test(false).try_init();
 
@@ -163,7 +153,7 @@ pub fn run_fullscreen(
 
     apply_bootstrap(&mut app, bootstrap);
 
-    app::event_loop::run(&mut app, host_bridge)
+    app::event_loop::run(&mut app, host_bridge).await
 }
 
 fn tm_config_from_host(host: &HostConfig) -> data::config::Config {

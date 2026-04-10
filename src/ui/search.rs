@@ -131,7 +131,7 @@ fn render_search_row(
     let is_now_playing = app.is_now_playing_song(item.song_id.as_deref());
     let zebra_bg = if app.config.transparent_background {
         None
-    } else if item_idx % 2 == 0 {
+    } else if item_idx.is_multiple_of(2) {
         Some(app.theme.color_base())
     } else {
         Some(app.theme.color_surface())

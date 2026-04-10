@@ -1,1 +1,9 @@
 /target
+
+# cargo flamegraph
+perf.data
+perf.data.old
+flamegraph.svg
+
+# samply
+profile.json.gz

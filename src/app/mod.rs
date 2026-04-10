@@ -10,6 +10,7 @@ use crate::data::theme_loader::ThemeLoader;
 use crate::render::cover_renderer::render_cover_ascii;
 use crate::tmplayer::app::state::LyricLine;
 use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
+use crate::tmplayer::playback::metadata::{parse_lrc, parse_plain_lyrics};
 use crate::ui::theme::Theme;
 use anyhow::{Result, anyhow};
 use crossterm::event::{
@@ -24,9 +25,8 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::runtime::Builder;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
@@ -1550,103 +1550,75 @@ struct PendingPlayRequest {
     announce: bool,
 }
 
-fn spawn_cover_fetch_worker(req_rx: Receiver<CoverFetchRequest>, res_tx: Sender<CoverFetchResult>) {
-    thread::spawn(move || {
-        let mut headers = header::HeaderMap::new();
-        headers.insert(
-            header::USER_AGENT,
-            header::HeaderValue::from_static("Mozilla/5.0 CNMPlayer/0.1"),
-        );
-        headers.insert(
-            header::REFERER,
-            header::HeaderValue::from_static("https://music.163.com/"),
-        );
-
-        let client = Client::builder()
-            .default_headers(headers)
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(5))
-            .build()
-            .ok();
-        let runtime = Builder::new_current_thread().enable_all().build().ok();
-
-        while let Ok(req) = req_rx.recv() {
-            let bytes = if req.url.trim().is_empty() {
-                None
-            } else if let (Some(client), Some(runtime)) = (client.as_ref(), runtime.as_ref()) {
-                runtime.block_on(async {
-                    let response = client.get(req.url.as_str()).send().await.ok()?;
-                    let response = response.error_for_status().ok()?;
-                    let bytes = response.bytes().await.ok()?;
-                    if bytes.is_empty() {
-                        return None;
-                    }
-                    Some(bytes.to_vec())
-                })
-            } else {
-                None
-            };
-
-            let _ = res_tx.send(CoverFetchResult {
-                song_id: req.song_id,
-                url: req.url,
-                bytes,
-            });
-        }
-    });
-}
-
-fn spawn_audio_prefetch_worker(
-    req_rx: Receiver<AudioPrefetchRequest>,
-    res_tx: Sender<AudioPrefetchResult>,
+async fn loop_cover_fetch(
+    mut rx: UnboundedReceiver<CoverFetchRequest>,
+    tx: Sender<CoverFetchResult>,
+    client: Client,
 ) {
-    thread::spawn(move || {
-        while let Ok(req) = req_rx.recv() {
-            let result = (|| -> Result<()> {
-                let mut api = ApiState::new(req.cookie.clone())?;
-                if let Some(cookie) = req.cookie.as_deref() {
-                    api.set_cookie(cookie.to_string());
-                }
-
-                let stream_url =
-                    api.song_stream_url_with_quality(&req.song_id, &req.quality_level)?;
-                api.fetch_audio_to_path(&stream_url, &req.cache_path)?;
-                Ok(())
-            })();
-
-            let _ = res_tx.send(AudioPrefetchResult {
-                request_id: req.request_id,
-                success: result.is_ok(),
-                error: result.err().map(|e| e.to_string()),
-            });
+    let process_fn = async move |req: &CoverFetchRequest| {
+        if req.url.is_empty() {
+            return None;
         }
-    });
+        let resp = client.get(req.url.as_str()).send().await.ok()?;
+        let resp = resp.error_for_status().ok()?;
+        let bytes = resp.bytes().await.ok()?;
+        (!bytes.is_empty()).then(|| bytes.to_vec())
+    };
+    while let Some(req) = rx.recv().await {
+        let bytes = process_fn(&req).await;
+        let _ = tx.send(CoverFetchResult {
+            song_id: req.song_id,
+            url: req.url,
+            bytes: bytes,
+        });
+    }
 }
 
-fn spawn_lyric_fetch_worker(req_rx: Receiver<LyricFetchRequest>, res_tx: Sender<LyricFetchResult>) {
-    thread::spawn(move || {
-        while let Ok(req) = req_rx.recv() {
-            let lyrics = (|| -> Option<Vec<LyricLine>> {
-                let mut api = ApiState::new(req.cookie.clone()).ok()?;
-                if let Some(cookie) = req.cookie.as_deref() {
-                    api.set_cookie(cookie.to_string());
-                }
-
-                let lyric = api.lyric(&req.song_id).ok()?;
-                let raw_lrc = lyric
-                    .body
-                    .pointer("/lrc/lyric")
-                    .and_then(|value| value.as_str())?;
-                crate::tmplayer::playback::metadata::parse_lrc(raw_lrc)
-                    .or_else(|| crate::tmplayer::playback::metadata::parse_plain_lyrics(raw_lrc))
-            })();
-
-            let _ = res_tx.send(LyricFetchResult {
-                song_id: req.song_id,
-                lyrics,
-            });
+async fn loop_audio_prefetch(
+    mut rx: UnboundedReceiver<AudioPrefetchRequest>,
+    tx: Sender<AudioPrefetchResult>,
+    mut api: ApiState,
+) {
+    let mut process_fn = async move |req: &AudioPrefetchRequest| {
+        if let Some(cookie) = &req.cookie {
+            api.set_cookie(cookie.to_string());
         }
-    });
+        let stream_url = api
+            .song_stream_url_with_quality(&req.song_id, &req.quality_level)
+            .await?;
+        api.fetch_audio_to_path(&stream_url, &req.cache_path).await
+    };
+    while let Some(req) = rx.recv().await {
+        let result = process_fn(&req).await;
+        let _ = tx.send(AudioPrefetchResult {
+            request_id: req.request_id,
+            success: result.is_ok(),
+            error: result.err().map(|e| e.to_string()),
+        });
+    }
+}
+
+async fn loop_lyric_fetch(
+    mut rx: UnboundedReceiver<LyricFetchRequest>,
+    tx: Sender<LyricFetchResult>,
+    mut api: ApiState,
+) {
+    let mut process_fn = async move |req: &LyricFetchRequest| {
+        if let Some(cookie) = &req.cookie {
+            api.set_cookie(cookie.to_string());
+        }
+
+        let lyric = api.lyric(&req.song_id).await.ok()?;
+        let lrc = lyric.body.pointer("/lrc/lyric")?.as_str()?;
+        parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc))
+    };
+    while let Some(req) = rx.recv().await {
+        let lyrics = process_fn(&req).await;
+        let _ = tx.send(LyricFetchResult {
+            song_id: req.song_id,
+            lyrics,
+        });
+    }
 }
 
 pub struct App {
@@ -1700,15 +1672,15 @@ pub struct App {
     main_cava_bars: [f32; 20],
     main_cava_last_tick: Instant,
     cover_cache_dir: PathBuf,
-    cover_fetch_tx: Sender<CoverFetchRequest>,
+    cover_fetch_tx: UnboundedSender<CoverFetchRequest>,
     cover_fetch_rx: Receiver<CoverFetchResult>,
     cover_fetch_inflight_url: Option<String>,
     cover_fetch_last_attempt_at: Option<Instant>,
-    lyric_fetch_tx: Sender<LyricFetchRequest>,
+    lyric_fetch_tx: UnboundedSender<LyricFetchRequest>,
     lyric_fetch_rx: Receiver<LyricFetchResult>,
     lyric_fetch_inflight_song_id: Option<String>,
     lyric_fetch_last_attempt_at: Option<Instant>,
-    audio_prefetch_tx: Sender<AudioPrefetchRequest>,
+    audio_prefetch_tx: UnboundedSender<AudioPrefetchRequest>,
     audio_prefetch_rx: Receiver<AudioPrefetchResult>,
     audio_prefetch_pending: Option<PendingPlayRequest>,
     audio_prefetch_inflight_id: Option<u64>,
@@ -1726,9 +1698,24 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, theme: Theme) -> Result<Self> {
+    pub async fn new(config: Config, theme: Theme) -> Result<Self> {
         let saved_cookie = session::load_cookie().ok().flatten();
         let audio_player = AudioPlayer::new(&config);
+
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::USER_AGENT,
+            header::HeaderValue::from_static("Mozilla/5.0 CNMPlayer/0.1"),
+        );
+        headers.insert(
+            header::REFERER,
+            header::HeaderValue::from_static("https://music.163.com/"),
+        );
+        let http_client = Client::builder()
+            .default_headers(headers)
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(12))
+            .build()?;
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
         let mpris_bridge = MprisBridge::new(&cache_root, &config.cache);
@@ -1737,17 +1724,22 @@ impl App {
         }
         let _ = fs::create_dir_all(&cover_cache_dir);
 
-        let (cover_fetch_tx, cover_fetch_req_rx) = mpsc::channel::<CoverFetchRequest>();
+        let (cover_fetch_tx, cover_fetch_req_rx) = unbounded_channel();
         let (cover_fetch_res_tx, cover_fetch_rx) = mpsc::channel::<CoverFetchResult>();
-        spawn_cover_fetch_worker(cover_fetch_req_rx, cover_fetch_res_tx);
+        let worker = loop_cover_fetch(cover_fetch_req_rx, cover_fetch_res_tx, http_client.clone());
+        tokio::spawn(worker);
 
-        let (lyric_fetch_tx, lyric_fetch_req_rx) = mpsc::channel::<LyricFetchRequest>();
+        let api = ApiState::new(saved_cookie.clone(), http_client.clone())?;
+
+        let (lyric_fetch_tx, lyric_fetch_req_rx) = unbounded_channel();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
-        spawn_lyric_fetch_worker(lyric_fetch_req_rx, lyric_fetch_res_tx);
+        let worker = loop_lyric_fetch(lyric_fetch_req_rx, lyric_fetch_res_tx, api.clone());
+        tokio::spawn(worker);
 
-        let (audio_prefetch_tx, audio_prefetch_req_rx) = mpsc::channel::<AudioPrefetchRequest>();
+        let (audio_prefetch_tx, audio_prefetch_req_rx) = unbounded_channel();
         let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
-        spawn_audio_prefetch_worker(audio_prefetch_req_rx, audio_prefetch_res_tx);
+        let worker = loop_audio_prefetch(audio_prefetch_req_rx, audio_prefetch_res_tx, api.clone());
+        tokio::spawn(worker);
 
         let mut app = Self {
             config,
@@ -1821,25 +1813,25 @@ impl App {
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
             mpris_last_playback: PlaybackRuntimeState::Stopped,
-            api: ApiState::new(saved_cookie.clone())?,
+            api,
             audio_player,
         };
 
         app.ensure_main_cava();
 
         if let Some(cookie) = saved_cookie {
-            match app.api.validate_cookie(&cookie) {
+            match app.api.validate_cookie(&cookie).await {
                 Ok(true) => {
                     app.session_cookie = app.api.session_cookie().map(|value| value.to_string());
-                    app.refresh_vip_audio_access();
-                    let _ = app.refresh_liked_song_cache();
+                    app.refresh_vip_audio_access().await;
+                    let _ = app.refresh_liked_song_cache().await;
                     app.home.status_line = "已恢复上次登录，正在加载推荐歌单".to_string();
                     app.begin_startup_loading();
-                    if let Err(err) = app.load_home_recommendations() {
+                    if let Err(err) = app.load_home_recommendations().await {
                         app.home.status_line = format!("已恢复登录，但推荐加载失败: {}", err);
                     }
                     app.finish_startup_loading();
-                    app.try_restore_playback_memory();
+                    app.try_restore_playback_memory().await;
                     return Ok(app);
                 }
                 Ok(false) => {
@@ -1849,16 +1841,16 @@ impl App {
             }
         }
 
-        app.refresh_qr_login();
+        app.refresh_qr_login().await;
         Ok(app)
     }
 
-    pub fn tick(&mut self) {
+    pub async fn tick(&mut self) {
         self.tick_audio_prefetch();
-        self.tick_audio();
+        self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
-        self.apply_mpris_control_events();
+        self.apply_mpris_control_events().await;
         self.sync_mpris_exposure();
         self.tick_main_cava();
         self.tick_search_box_animation();
@@ -1878,7 +1870,7 @@ impl App {
             }
 
             self.qr_last_poll_at = Some(now);
-            self.check_qr_status_and_login();
+            self.check_qr_status_and_login().await;
         }
     }
 
@@ -1929,7 +1921,7 @@ impl App {
         self.main_cava_bars.iter().any(|&v| v > TAIL_EPS)
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) {
+    pub async fn handle_key(&mut self, key: KeyEvent) {
         if key.kind != KeyEventKind::Press {
             return;
         }
@@ -1951,7 +1943,7 @@ impl App {
         }
 
         if let Some(overlay) = self.overlay {
-            self.handle_overlay_key(overlay, key);
+            self.handle_overlay_key(overlay, key).await;
             return;
         }
 
@@ -1959,21 +1951,21 @@ impl App {
             return;
         }
 
-        if self.page != Page::Login && self.try_handle_configured_hotkey(key) {
+        if self.page != Page::Login && self.try_handle_configured_hotkey(key).await {
             return;
         }
 
         match self.page {
-            Page::Login => self.handle_login_key(key),
+            Page::Login => self.handle_login_key(key).await,
             Page::Loading => {}
-            Page::Home => self.handle_home_key(key),
-            Page::Playlist => self.handle_playlist_key(key),
-            Page::Author => self.handle_author_key(key),
-            Page::Search => self.handle_search_key(key),
+            Page::Home => self.handle_home_key(key).await,
+            Page::Playlist => self.handle_playlist_key(key).await,
+            Page::Author => self.handle_author_key(key).await,
+            Page::Search => self.handle_search_key(key).await,
         }
     }
 
-    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+    pub async fn handle_mouse(&mut self, mouse: MouseEvent) {
         if self.page == Page::Login || self.page == Page::Loading {
             return;
         }
@@ -1983,10 +1975,10 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                let _ = self.handle_content_scroll(col, row, false);
+                self.handle_content_scroll(col, row, false).await;
             }
             MouseEventKind::ScrollDown => {
-                let _ = self.handle_content_scroll(col, row, true);
+                self.handle_content_scroll(col, row, true).await;
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if matches!(self.overlay, Some(Overlay::SearchBox)) {
@@ -1998,25 +1990,25 @@ impl App {
                     return;
                 }
 
-                if self.handle_content_click(col, row) {
+                if self.handle_content_click(col, row).await {
                     return;
                 }
 
                 if let Some(rect) = self.player_bar_hits.prev {
                     if rect.contains(col, row) {
-                        self.play_previous_hotkey();
+                        self.play_previous_hotkey().await;
                         return;
                     }
                 }
                 if let Some(rect) = self.player_bar_hits.play_pause {
                     if rect.contains(col, row) {
-                        self.toggle_play_pause_hotkey();
+                        self.toggle_play_pause_hotkey().await;
                         return;
                     }
                 }
                 if let Some(rect) = self.player_bar_hits.next {
                     if rect.contains(col, row) {
-                        self.play_next_hotkey();
+                        self.play_next_hotkey().await;
                         return;
                     }
                 }
@@ -2058,19 +2050,18 @@ impl App {
                 .unwrap_or(false)
     }
 
-    fn handle_content_scroll(&mut self, col: u16, row: u16, forward: bool) -> bool {
+    async fn handle_content_scroll(&mut self, col: u16, row: u16, forward: bool) {
         if self.overlay.is_some() || self.player_bar_contains(col, row) {
-            return false;
+            return;
         }
 
         match self.page {
             Page::Search => {
                 if forward {
-                    self.advance_search_focus();
+                    self.advance_search_focus().await;
                 } else {
                     let _ = self.search.focus_prev();
                 }
-                true
             }
             Page::Playlist => {
                 if forward {
@@ -2078,20 +2069,19 @@ impl App {
                 } else {
                     let _ = self.playlist.focus_prev();
                 }
-                true
             }
-            _ => false,
-        }
+            _ => {}
+        };
     }
 
-    fn advance_search_focus(&mut self) {
+    async fn advance_search_focus(&mut self) {
         if self.search.results.is_empty() {
             return;
         }
 
         if self.search.focus_next() {
             if self.search.focused_idx + 1 == self.search.results.len() {
-                match self.load_more_search_results() {
+                match self.load_more_search_results().await {
                     Ok(_) => {}
                     Err(err) => {
                         self.search.status_line = format!("加载更多失败: {}", err);
@@ -2102,7 +2092,7 @@ impl App {
         }
 
         let before = self.search.results.len();
-        match self.load_more_search_results() {
+        match self.load_more_search_results().await {
             Ok(added) if added > 0 => {
                 self.search.set_focus(before);
             }
@@ -2271,40 +2261,40 @@ impl App {
         self.playback_state = map_audio_state(self.audio_player.state());
     }
 
-    pub fn fullscreen_tick_playback(&mut self) {
+    pub async fn fullscreen_tick_playback(&mut self) {
         self.tick_audio_prefetch();
-        self.tick_audio();
+        self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
-        self.apply_mpris_control_events();
+        self.apply_mpris_control_events().await;
         self.sync_mpris_exposure();
     }
 
-    fn apply_mpris_control_events(&mut self) {
+    async fn apply_mpris_control_events(&mut self) {
         for event in self.mpris_bridge.drain_control_events() {
             match event {
-                MprisControlEvent::Play => self.mpris_play(),
+                MprisControlEvent::Play => self.mpris_play().await,
                 MprisControlEvent::Pause => self.mpris_pause(),
-                MprisControlEvent::PlayPause => self.toggle_play_pause_hotkey(),
+                MprisControlEvent::PlayPause => self.toggle_play_pause_hotkey().await,
                 MprisControlEvent::Stop => {
                     self.audio_player.stop();
                     self.playback_state = PlaybackRuntimeState::Stopped;
                 }
-                MprisControlEvent::Next => self.play_next_hotkey(),
-                MprisControlEvent::Previous => self.play_previous_hotkey(),
+                MprisControlEvent::Next => self.play_next_hotkey().await,
+                MprisControlEvent::Previous => self.play_previous_hotkey().await,
                 MprisControlEvent::SeekRelativeMicros(delta) => self.mpris_seek_relative(delta),
                 MprisControlEvent::SeekAbsoluteMicros(pos) => self.mpris_seek_absolute(pos),
             }
         }
     }
 
-    fn mpris_play(&mut self) {
+    async fn mpris_play(&mut self) {
         if self.now_playing.is_none() {
             return;
         }
         if self.playback_state == PlaybackRuntimeState::Stopped {
             if let Some(index) = self.playback_index {
-                self.play_queue_index(index, false);
+                self.play_queue_index(index, false).await;
             }
             return;
         }
@@ -2439,21 +2429,21 @@ impl App {
         hasher.finish()
     }
 
-    pub fn fullscreen_toggle_play_pause(&mut self) {
-        self.toggle_play_pause_hotkey();
+    pub async fn fullscreen_toggle_play_pause(&mut self) {
+        self.toggle_play_pause_hotkey().await;
     }
 
-    pub fn fullscreen_play_previous(&mut self) {
-        self.play_previous_hotkey();
+    pub async fn fullscreen_play_previous(&mut self) {
+        self.play_previous_hotkey().await;
     }
 
-    pub fn fullscreen_play_next(&mut self) {
-        self.play_next_hotkey();
+    pub async fn fullscreen_play_next(&mut self) {
+        self.play_next_hotkey().await;
     }
 
-    pub fn fullscreen_play_queue_index(&mut self, index: usize) {
+    pub async fn fullscreen_play_queue_index(&mut self, index: usize) {
         if index < self.playback_queue.len() {
-            self.play_queue_index(index, false);
+            self.play_queue_index(index, false).await;
         }
     }
 
@@ -2465,21 +2455,21 @@ impl App {
         self.cycle_repeat_mode_hotkey();
     }
 
-    pub fn fullscreen_toggle_like(&mut self) {
-        self.toggle_like_hotkey();
+    pub async fn fullscreen_toggle_like(&mut self) {
+        self.toggle_like_hotkey().await;
     }
 
-    fn handle_overlay_key(&mut self, overlay: Overlay, key: KeyEvent) {
+    async fn handle_overlay_key(&mut self, overlay: Overlay, key: KeyEvent) {
         match overlay {
-            Overlay::Settings => self.handle_settings_root_key(key),
+            Overlay::Settings => self.handle_settings_root_key(key).await,
             Overlay::SettingsPlayback => self.handle_settings_playback_key(key),
             Overlay::SettingsKeybinds => self.handle_settings_keybinds_key(key),
             Overlay::SettingsAbout => self.handle_settings_about_key(key),
-            Overlay::SearchBox => self.handle_search_box_key(key),
+            Overlay::SearchBox => self.handle_search_box_key(key).await,
         }
     }
 
-    fn try_handle_configured_hotkey(&mut self, key: KeyEvent) -> bool {
+    async fn try_handle_configured_hotkey(&mut self, key: KeyEvent) -> bool {
         let Some(action) = self.keybind_action_from_event(key) else {
             return false;
         };
@@ -2501,7 +2491,7 @@ impl App {
             return true;
         }
 
-        self.trigger_keybind_action(action);
+        self.trigger_keybind_action(action).await;
         true
     }
 
@@ -2516,20 +2506,20 @@ impl App {
         true
     }
 
-    fn trigger_keybind_action(&mut self, action: KeybindAction) {
+    async fn trigger_keybind_action(&mut self, action: KeybindAction) {
         match action {
             KeybindAction::SearchBox => self.open_search_box(),
             KeybindAction::Fullscreen => {
                 self.launch_fullscreen_requested = true;
             }
             KeybindAction::Settings => self.open_settings(),
-            KeybindAction::Sidebar => self.toggle_home_sidebar(),
+            KeybindAction::Sidebar => self.toggle_home_sidebar().await,
             KeybindAction::Quit => {
                 self.should_quit = true;
             }
-            KeybindAction::Prev => self.play_previous_hotkey(),
-            KeybindAction::Next => self.play_next_hotkey(),
-            KeybindAction::TogglePlayPause => self.toggle_play_pause_hotkey(),
+            KeybindAction::Prev => self.play_previous_hotkey().await,
+            KeybindAction::Next => self.play_next_hotkey().await,
+            KeybindAction::TogglePlayPause => self.toggle_play_pause_hotkey().await,
             KeybindAction::ToggleMode => self.cycle_repeat_mode_hotkey(),
             KeybindAction::FullscreenPrev => {}
             KeybindAction::FullscreenNext => {}
@@ -2538,11 +2528,11 @@ impl App {
             KeybindAction::FullscreenEq => {}
             KeybindAction::FullscreenEqReset => {}
             KeybindAction::ToggleLikeFullscreen => {}
-            KeybindAction::ToggleLikeCollapsed => self.toggle_like_hotkey(),
+            KeybindAction::ToggleLikeCollapsed => self.toggle_like_hotkey().await,
         }
     }
 
-    fn toggle_home_sidebar(&mut self) {
+    async fn toggle_home_sidebar(&mut self) {
         if self.page != Page::Home || self.overlay.is_some() {
             return;
         }
@@ -2561,7 +2551,7 @@ impl App {
             return;
         }
 
-        match self.load_home_sidebar_playlists() {
+        match self.load_home_sidebar_playlists().await {
             Ok(()) => {
                 self.home.status_line = self.home_sidebar.status_line.clone();
                 self.home_sidebar.reset_focus();
@@ -2578,7 +2568,7 @@ impl App {
         }
     }
 
-    fn open_focused_home_sidebar_playlist(&mut self) {
+    async fn open_focused_home_sidebar_playlist(&mut self) {
         let (playlist_id, title) = {
             let Some(item) = self.home_sidebar.focused_playlist() else {
                 self.home.status_line = self
@@ -2601,13 +2591,13 @@ impl App {
         };
 
         if self.is_liked_playlist(&playlist_id, Some(&title)) {
-            let _ = self.refresh_liked_song_cache();
-            self.refresh_now_playing_like_state();
+            let _ = self.refresh_liked_song_cache().await;
+            self.refresh_now_playing_like_state().await;
         }
 
         self.home.status_line = format!("{} {}", self.lang_text("正在加载", "Loading"), title);
 
-        match self.load_playlist_detail(&playlist_id) {
+        match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
                 self.playlist_return_page = Page::Home;
                 self.playlist_section_return_snapshot = None;
@@ -2646,13 +2636,9 @@ impl App {
             KeybindAction::ToggleLikeCollapsed,
         ];
 
-        for action in actions {
-            if keybind_matches(self.keybind_value_for_action(action), key) {
-                return Some(action);
-            }
-        }
-
-        None
+        actions
+            .into_iter()
+            .find(|&action| keybind_matches(self.keybind_value_for_action(action), key))
     }
 
     fn keybind_value_for_action(&self, action: KeybindAction) -> &str {
@@ -2815,7 +2801,7 @@ impl App {
         format!("{}: {}", self.keybind_name_for_index(index), value)
     }
 
-    fn toggle_play_pause_hotkey(&mut self) {
+    async fn toggle_play_pause_hotkey(&mut self) {
         if self.now_playing.is_none() {
             self.set_runtime_status(
                 self.lang_text("当前没有可控制的播放", "No controllable playback right now"),
@@ -2825,7 +2811,7 @@ impl App {
 
         if self.playback_state == PlaybackRuntimeState::Stopped {
             if let Some(index) = self.playback_index {
-                self.play_queue_index(index, false);
+                self.play_queue_index(index, false).await;
                 return;
             }
         }
@@ -2834,7 +2820,7 @@ impl App {
         self.playback_state = map_audio_state(self.audio_player.state());
     }
 
-    fn play_previous_hotkey(&mut self) {
+    async fn play_previous_hotkey(&mut self) {
         if self.playback_queue.is_empty() {
             self.set_runtime_status(self.lang_text("当前播放队列为空", "Playback queue is empty"));
             return;
@@ -2856,11 +2842,11 @@ impl App {
         };
 
         if let Some(index) = target {
-            self.play_queue_index(index, true);
+            self.play_queue_index(index, true).await;
         }
     }
 
-    fn play_next_hotkey(&mut self) {
+    async fn play_next_hotkey(&mut self) {
         if self.playback_queue.is_empty() {
             self.set_runtime_status(self.lang_text("当前播放队列为空", "Playback queue is empty"));
             return;
@@ -2886,7 +2872,7 @@ impl App {
         };
 
         if let Some(index) = target {
-            self.play_queue_index(index, true);
+            self.play_queue_index(index, true).await;
         }
     }
 
@@ -2905,7 +2891,7 @@ impl App {
         self.persist_playback_memory();
     }
 
-    fn refresh_now_playing_like_state(&mut self) {
+    async fn refresh_now_playing_like_state(&mut self) {
         let Some(song_id) = self.now_playing.as_ref().map(|track| track.song_id.clone()) else {
             self.now_playing_liked = false;
             return;
@@ -2918,7 +2904,7 @@ impl App {
         };
 
         let ids_json = format!("[{song_id_num}]");
-        let Ok(response) = self.api.song_like_check(&ids_json) else {
+        let Ok(response) = self.api.song_like_check(&ids_json).await else {
             return;
         };
 
@@ -2938,7 +2924,7 @@ impl App {
         }
     }
 
-    fn toggle_like_hotkey(&mut self) {
+    async fn toggle_like_hotkey(&mut self) {
         let Some(song_id) = self.now_playing.as_ref().map(|track| track.song_id.clone()) else {
             self.set_runtime_status(self.lang_text(
                 "当前没有可收藏的歌曲",
@@ -2948,7 +2934,7 @@ impl App {
         };
 
         let target = !self.now_playing_liked;
-        match self.api.like_song(&song_id, target) {
+        match self.api.like_song(&song_id, target).await {
             Ok(response) => {
                 let code = response
                     .body
@@ -2987,20 +2973,20 @@ impl App {
         }
     }
 
-    fn tick_audio(&mut self) {
+    async fn tick_audio(&mut self) {
         let runtime = map_audio_state(self.audio_player.state());
 
         if self.playback_state == PlaybackRuntimeState::Playing
             && runtime == PlaybackRuntimeState::Stopped
         {
-            self.play_next_after_finish();
+            self.play_next_after_finish().await;
             return;
         }
 
         self.playback_state = runtime;
     }
 
-    fn play_next_after_finish(&mut self) {
+    async fn play_next_after_finish(&mut self) {
         if self.playback_queue.is_empty() {
             self.playback_state = PlaybackRuntimeState::Stopped;
             return;
@@ -3027,27 +3013,27 @@ impl App {
         };
 
         if let Some(index) = target {
-            self.play_queue_index(index, false);
+            self.play_queue_index(index, false).await;
         } else {
             self.playback_state = PlaybackRuntimeState::Stopped;
             self.set_runtime_status(self.lang_text("播放结束", "Playback finished"));
         }
     }
 
-    fn play_queue_index(&mut self, index: usize, announce: bool) {
+    async fn play_queue_index(&mut self, index: usize, announce: bool) {
         let Some(track) = self.playback_queue.get(index).cloned() else {
             return;
         };
 
         let mut enriched = track.clone();
         // Switch UI state immediately and avoid blocking network fetches here.
-        self.enrich_track_metadata(&mut enriched, false);
+        self.enrich_track_metadata(&mut enriched, false).await;
         if let Some(slot) = self.playback_queue.get_mut(index) {
             slot.cover = enriched.cover.clone();
         }
         self.trim_non_current_cover_memory(index);
         self.now_playing = Some(enriched.clone());
-        self.refresh_now_playing_like_state();
+        self.refresh_now_playing_like_state().await;
         self.playback_index = Some(index);
         self.cover_fetch_inflight_url = None;
         self.cover_fetch_last_attempt_at = None;
@@ -3375,12 +3361,12 @@ impl App {
         let _ = fs::write(path, bytes);
     }
 
-    fn fetch_cover_with_disk_cache(&mut self, url: &str) -> Option<Vec<u8>> {
+    async fn fetch_cover_with_disk_cache(&mut self, url: &str) -> Option<Vec<u8>> {
         if let Some(bytes) = self.load_cover_from_disk_cache(url) {
             return Some(bytes);
         }
 
-        let bytes = self.api.fetch_cover_bytes(url).ok()?;
+        let bytes = self.api.fetch_cover_bytes(url).await.ok()?;
         if bytes.is_empty() {
             return None;
         }
@@ -3463,7 +3449,7 @@ impl App {
 
         let req = CoverFetchRequest {
             song_id,
-            url: url.clone(),
+            url: url.trim().into(),
         };
         if self.cover_fetch_tx.send(req).is_ok() {
             self.cover_fetch_inflight_url = Some(url);
@@ -3598,11 +3584,11 @@ impl App {
         }
     }
 
-    fn enrich_track_metadata(&mut self, track: &mut PlaybackTrack, allow_network: bool) {
+    async fn enrich_track_metadata(&mut self, track: &mut PlaybackTrack, allow_network: bool) {
         if track.cover.is_none() {
             if let Some(url) = track.cover_url.as_deref() {
                 let bytes = if allow_network {
-                    self.fetch_cover_with_disk_cache(url)
+                    self.fetch_cover_with_disk_cache(url).await
                 } else {
                     self.load_cover_from_disk_cache(url)
                 };
@@ -3613,7 +3599,7 @@ impl App {
         }
 
         if allow_network && track.cover.is_none() {
-            if let Ok(detail) = self.api.song_detail(&track.song_id) {
+            if let Ok(detail) = self.api.song_detail(&track.song_id).await {
                 if let Some(song) = detail
                     .body
                     .get("songs")
@@ -3623,7 +3609,7 @@ impl App {
                     if let Some(cover_url) =
                         song.pointer("/al/picUrl").and_then(|value| value.as_str())
                     {
-                        if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url) {
+                        if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url).await {
                             track.cover = Some(bytes);
                         }
                     }
@@ -3632,7 +3618,7 @@ impl App {
         }
 
         if allow_network && track.lyrics.is_none() {
-            if let Ok(lyric) = self.api.lyric(&track.song_id) {
+            if let Ok(lyric) = self.api.lyric(&track.song_id).await {
                 if let Some(raw_lrc) = lyric
                     .body
                     .pointer("/lrc/lyric")
@@ -3647,7 +3633,7 @@ impl App {
         }
     }
 
-    fn replace_queue_and_play(&mut self, queue: Vec<PlaybackTrack>, index: usize) {
+    async fn replace_queue_and_play(&mut self, queue: Vec<PlaybackTrack>, index: usize) {
         if queue.is_empty() {
             self.set_runtime_status(
                 self.lang_text("当前页面没有可播放歌曲", "No playable songs on this page"),
@@ -3657,7 +3643,7 @@ impl App {
 
         self.playback_queue = queue;
         let target = index.min(self.playback_queue.len() - 1);
-        self.play_queue_index(target, true);
+        self.play_queue_index(target, true).await;
     }
 
     fn build_queue_from_playlist(&self) -> (Vec<PlaybackTrack>, usize) {
@@ -3696,7 +3682,7 @@ impl App {
         (queue, target)
     }
 
-    fn play_focused_playlist_track(&mut self) {
+    async fn play_focused_playlist_track(&mut self) {
         let Some(track) = self.playlist.tracks.get(self.playlist.focused_idx) else {
             return;
         };
@@ -3704,15 +3690,15 @@ impl App {
         match track.kind {
             PlaylistTrackKind::Song => {
                 let (queue, target) = self.build_queue_from_playlist();
-                self.replace_queue_and_play(queue, target);
+                self.replace_queue_and_play(queue, target).await;
             }
             PlaylistTrackKind::Album | PlaylistTrackKind::Ep | PlaylistTrackKind::Single => {
-                self.open_focused_playlist_album();
+                self.open_focused_playlist_album().await;
             }
         }
     }
 
-    fn play_focused_search_track(&mut self) {
+    async fn play_focused_search_track(&mut self) {
         if self.search.filter != SearchFilter::Single {
             self.set_runtime_status(self.lang_text(
                 "仅“单曲”搜索结果支持直接播放",
@@ -3722,10 +3708,10 @@ impl App {
         }
 
         let (queue, target) = self.build_queue_from_search();
-        self.replace_queue_and_play(queue, target);
+        self.replace_queue_and_play(queue, target).await;
     }
 
-    fn play_focused_author_tile(&mut self) {
+    async fn play_focused_author_tile(&mut self) {
         let Some(item) = self.author.tiles.get(self.author.focused_idx) else {
             return;
         };
@@ -3798,6 +3784,7 @@ impl App {
         let cover_bytes = if let Some(url) = section_cover {
             self.api
                 .fetch_cover_bytes(&url)
+                .await
                 .ok()
                 .filter(|bytes| !bytes.is_empty())
         } else {
@@ -3807,7 +3794,7 @@ impl App {
         self.page = Page::Playlist;
     }
 
-    fn open_focused_playlist_album(&mut self) {
+    async fn open_focused_playlist_album(&mut self) {
         let (album_id, title, fallback_cover_url, track_kind) = {
             let Some(track) = self.playlist.tracks.get(self.playlist.focused_idx) else {
                 return;
@@ -3840,7 +3827,7 @@ impl App {
             None
         };
 
-        match self.load_album_detail(&album_id) {
+        match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = section_snapshot;
                 if self.playlist.cover_bytes.is_none() {
@@ -3848,6 +3835,7 @@ impl App {
                         let bytes = self
                             .api
                             .fetch_cover_bytes(url)
+                            .await
                             .ok()
                             .filter(|content| !content.is_empty());
                         if bytes.is_some() {
@@ -3872,7 +3860,7 @@ impl App {
         }
     }
 
-    fn open_focused_search_author(&mut self) {
+    async fn open_focused_search_author(&mut self) {
         if self.search.filter != SearchFilter::Author {
             return;
         }
@@ -3897,13 +3885,14 @@ impl App {
 
         self.search.status_line = format!("正在加载作者 {}", title);
 
-        match self.load_author_detail(&artist_id) {
+        match self.load_author_detail(&artist_id).await {
             Ok(()) => {
                 if self.author.cover_bytes.is_none() {
                     if let Some(url) = fallback_cover_url.as_deref() {
                         let bytes = self
                             .api
                             .fetch_cover_bytes(url)
+                            .await
                             .ok()
                             .filter(|content| !content.is_empty());
                         if bytes.is_some() {
@@ -3922,7 +3911,7 @@ impl App {
         }
     }
 
-    fn open_focused_search_album(&mut self) {
+    async fn open_focused_search_album(&mut self) {
         if self.search.filter != SearchFilter::Album {
             return;
         }
@@ -3957,7 +3946,7 @@ impl App {
             title
         );
 
-        match self.load_album_detail(&album_id) {
+        match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
                 if self.playlist.cover_bytes.is_none() {
@@ -3965,6 +3954,7 @@ impl App {
                         let bytes = self
                             .api
                             .fetch_cover_bytes(url)
+                            .await
                             .ok()
                             .filter(|content| !content.is_empty());
                         if bytes.is_some() {
@@ -3988,7 +3978,7 @@ impl App {
         }
     }
 
-    fn open_focused_search_playlist(&mut self) {
+    async fn open_focused_search_playlist(&mut self) {
         if self.search.filter != SearchFilter::Playlist {
             return;
         }
@@ -4017,7 +4007,7 @@ impl App {
             title
         );
 
-        match self.load_playlist_detail(&playlist_id) {
+        match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
                 if self.playlist.cover_bytes.is_none() {
@@ -4025,6 +4015,7 @@ impl App {
                         let bytes = self
                             .api
                             .fetch_cover_bytes(url)
+                            .await
                             .ok()
                             .filter(|content| !content.is_empty());
                         if bytes.is_some() {
@@ -4051,12 +4042,12 @@ impl App {
         }
     }
 
-    fn activate_focused_search_result(&mut self) {
+    async fn activate_focused_search_result(&mut self) {
         match self.search.filter {
-            SearchFilter::Single => self.play_focused_search_track(),
-            SearchFilter::Album => self.open_focused_search_album(),
-            SearchFilter::Author => self.open_focused_search_author(),
-            SearchFilter::Playlist => self.open_focused_search_playlist(),
+            SearchFilter::Single => self.play_focused_search_track().await,
+            SearchFilter::Album => self.open_focused_search_album().await,
+            SearchFilter::Author => self.open_focused_search_author().await,
+            SearchFilter::Playlist => self.open_focused_search_playlist().await,
         }
     }
 
@@ -4079,7 +4070,7 @@ impl App {
         self.overlay = Some(Overlay::SettingsKeybinds);
     }
 
-    fn handle_search_box_key(&mut self, key: KeyEvent) {
+    async fn handle_search_box_key(&mut self, key: KeyEvent) {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
@@ -4089,7 +4080,7 @@ impl App {
 
         match key.code {
             KeyCode::Esc => self.close_overlay(),
-            KeyCode::Enter => self.execute_search_from_box(),
+            KeyCode::Enter => self.execute_search_from_box().await,
             KeyCode::Backspace => {
                 if self.search_box_cursor > 0 {
                     self.search_box_cursor =
@@ -4184,7 +4175,7 @@ impl App {
         self.search_box_cursor = char_index_for_display_column(&self.search_box_input, rel);
     }
 
-    fn handle_settings_root_key(&mut self, key: KeyEvent) {
+    async fn handle_settings_root_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => self.close_overlay(),
             KeyCode::Char('t') | KeyCode::Char('T') => {
@@ -4202,10 +4193,10 @@ impl App {
             KeyCode::Down | KeyCode::Tab => {
                 self.settings_selected = (self.settings_selected + 1) % SETTINGS_ROOT_ITEMS;
             }
-            KeyCode::Left => self.apply_settings_root_delta(-1),
-            KeyCode::Right => self.apply_settings_root_delta(1),
+            KeyCode::Left => self.apply_settings_root_delta(-1).await,
+            KeyCode::Right => self.apply_settings_root_delta(1).await,
             KeyCode::Enter => match self.settings_selected {
-                0..=3 => self.apply_settings_root_delta(1),
+                0..=3 => self.apply_settings_root_delta(1).await,
                 4 => {
                     self.settings_playback_selected = 0;
                     self.overlay = Some(Overlay::SettingsPlayback);
@@ -4213,9 +4204,9 @@ impl App {
                 5 => {
                     self.open_keybind_settings();
                 }
-                6 => self.apply_settings_root_delta(1),
-                7 => self.apply_settings_root_delta(1),
-                8 => self.logout_to_login(),
+                6 => self.apply_settings_root_delta(1).await,
+                7 => self.apply_settings_root_delta(1).await,
+                8 => self.logout_to_login().await,
                 9 => {
                     self.overlay = Some(Overlay::SettingsAbout);
                 }
@@ -4375,7 +4366,7 @@ impl App {
         }
     }
 
-    fn apply_settings_root_delta(&mut self, delta: i32) {
+    async fn apply_settings_root_delta(&mut self, delta: i32) {
         match self.settings_selected {
             0 => {
                 let themes = ["system", "latte", "frappe", "macchiato", "mocha"];
@@ -4423,7 +4414,7 @@ impl App {
                     self.config.home_more_recommend = !self.config.home_more_recommend;
                     let _ = self.config.save();
                     if self.page == Page::Home {
-                        if let Err(err) = self.load_home_recommendations() {
+                        if let Err(err) = self.load_home_recommendations().await {
                             self.home.status_line = format!(
                                 "{}: {}",
                                 self.lang_text(
@@ -4506,33 +4497,33 @@ impl App {
         }
     }
 
-    fn handle_search_key(&mut self, key: KeyEvent) {
+    async fn handle_search_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Left => {
                 self.page = self.search_return_page;
             }
             KeyCode::Tab | KeyCode::Down => {
-                self.advance_search_focus();
+                self.advance_search_focus().await;
             }
             KeyCode::BackTab | KeyCode::Up => {
                 let _ = self.search.focus_prev();
             }
-            KeyCode::Enter => self.activate_focused_search_result(),
+            KeyCode::Enter => self.activate_focused_search_result().await,
             _ => {}
         }
     }
 
-    fn handle_login_key(&mut self, key: KeyEvent) {
+    async fn handle_login_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::F(1) => {
                 self.login.set_method(LoginMethod::Qr);
-                self.refresh_qr_login();
+                self.refresh_qr_login().await;
             }
             KeyCode::F(2) => self.login.set_method(LoginMethod::Username),
             KeyCode::F(3) => self.login.set_method(LoginMethod::Phone),
             KeyCode::Tab | KeyCode::Down => self.login.next_focus(),
             KeyCode::BackTab | KeyCode::Up => self.login.prev_focus(),
-            KeyCode::Enter => self.submit_login_action(),
+            KeyCode::Enter => self.submit_login_action().await,
             KeyCode::Backspace => self.login.pop_char(),
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
@@ -4548,7 +4539,7 @@ impl App {
         }
     }
 
-    fn handle_home_key(&mut self, key: KeyEvent) {
+    async fn handle_home_key(&mut self, key: KeyEvent) {
         if self.home_sidebar.expanded {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 match key.code {
@@ -4570,7 +4561,7 @@ impl App {
                 }
                 KeyCode::Up | KeyCode::BackTab => self.home_sidebar.focus_prev(),
                 KeyCode::Down | KeyCode::Tab => self.home_sidebar.focus_next(),
-                KeyCode::Enter => self.open_focused_home_sidebar_playlist(),
+                KeyCode::Enter => self.open_focused_home_sidebar_playlist().await,
                 _ => {}
             }
             return;
@@ -4583,12 +4574,12 @@ impl App {
             KeyCode::Right => self.home.focus_right(),
             KeyCode::Up => self.home.focus_up(),
             KeyCode::Down => self.home.focus_down(),
-            KeyCode::Enter => self.enter_home_tile(),
+            KeyCode::Enter => self.enter_home_tile().await,
             _ => {}
         }
     }
 
-    fn handle_playlist_key(&mut self, key: KeyEvent) {
+    async fn handle_playlist_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up | KeyCode::BackTab => {
                 let _ = self.playlist.focus_prev();
@@ -4596,7 +4587,7 @@ impl App {
             KeyCode::Down | KeyCode::Tab => {
                 let _ = self.playlist.focus_next();
             }
-            KeyCode::Enter => self.play_focused_playlist_track(),
+            KeyCode::Enter => self.play_focused_playlist_track().await,
             KeyCode::Esc | KeyCode::Left => {
                 if let Some(snapshot) = self.playlist_section_return_snapshot.take() {
                     self.playlist = snapshot;
@@ -4612,7 +4603,7 @@ impl App {
         }
     }
 
-    fn handle_author_key(&mut self, key: KeyEvent) {
+    async fn handle_author_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Tab => {
                 let _ = self.author.focus_next();
@@ -4628,7 +4619,7 @@ impl App {
             KeyCode::Down => {
                 let _ = self.author.focus_down();
             }
-            KeyCode::Enter => self.play_focused_author_tile(),
+            KeyCode::Enter => self.play_focused_author_tile().await,
             KeyCode::Esc => {
                 self.page = Page::Search;
             }
@@ -4698,7 +4689,6 @@ impl App {
             self.startup_loading_started_at = None;
             self.startup_loading_complete_started_at = None;
             self.startup_loading_complete_requested = false;
-            return;
         }
     }
 
@@ -4742,7 +4732,7 @@ impl App {
         }
     }
 
-    fn handle_content_click(&mut self, col: u16, row: u16) -> bool {
+    async fn handle_content_click(&mut self, col: u16, row: u16) -> bool {
         match self.page {
             Page::Home => {
                 if self.home_sidebar.is_visible() {
@@ -4760,7 +4750,7 @@ impl App {
                                         Page::Home,
                                         Self::home_sidebar_double_click_index(hit),
                                     ) {
-                                        self.open_focused_home_sidebar_playlist();
+                                        self.open_focused_home_sidebar_playlist().await;
                                     }
                                 }
                                 return true;
@@ -4785,7 +4775,7 @@ impl App {
                     if idx < self.home.tiles.len() {
                         self.home.focused_idx = idx;
                         if self.is_double_content_click(Page::Home, idx) {
-                            self.enter_home_tile();
+                            self.enter_home_tile().await;
                         }
                         return true;
                     }
@@ -4801,7 +4791,7 @@ impl App {
                     if idx < self.playlist.tracks.len() {
                         self.playlist.set_focus(idx);
                         if self.is_double_content_click(Page::Playlist, idx) {
-                            self.play_focused_playlist_track();
+                            self.play_focused_playlist_track().await;
                         }
                         return true;
                     }
@@ -4817,7 +4807,7 @@ impl App {
                     if idx < self.author.tiles.len() {
                         self.author.set_focus(idx);
                         if self.is_double_content_click(Page::Author, idx) {
-                            self.play_focused_author_tile();
+                            self.play_focused_author_tile().await;
                         }
                         return true;
                     }
@@ -4833,7 +4823,7 @@ impl App {
                     if idx < self.search.results.len() {
                         self.search.set_focus(idx);
                         if self.is_double_content_click(Page::Search, idx) {
-                            self.activate_focused_search_result();
+                            self.activate_focused_search_result().await;
                         }
                         return true;
                     }
@@ -4859,7 +4849,7 @@ impl App {
         self.search_box_anim_height = 0;
     }
 
-    fn execute_search_from_box(&mut self) {
+    async fn execute_search_from_box(&mut self) {
         let raw_query = self.search_box_input.trim().to_string();
         let (keywords, filter) = parse_search_input(&raw_query);
         if keywords.is_empty() && !is_followed_author_query(&keywords, filter) {
@@ -4870,7 +4860,7 @@ impl App {
         }
 
         self.search.query = raw_query;
-        if let Err(err) = self.execute_search() {
+        if let Err(err) = self.execute_search().await {
             self.search.status_line = format!("搜索失败: {}", err);
             self.search.set_results(Vec::new());
         }
@@ -4913,7 +4903,7 @@ impl App {
         }
     }
 
-    pub fn fullscreen_apply_config_sync(&mut self, sync: crate::tmplayer::HostConfigSync) {
+    pub async fn fullscreen_apply_config_sync(&mut self, sync: crate::tmplayer::HostConfigSync) {
         let mut changed = false;
         let mut home_more_recommend_changed = false;
 
@@ -5032,7 +5022,7 @@ impl App {
         }
 
         if home_more_recommend_changed && self.page != Page::Login {
-            if let Err(err) = self.load_home_recommendations() {
+            if let Err(err) = self.load_home_recommendations().await {
                 self.home.status_line = format!(
                     "{}: {}",
                     self.lang_text("推荐歌单刷新失败", "Failed to refresh home recommendations",),
@@ -5042,7 +5032,7 @@ impl App {
         }
     }
 
-    pub fn build_fullscreen_bootstrap(&mut self) -> crate::tmplayer::FullscreenBootstrap {
+    pub async fn build_fullscreen_bootstrap(&mut self) -> crate::tmplayer::FullscreenBootstrap {
         let mut bootstrap = crate::tmplayer::FullscreenBootstrap::default();
 
         if self.now_playing.is_none() {
@@ -5053,7 +5043,7 @@ impl App {
 
         if playlist_cover.is_none() {
             if let Some(cover_url) = self.playlist.cover_url.clone() {
-                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url);
+                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await;
             }
         }
 
@@ -5139,7 +5129,7 @@ impl App {
                 .or_else(|| bootstrap.playlist[active_idx].id.clone());
 
             if let Some(song_id) = song_id {
-                if let Ok(detail) = self.api.song_detail(&song_id) {
+                if let Ok(detail) = self.api.song_detail(&song_id).await {
                     if let Some(song) = detail
                         .body
                         .get("songs")
@@ -5165,7 +5155,9 @@ impl App {
                             if let Some(cover_url) =
                                 song.pointer("/al/picUrl").and_then(|value| value.as_str())
                             {
-                                if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url) {
+                                if let Some(bytes) =
+                                    self.fetch_cover_with_disk_cache(cover_url).await
+                                {
                                     seed.cover = Some(bytes);
                                 }
                             }
@@ -5179,14 +5171,14 @@ impl App {
                         .as_ref()
                         .and_then(|track| track.cover_url.clone());
                     if let Some(cover_url) = fallback_cover_url.as_deref() {
-                        if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url) {
+                        if let Some(bytes) = self.fetch_cover_with_disk_cache(cover_url).await {
                             seed.cover = Some(bytes);
                         }
                     }
                 }
 
                 if seed.lyrics.is_none() {
-                    if let Ok(lyric) = self.api.lyric(&song_id) {
+                    if let Ok(lyric) = self.api.lyric(&song_id).await {
                         if let Some(raw_lrc) = lyric
                             .body
                             .pointer("/lrc/lyric")
@@ -5213,12 +5205,12 @@ impl App {
 
                     if playlist_cover.is_none() {
                         if let Some(cover_url) = first_track.cover_url.as_deref() {
-                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url);
+                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url).await;
                         }
                     }
 
                     if playlist_cover.is_none() {
-                        if let Ok(detail) = self.api.song_detail(&first_track.song_id) {
+                        if let Ok(detail) = self.api.song_detail(&first_track.song_id).await {
                             if let Some(song) = detail
                                 .body
                                 .get("songs")
@@ -5228,7 +5220,8 @@ impl App {
                                 if let Some(cover_url) =
                                     song.pointer("/al/picUrl").and_then(|value| value.as_str())
                                 {
-                                    playlist_cover = self.fetch_cover_with_disk_cache(cover_url);
+                                    playlist_cover =
+                                        self.fetch_cover_with_disk_cache(cover_url).await;
                                 }
                             }
                         }
@@ -5285,7 +5278,7 @@ impl App {
         let _ = playback_session::save(&record);
     }
 
-    fn try_restore_playback_memory(&mut self) {
+    async fn try_restore_playback_memory(&mut self) {
         if !self.config.playback_memory {
             return;
         }
@@ -5332,7 +5325,7 @@ impl App {
             .current_index
             .unwrap_or(0)
             .min(self.playback_queue.len().saturating_sub(1));
-        self.play_queue_index(target, false);
+        self.play_queue_index(target, false).await;
         self.set_runtime_status(self.lang_text("已恢复播放记忆", "Playback memory restored"));
     }
 
@@ -5343,17 +5336,15 @@ impl App {
         }
     }
 
-    fn refresh_vip_audio_access(&mut self) {
+    async fn refresh_vip_audio_access(&mut self) {
         let mut unlocked = false;
 
-        if let Ok(response) = self.api.vip_info_v2() {
+        if let Ok(response) = self.api.vip_info_v2().await {
             unlocked = response_indicates_vip(&response);
         }
 
-        if !unlocked {
-            if let Ok(response) = self.api.vip_info() {
-                unlocked = response_indicates_vip(&response);
-            }
+        if !unlocked && let Ok(response) = self.api.vip_info().await {
+            unlocked = response_indicates_vip(&response);
         }
 
         self.vip_audio_unlocked = unlocked;
@@ -5400,7 +5391,7 @@ impl App {
         (current, next)
     }
 
-    fn logout_to_login(&mut self) {
+    async fn logout_to_login(&mut self) {
         self.close_overlay();
         self.page = Page::Login;
         self.search_return_page = Page::Home;
@@ -5439,10 +5430,10 @@ impl App {
         self.playback_state = PlaybackRuntimeState::Stopped;
         self.playback_repeat_mode = PlaybackRepeatMode::Sequence;
 
-        self.refresh_qr_login();
+        self.refresh_qr_login().await;
     }
 
-    fn enter_home_tile(&mut self) {
+    async fn enter_home_tile(&mut self) {
         if self.home.tiles.is_empty() {
             return;
         }
@@ -5456,9 +5447,9 @@ impl App {
 
         self.home.status_line = format!("正在加载 {}", title);
         let result = if playlist_id == HOME_DAILY_RECOMMEND_TILE_ID {
-            self.load_daily_recommend_playlist()
+            self.load_daily_recommend_playlist().await
         } else {
-            self.load_playlist_detail(&playlist_id)
+            self.load_playlist_detail(&playlist_id).await
         };
 
         match result {
@@ -5474,30 +5465,30 @@ impl App {
         }
     }
 
-    fn submit_login_action(&mut self) {
+    async fn submit_login_action(&mut self) {
         match self.login.method {
             LoginMethod::Qr => {
                 if self.login.focus_index == 0 {
-                    self.refresh_qr_login();
+                    self.refresh_qr_login().await;
                 } else {
-                    self.check_qr_status_and_login();
+                    self.check_qr_status_and_login().await;
                 }
             }
             LoginMethod::Username => match self.login.focus_index {
                 0 | 1 => self.login.next_focus(),
-                _ => self.submit_username_login(),
+                _ => self.submit_username_login().await,
             },
             LoginMethod::Phone => match self.login.focus_index {
                 0 | 1 => self.login.next_focus(),
-                2 => self.send_phone_captcha(),
-                _ => self.submit_phone_login(),
+                2 => self.send_phone_captcha().await,
+                _ => self.submit_phone_login().await,
             },
         }
     }
 
-    fn refresh_qr_login(&mut self) {
+    async fn refresh_qr_login(&mut self) {
         self.qr_last_poll_at = None;
-        let key_resp = match self.api.login_qr_key() {
+        let key_resp = match self.api.login_qr_key().await {
             Ok(response) => response,
             Err(err) => {
                 self.login.status_line = format!("二维码 key 获取失败: {}", err);
@@ -5512,7 +5503,7 @@ impl App {
             return;
         }
 
-        let qr_resp = match self.api.login_qr_create(&key) {
+        let qr_resp = match self.api.login_qr_create(&key).await {
             Ok(response) => response,
             Err(err) => {
                 self.login.status_line = format!("二维码创建失败: {}", err);
@@ -5531,13 +5522,13 @@ impl App {
         };
     }
 
-    fn check_qr_status_and_login(&mut self) {
+    async fn check_qr_status_and_login(&mut self) {
         if self.login.qr_key.trim().is_empty() {
             self.login.status_line = "请先按 Enter 刷新二维码".to_string();
             return;
         }
 
-        let response = match self.api.login_qr_check(&self.login.qr_key) {
+        let response = match self.api.login_qr_check(&self.login.qr_key).await {
             Ok(response) => response,
             Err(err) => {
                 self.login.status_line = format!("轮询二维码失败: {}", err);
@@ -5549,11 +5540,11 @@ impl App {
         match code {
             800 => {
                 self.login.status_line = "二维码已过期，已自动刷新".to_string();
-                self.refresh_qr_login();
+                self.refresh_qr_login().await;
             }
             801 => self.login.status_line = "等待扫码".to_string(),
             802 => self.login.status_line = "已扫码，等待确认".to_string(),
-            803 | 200 => self.mark_login_success("二维码登录成功"),
+            803 | 200 => self.mark_login_success("二维码登录成功").await,
             _ => {
                 self.login.status_line =
                     format!("二维码状态异常({}): {}", code, response_message(&response))
@@ -5561,14 +5552,14 @@ impl App {
         }
     }
 
-    fn submit_username_login(&mut self) {
+    async fn submit_username_login(&mut self) {
         let username = self.login.username.trim().to_string();
         if username.is_empty() || self.login.password.trim().is_empty() {
             self.login.status_line = "请填写用户名和密码".to_string();
             return;
         }
 
-        let response = match self.api.login_email(&username, &self.login.password) {
+        let response = match self.api.login_email(&username, &self.login.password).await {
             Ok(response) => response,
             Err(err) => {
                 self.login.status_line = format!("登录失败: {}", err);
@@ -5581,21 +5572,22 @@ impl App {
             let nickname = response.body["profile"]["nickname"]
                 .as_str()
                 .unwrap_or("用户");
-            self.mark_login_success(&format!("欢迎回来，{}", nickname));
+            self.mark_login_success(&format!("欢迎回来，{}", nickname))
+                .await;
             return;
         }
 
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
-    fn send_phone_captcha(&mut self) {
+    async fn send_phone_captcha(&mut self) {
         let phone = self.login.phone.trim().to_string();
         if phone.is_empty() {
             self.login.status_line = "请输入手机号".to_string();
             return;
         }
 
-        let response = match self.api.captcha_sent(&phone) {
+        let response = match self.api.captcha_sent(&phone).await {
             Ok(response) => response,
             Err(err) => {
                 self.login.status_line = format!("验证码发送失败: {}", err);
@@ -5612,7 +5604,7 @@ impl App {
         self.login.status_line = format!("发送失败({}): {}", code, response_message(&response));
     }
 
-    fn submit_phone_login(&mut self) {
+    async fn submit_phone_login(&mut self) {
         let phone = self.login.phone.trim().to_string();
         let captcha = self.login.captcha.trim().to_string();
 
@@ -5621,7 +5613,7 @@ impl App {
             return;
         }
 
-        let response = match self.api.login_phone_captcha(&phone, &captcha) {
+        let response = match self.api.login_phone_captcha(&phone, &captcha).await {
             Ok(response) => response,
             Err(err) => {
                 self.login.status_line = format!("手机号登录失败: {}", err);
@@ -5634,15 +5626,19 @@ impl App {
             let nickname = response.body["profile"]["nickname"]
                 .as_str()
                 .unwrap_or("用户");
-            self.mark_login_success(&format!("欢迎回来，{}", nickname));
+            self.mark_login_success(&format!("欢迎回来，{}", nickname))
+                .await;
             return;
         }
 
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
-    fn fetch_playlist_first_song_cover(&mut self, playlist_id: &str) -> Option<(String, Vec<u8>)> {
-        let response = self.api.playlist_detail(playlist_id).ok()?;
+    async fn fetch_playlist_first_song_cover(
+        &mut self,
+        playlist_id: &str,
+    ) -> Option<(String, Vec<u8>)> {
+        let response = self.api.playlist_detail(playlist_id).await.ok()?;
         if response_code(&response) != 200 {
             return None;
         }
@@ -5657,15 +5653,16 @@ impl App {
         let cover_bytes = self
             .api
             .fetch_cover_bytes(&cover_url)
+            .await
             .ok()
             .filter(|bytes| !bytes.is_empty())?;
 
         Some((cover_url, cover_bytes))
     }
 
-    fn load_home_recommendations(&mut self) -> Result<()> {
+    async fn load_home_recommendations(&mut self) -> Result<()> {
         let mut daily_tile = HomeTile::placeholder_daily();
-        if let Ok(response) = self.api.recommend_songs() {
+        if let Ok(response) = self.api.recommend_songs().await {
             if response_code(&response) == 200 {
                 if let Some(songs) = home_daily_song_items(&response.body) {
                     if let Some(cover_url) = songs
@@ -5673,7 +5670,7 @@ impl App {
                         .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
                     {
                         daily_tile.cover_url = Some(cover_url.clone());
-                        if let Ok(bytes) = self.api.fetch_cover_bytes(&cover_url) {
+                        if let Ok(bytes) = self.api.fetch_cover_bytes(&cover_url).await {
                             if !bytes.is_empty() {
                                 daily_tile.cover_bytes = Some(bytes);
                             }
@@ -5685,12 +5682,12 @@ impl App {
 
         let mut cards = Vec::new();
 
-        if let Ok(response) = self.api.recommend_resource() {
+        if let Ok(response) = self.api.recommend_resource().await {
             cards = parse_recommend_cards(&response, 24);
         }
 
         if cards.is_empty() {
-            if let Ok(response) = self.api.personalized(24) {
+            if let Ok(response) = self.api.personalized(24).await {
                 cards = parse_personalized_cards(&response, 24);
             }
         }
@@ -5710,7 +5707,7 @@ impl App {
             if pinned_title == Some("私人雷达") {
                 if let Some(playlist_id) = tile.id.clone() {
                     if let Some((cover_url, cover_bytes)) =
-                        self.fetch_playlist_first_song_cover(&playlist_id)
+                        self.fetch_playlist_first_song_cover(&playlist_id).await
                     {
                         tile.cover_url = Some(cover_url);
                         tile.cover_bytes = Some(cover_bytes);
@@ -5720,7 +5717,7 @@ impl App {
 
             if tile.cover_bytes.is_none() {
                 if let Some(url) = tile.cover_url.clone() {
-                    if let Ok(bytes) = self.api.fetch_cover_bytes(&url) {
+                    if let Ok(bytes) = self.api.fetch_cover_bytes(&url).await {
                         if !bytes.is_empty() {
                             tile.cover_bytes = Some(bytes);
                         }
@@ -5744,14 +5741,14 @@ impl App {
         Ok(())
     }
 
-    fn load_home_sidebar_playlists(&mut self) -> Result<()> {
+    async fn load_home_sidebar_playlists(&mut self) -> Result<()> {
         self.home_sidebar.loading = true;
 
-        let result = (|| -> Result<()> {
-            let account = self
-                .api
-                .user_account()
-                .or_else(|_| self.api.login_status())?;
+        let result = (async || -> Result<()> {
+            let account = match self.api.user_account().await {
+                Ok(v) => v,
+                Err(_) => self.api.login_status().await?,
+            };
             let account_code = response_code(&account);
             if account_code != 200 {
                 return Err(anyhow!(
@@ -5768,9 +5765,10 @@ impl App {
             let user_name = extract_current_user_name(&account)
                 .unwrap_or_else(|| self.lang_text("当前用户", "Current User").to_string());
 
-            let created_response =
-                self.api
-                    .user_playlist_create(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)?;
+            let created_response = self
+                .api
+                .user_playlist_create(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)
+                .await?;
             let created_code = response_code(&created_response);
             if created_code != 200 {
                 return Err(anyhow!(
@@ -5781,9 +5779,10 @@ impl App {
                 ));
             }
 
-            let collected_response =
-                self.api
-                    .user_playlist_collect(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)?;
+            let collected_response = self
+                .api
+                .user_playlist_collect(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)
+                .await?;
             let collected_code = response_code(&collected_response);
             if collected_code != 200 {
                 return Err(anyhow!(
@@ -5817,21 +5816,22 @@ impl App {
             };
 
             Ok(())
-        })();
+        })()
+        .await;
 
         self.home_sidebar.loading = false;
         result
     }
 
-    fn resolve_current_user_id(&mut self) -> Result<String> {
+    async fn resolve_current_user_id(&mut self) -> Result<String> {
         if let Some(uid) = self.home_sidebar.user_id.as_ref() {
             return Ok(uid.clone());
         }
 
-        let account = self
-            .api
-            .user_account()
-            .or_else(|_| self.api.login_status())?;
+        let account = match self.api.user_account().await {
+            Ok(v) => v,
+            Err(_) => self.api.login_status().await?,
+        };
         let code = response_code(&account);
         if code != 200 {
             return Err(anyhow!(
@@ -5855,9 +5855,9 @@ impl App {
         Ok(uid)
     }
 
-    fn refresh_liked_song_cache(&mut self) -> Result<()> {
-        let uid = self.resolve_current_user_id()?;
-        let response = self.api.likelist(&uid)?;
+    async fn refresh_liked_song_cache(&mut self) -> Result<()> {
+        let uid = self.resolve_current_user_id().await?;
+        let response = self.api.likelist(&uid).await?;
         let code = response_code(&response);
         if code != 200 {
             return Err(anyhow!(
@@ -5869,7 +5869,7 @@ impl App {
         }
 
         self.liked_song_ids = parse_likelist_song_ids(&response.body);
-        self.refresh_now_playing_like_state();
+        self.refresh_now_playing_like_state().await;
         Ok(())
     }
 
@@ -5890,8 +5890,8 @@ impl App {
                 || title.to_ascii_lowercase().contains("liked songs"))
     }
 
-    fn load_playlist_detail(&mut self, playlist_id: &str) -> Result<()> {
-        let response = self.api.playlist_detail(playlist_id)?;
+    async fn load_playlist_detail(&mut self, playlist_id: &str) -> Result<()> {
+        let response = self.api.playlist_detail(playlist_id).await?;
         let code = response_code(&response);
         if code != 200 {
             return Err(anyhow!(
@@ -5913,7 +5913,7 @@ impl App {
             .to_string();
 
         if self.is_liked_playlist(playlist_id, Some(&title)) {
-            let _ = self.refresh_liked_song_cache();
+            let _ = self.refresh_liked_song_cache().await;
         }
 
         let artist = playlist
@@ -5946,6 +5946,7 @@ impl App {
         let cover_bytes = if let Some(url) = cover_url {
             self.api
                 .fetch_cover_bytes(&url)
+                .await
                 .ok()
                 .filter(|bytes| !bytes.is_empty())
         } else {
@@ -5956,8 +5957,8 @@ impl App {
         Ok(())
     }
 
-    fn load_daily_recommend_playlist(&mut self) -> Result<()> {
-        let response = self.api.recommend_songs()?;
+    async fn load_daily_recommend_playlist(&mut self) -> Result<()> {
+        let response = self.api.recommend_songs().await?;
         let code = response_code(&response);
         if code != 200 {
             return Err(anyhow!(
@@ -5999,6 +6000,7 @@ impl App {
         let cover_bytes = if let Some(url) = cover_url {
             self.api
                 .fetch_cover_bytes(&url)
+                .await
                 .ok()
                 .filter(|bytes| !bytes.is_empty())
         } else {
@@ -6009,8 +6011,8 @@ impl App {
         Ok(())
     }
 
-    fn load_album_detail(&mut self, album_id: &str) -> Result<()> {
-        let response = self.api.album(album_id)?;
+    async fn load_album_detail(&mut self, album_id: &str) -> Result<()> {
+        let response = self.api.album(album_id).await?;
         let code = response_code(&response);
         if code != 200 {
             return Err(anyhow!(
@@ -6072,6 +6074,7 @@ impl App {
         let cover_bytes = if let Some(url) = cover_url {
             self.api
                 .fetch_cover_bytes(&url)
+                .await
                 .ok()
                 .filter(|bytes| !bytes.is_empty())
         } else {
@@ -6082,11 +6085,11 @@ impl App {
         Ok(())
     }
 
-    fn load_author_detail(&mut self, artist_id: &str) -> Result<()> {
-        let detail = self.api.artist_detail(artist_id).ok();
-        let desc = self.api.artist_desc(artist_id).ok();
-        let top_song = self.api.artist_top_song(artist_id).ok();
-        let album = self.api.artist_album(artist_id, 60, 0).ok();
+    async fn load_author_detail(&mut self, artist_id: &str) -> Result<()> {
+        let detail = self.api.artist_detail(artist_id).await.ok();
+        let desc = self.api.artist_desc(artist_id).await.ok();
+        let top_song = self.api.artist_top_song(artist_id).await.ok();
+        let album = self.api.artist_album(artist_id, 60, 0).await.ok();
 
         if detail.is_none() && desc.is_none() && top_song.is_none() && album.is_none() {
             return Err(anyhow!("作者数据获取失败"));
@@ -6283,6 +6286,7 @@ impl App {
             let bytes = if let Some(url) = tile.cover_url.as_deref() {
                 self.api
                     .fetch_cover_bytes(url)
+                    .await
                     .ok()
                     .filter(|content| !content.is_empty())
             } else {
@@ -6296,6 +6300,7 @@ impl App {
         let cover_bytes = if let Some(url) = cover_url.as_deref() {
             self.api
                 .fetch_cover_bytes(url)
+                .await
                 .ok()
                 .filter(|content| !content.is_empty())
         } else {
@@ -6327,7 +6332,7 @@ impl App {
         Ok(())
     }
 
-    fn execute_search(&mut self) -> Result<()> {
+    async fn execute_search(&mut self) -> Result<()> {
         let (keywords, filter) = parse_search_input(&self.search.query);
         let followed_author_query = is_followed_author_query(&keywords, filter);
         if keywords.is_empty() && !followed_author_query {
@@ -6341,10 +6346,11 @@ impl App {
         self.search.has_more = true;
 
         let response = if followed_author_query {
-            self.api.artist_sublist(SEARCH_RESULT_PAGE_SIZE, 0)?
+            self.api.artist_sublist(SEARCH_RESULT_PAGE_SIZE, 0).await?
         } else {
             self.api
-                .search(&keywords, filter.search_type(), SEARCH_RESULT_PAGE_SIZE, 0)?
+                .search(&keywords, filter.search_type(), SEARCH_RESULT_PAGE_SIZE, 0)
+                .await?
         };
         let code = response_code(&response);
         if code != 200 {
@@ -6375,7 +6381,7 @@ impl App {
         Ok(())
     }
 
-    fn load_more_search_results(&mut self) -> Result<usize> {
+    async fn load_more_search_results(&mut self) -> Result<usize> {
         if !self.search.has_more {
             return Ok(0);
         }
@@ -6388,14 +6394,17 @@ impl App {
 
         let response = if followed_author_query {
             self.api
-                .artist_sublist(SEARCH_RESULT_PAGE_SIZE, self.search.next_offset)?
+                .artist_sublist(SEARCH_RESULT_PAGE_SIZE, self.search.next_offset)
+                .await?
         } else {
-            self.api.search(
-                &keywords,
-                filter.search_type(),
-                SEARCH_RESULT_PAGE_SIZE,
-                self.search.next_offset,
-            )?
+            self.api
+                .search(
+                    &keywords,
+                    filter.search_type(),
+                    SEARCH_RESULT_PAGE_SIZE,
+                    self.search.next_offset,
+                )
+                .await?
         };
         let code = response_code(&response);
         if code != 200 {
@@ -6460,22 +6469,22 @@ impl App {
         Ok(added)
     }
 
-    fn mark_login_success(&mut self, text: &str) {
+    async fn mark_login_success(&mut self, text: &str) {
         self.session_cookie = self.api.session_cookie().map(|value| value.to_string());
         if let Some(cookie) = self.session_cookie.as_deref() {
             let _ = session::save_cookie(cookie);
         }
-        self.refresh_vip_audio_access();
-        let _ = self.refresh_liked_song_cache();
+        self.refresh_vip_audio_access().await;
+        let _ = self.refresh_liked_song_cache().await;
         self.home_sidebar = HomeSidebarState::default();
         self.playlist_section_return_snapshot = None;
         self.home.status_line = text.to_string();
         self.begin_startup_loading();
-        if let Err(err) = self.load_home_recommendations() {
+        if let Err(err) = self.load_home_recommendations().await {
             self.home.status_line = format!("{}，推荐歌单加载失败: {}", text, err);
         }
         self.finish_startup_loading();
-        self.try_restore_playback_memory();
+        self.try_restore_playback_memory().await;
     }
 }
 
@@ -6733,7 +6742,7 @@ struct RecommendCard {
     cover_url: Option<String>,
 }
 
-fn home_daily_song_items<'a>(body: &'a Value) -> Option<&'a [Value]> {
+fn home_daily_song_items(body: &Value) -> Option<&[Value]> {
     body.pointer("/data/dailySongs")
         .and_then(|value| value.as_array().map(Vec::as_slice))
         .or_else(|| {
@@ -7635,9 +7644,7 @@ fn normalize_keybind_text(raw: &str) -> Option<String> {
             return None;
         }
         key_token = normalize_keybind_token(token);
-        if key_token.is_none() {
-            return None;
-        }
+        key_token.as_ref()?;
     }
 
     let key_token = key_token?;

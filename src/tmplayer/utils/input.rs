@@ -339,9 +339,7 @@ fn normalize_keybind_text(raw: &str) -> Option<String> {
             return None;
         }
         key_token = normalize_keybind_token(token);
-        if key_token.is_none() {
-            return None;
-        }
+        key_token.as_ref()?;
     }
 
     let key_token = key_token?;

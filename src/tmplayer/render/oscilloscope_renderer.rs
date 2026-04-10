@@ -266,7 +266,7 @@ fn wrap_tau(mut x: f32) -> f32 {
         return 0.0;
     }
     // Keep in [0, TAU).
-    x = x % tau;
+    x %= tau;
     if x < 0.0 {
         x += tau;
     }
