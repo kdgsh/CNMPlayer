@@ -20,6 +20,7 @@ use futures::{FutureExt, future::Shared};
 use ncm_api::ApiResponse;
 use reqwest::{Client, header};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -30,6 +31,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::task;
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
@@ -229,10 +231,9 @@ impl LoginState {
     }
 }
 
-type CoverFutureInner = dyn Future<Output = Option<Arc<Vec<u8>>>> + Send;
-type CoverFuture = Shared<Pin<Box<CoverFutureInner>>>;
-type AsciiFutureInner = dyn Future<Output = String> + Send;
-type AsciiFuture = Shared<Pin<Box<AsciiFutureInner>>>;
+type SharedFuture<T> = Shared<Pin<Box<dyn Future<Output = Option<T>> + Send>>>;
+type CoverFuture = SharedFuture<Arc<Vec<u8>>>;
+type AsciiFuture = SharedFuture<String>;
 
 fn shot_and_share<F>(fut: F) -> Shared<F>
 where
@@ -242,6 +243,18 @@ where
     let shared = fut.shared();
     tokio::spawn(shared.clone());
     shared
+}
+
+pub fn peek_shared_future<T>(cover_bytes: &Option<SharedFuture<T>>) -> Option<&T> {
+    cover_bytes.as_ref()?.peek()?.as_ref()
+}
+
+fn make_ascii_future(bytes: Arc<Vec<u8>>, width: u16, height: u16) -> AsciiFuture {
+    let fut = Box::pin(async move {
+        let hnd = task::spawn_blocking(move || render_cover_ascii(&bytes, width, height));
+        hnd.await.ok().flatten()
+    });
+    shot_and_share(fut)
 }
 
 pub struct HomeTile {
@@ -288,32 +301,20 @@ impl HomeTile {
         let placeholder = move || placeholder_cover_ascii(width, height, '░');
 
         if self.cover_ascii_size != (width, height) {
-            if let Some(fut) = &mut self.cover_bytes {
-                if let Some(Some(bytes)) = fut.peek() {
-                    let bytes = bytes.clone();
-                    let fut: Pin<Box<AsciiFutureInner>> = Box::pin(async move {
-                        let hnd = tokio::task::spawn_blocking(move || {
-                            render_cover_ascii(&bytes, width, height).unwrap_or_else(placeholder)
-                        });
-                        hnd.await.ok().unwrap_or_else(placeholder)
-                    });
-                    self.cover_ascii = Some(shot_and_share(fut));
-                    self.cover_ascii_size = (width, height);
-                }
+            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
+                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
+                self.cover_ascii_size = (width, height);
             }
         }
-        match &mut self.cover_ascii {
-            Some(fut) => match fut.peek() {
-                Some(x) => x.clone(),
-                None => placeholder(),
-            },
+        match peek_shared_future(&self.cover_ascii) {
+            Some(x) => x.clone(),
             None => placeholder(),
         }
     }
 }
 
 fn make_cover_fetch_future(api: ApiState, url: String) -> CoverFuture {
-    let fut: Pin<Box<CoverFutureInner>> = Box::pin(async move {
+    let fut = Box::pin(async move {
         api.fetch_cover_bytes(&url)
             .await
             .ok()
@@ -963,8 +964,8 @@ pub struct PlaylistState {
     pub artist: String,
     pub description: String,
     pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
+    pub cover_bytes: Option<CoverFuture>,
+    cover_ascii: Option<AsciiFuture>,
     cover_ascii_size: (u16, u16),
     pub focused_idx: usize,
     pub scroll_offset: usize,
@@ -981,7 +982,7 @@ impl Default for PlaylistState {
             description: "从主页进入歌单后加载真实数据。".to_string(),
             cover_url: None,
             cover_bytes: None,
-            cover_ascii: String::new(),
+            cover_ascii: None,
             cover_ascii_size: (0, 0),
             focused_idx: 0,
             scroll_offset: 0,
@@ -1087,27 +1088,25 @@ impl PlaylistState {
         true
     }
 
-    pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
-        self.cover_bytes = bytes;
-        self.cover_ascii.clear();
+    pub fn set_cover_future(&mut self, fut: Option<CoverFuture>) {
+        self.cover_bytes = fut;
+        self.cover_ascii = None;
         self.cover_ascii_size = (0, 0);
     }
 
     pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
+        let placeholder = move || placeholder_cover_ascii(width, height, '░');
 
         if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
+            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
+                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
+                self.cover_ascii_size = (width, height);
+            }
         }
-
-        self.cover_ascii.clone()
+        match peek_shared_future(&self.cover_ascii) {
+            Some(x) => x.clone(),
+            None => placeholder(),
+        }
     }
 }
 
@@ -3400,7 +3399,7 @@ impl App {
         let _ = fs::write(path, bytes);
     }
 
-    async fn fetch_cover_with_disk_cache(&mut self, url: &str) -> Option<Vec<u8>> {
+    async fn fetch_cover_with_disk_cache(&self, url: &str) -> Option<Vec<u8>> {
         if let Some(bytes) = self.load_cover_from_disk_cache(url) {
             return Some(bytes);
         }
@@ -3820,16 +3819,8 @@ impl App {
         self.playlist.cover_url = section_cover.clone();
         self.playlist.set_tracks(tracks);
 
-        let cover_bytes = if let Some(url) = section_cover {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
+        let cover_future = section_cover.map(|url| make_cover_fetch_future(self.api.clone(), url));
+        self.playlist.set_cover_future(cover_future);
         self.page = Page::Playlist;
     }
 
@@ -3869,19 +3860,13 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = section_snapshot;
-                if self.playlist.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.playlist.cover_url = fallback_cover_url;
-                            self.playlist.set_cover_bytes(bytes);
-                        }
+                match (&self.playlist.cover_bytes, fallback_cover_url) {
+                    (None, Some(url)) => {
+                        let fut = make_cover_fetch_future(self.api.clone(), url.clone());
+                        self.playlist.set_cover_future(Some(fut));
+                        self.playlist.cover_url = Some(url);
                     }
+                    _ => (),
                 }
                 self.set_runtime_status(format!(
                     "{} {}",
@@ -3988,19 +3973,13 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                if self.playlist.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.playlist.cover_url = fallback_cover_url;
-                            self.playlist.set_cover_bytes(bytes);
-                        }
+                match (&self.playlist.cover_bytes, fallback_cover_url) {
+                    (None, Some(url)) => {
+                        let fut = make_cover_fetch_future(self.api.clone(), url.clone());
+                        self.playlist.set_cover_future(Some(fut));
+                        self.playlist.cover_url = Some(url);
                     }
+                    _ => (),
                 }
                 self.playlist_return_page = Page::Search;
                 self.page = Page::Playlist;
@@ -4049,19 +4028,13 @@ impl App {
         match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                if self.playlist.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.playlist.cover_url = fallback_cover_url;
-                            self.playlist.set_cover_bytes(bytes);
-                        }
+                match (&self.playlist.cover_bytes, fallback_cover_url) {
+                    (None, Some(url)) => {
+                        let fut = make_cover_fetch_future(self.api.clone(), url.clone());
+                        self.playlist.set_cover_future(Some(fut));
+                        self.playlist.cover_url = Some(url);
                     }
+                    _ => (),
                 }
                 self.playlist_return_page = Page::Search;
                 self.page = Page::Playlist;
@@ -5078,11 +5051,15 @@ impl App {
             return bootstrap;
         }
 
-        let mut playlist_cover = self.playlist.cover_bytes.clone();
+        let mut playlist_cover =
+            peek_shared_future(&self.playlist.cover_bytes).map(|x| Cow::Borrowed(x.as_slice()));
 
         if playlist_cover.is_none() {
             if let Some(cover_url) = self.playlist.cover_url.clone() {
-                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await;
+                playlist_cover = self
+                    .fetch_cover_with_disk_cache(&cover_url)
+                    .await
+                    .map(Cow::Owned);
             }
         }
 
@@ -5240,11 +5217,14 @@ impl App {
                     .or_else(|| self.now_playing.clone());
 
                 if let Some(first_track) = first_track {
-                    playlist_cover = first_track.cover.clone();
+                    playlist_cover = first_track.cover.clone().map(Cow::Owned);
 
                     if playlist_cover.is_none() {
                         if let Some(cover_url) = first_track.cover_url.as_deref() {
-                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url).await;
+                            playlist_cover = self
+                                .fetch_cover_with_disk_cache(cover_url)
+                                .await
+                                .map(Cow::Owned);
                         }
                     }
 
@@ -5259,8 +5239,10 @@ impl App {
                                 if let Some(cover_url) =
                                     song.pointer("/al/picUrl").and_then(|value| value.as_str())
                                 {
-                                    playlist_cover =
-                                        self.fetch_cover_with_disk_cache(cover_url).await;
+                                    playlist_cover = self
+                                        .fetch_cover_with_disk_cache(cover_url)
+                                        .await
+                                        .map(Cow::Owned);
                                 }
                             }
                         }
@@ -5268,7 +5250,7 @@ impl App {
                 }
             }
 
-            bootstrap.playlist_cover = playlist_cover;
+            bootstrap.playlist_cover = playlist_cover.map(|x| x.into_owned());
             bootstrap.current_track = Some(seed);
         }
 
@@ -5963,16 +5945,8 @@ impl App {
         self.playlist.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
 
-        let cover_bytes = if let Some(url) = cover_url {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
+        let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
+        self.playlist.set_cover_future(cover_future);
 
         Ok(())
     }
@@ -6017,16 +5991,8 @@ impl App {
         self.playlist.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
 
-        let cover_bytes = if let Some(url) = cover_url {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
+        let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
+        self.playlist.set_cover_future(cover_future);
 
         Ok(())
     }
@@ -6091,16 +6057,8 @@ impl App {
         self.playlist.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
 
-        let cover_bytes = if let Some(url) = cover_url {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
+        let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
+        self.playlist.set_cover_future(cover_future);
 
         Ok(())
     }

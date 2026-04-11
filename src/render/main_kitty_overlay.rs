@@ -1,4 +1,4 @@
-use crate::app::{App, HitRect, Overlay, Page};
+use crate::app::{App, HitRect, Overlay, Page, peek_shared_future};
 use crate::tmplayer::render::kitty_graphics;
 use crate::tmplayer::utils::kitty::kitty_graphics_supported;
 use ratatui::layout::Rect;
@@ -226,13 +226,9 @@ async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
                 let Some(tile) = app.home.tiles.get_mut(*index) else {
                     continue;
                 };
-                let Some(bytes_fut) = &mut tile.cover_bytes else {
+                let Some(bytes) = peek_shared_future(&tile.cover_bytes) else {
                     continue;
                 };
-                let Some(bytes) = bytes_fut.clone().await else {
-                    continue;
-                };
-
                 let tile_rect = rect_from_hit(*hit);
                 let cover_rect = tile_cover_rect(tile_rect);
                 if cover_rect.width == 0 || cover_rect.height == 0 {
@@ -242,17 +238,17 @@ async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
                 targets.push(CoverTarget {
                     slot: CoverSlotKey::HomeTile(*index),
                     base_rect: cover_rect,
-                    bytes: bytes,
+                    bytes: bytes.clone(),
                 });
             }
         }
         Page::Playlist => {
             if let Some(cover_rect) = playlist_header_cover_rect(app, size) {
-                if let Some(bytes) = app.playlist.cover_bytes.as_deref() {
+                if let Some(bytes) = peek_shared_future(&app.playlist.cover_bytes) {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::PlaylistHeader,
                         base_rect: cover_rect,
-                        bytes: Arc::new(Vec::from(bytes)),
+                        bytes: bytes.clone(),
                     });
                 }
             }
