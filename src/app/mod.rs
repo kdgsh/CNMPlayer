@@ -234,9 +234,11 @@ type CoverFuture = Shared<Pin<Box<CoverFutureInner>>>;
 type AsciiFutureInner = dyn Future<Output = String> + Send;
 type AsciiFuture = Shared<Pin<Box<AsciiFutureInner>>>;
 
-fn shot_and_share<T: 'static + Clone + Send + Sync>(
-    fut: Pin<Box<dyn Future<Output = T> + Send>>,
-) -> Shared<Pin<Box<dyn Future<Output = T> + Send>>> {
+fn shot_and_share<F>(fut: F) -> Shared<F>
+where
+    F: Future + Sized + Send + 'static,
+    F::Output: Clone + Sync + Send,
+{
     let shared = fut.shared();
     tokio::spawn(shared.clone());
     shared
