@@ -220,19 +220,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         let frame_dt = Duration::from_millis((1000_u64 / u64::from(target_fps.max(1))).max(8));
 
         if needs_redraw || last_draw_at.elapsed() >= frame_dt {
-            terminal.draw(|frame| ui::draw(frame, app))?;
-            let size = terminal.size()?;
-            kitty_overlay
-                .paint(
-                    app,
-                    Rect {
-                        x: 0,
-                        y: 0,
-                        width: size.width,
-                        height: size.height,
-                    },
-                )
-                .await;
+            terminal.draw(|frame| {
+                ui::draw(frame, app);
+                kitty_overlay.paint(app, frame);
+            })?;
             last_draw_at = Instant::now();
             needs_redraw = false;
             if app.should_quit {

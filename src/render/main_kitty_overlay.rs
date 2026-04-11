@@ -1,15 +1,15 @@
-use crate::app::{App, HitRect, Overlay, Page, peek_shared_future};
-use crate::tmplayer::render::kitty_graphics;
-use crate::tmplayer::utils::kitty::kitty_graphics_supported;
+use crate::app::peek_shared_future;
+use crate::app::{App, HitRect, Overlay, Page};
+use image::{GenericImage, RgbaImage};
+use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
 
 const CELL_W_PX: u32 = 8;
 const CELL_H_PX: u32 = 16;
-const SLOT_SEGMENT_CAP: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum CoverSlotKey {
@@ -19,77 +19,87 @@ enum CoverSlotKey {
     AuthorTile(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SlotPlacementState {
-    hash: u64,
-    image_id: u32,
-    segments: Vec<(u16, u16, u16, u16)>,
-}
-
-struct CoverTarget {
+struct CoverTarget<'a> {
     slot: CoverSlotKey,
     base_rect: Rect,
-    bytes: Arc<Vec<u8>>,
+    bytes: &'a [u8],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SegmentKey {
+    slot: CoverSlotKey,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
 }
 
 pub struct MainKittyOverlay {
-    image_ids: HashMap<u64, u32>,
-    image_sizes: HashMap<u64, (u32, u32)>,
-    transmitted: HashSet<u64>,
-    next_image_id: u32,
-    last_slots: HashMap<CoverSlotKey, SlotPlacementState>,
+    picker: Picker,
     last_term_size: Option<(u16, u16)>,
-    last_quality: u8,
+    last_content_hash: Option<u64>,
+    playlist_header_image: Option<RgbaImage>,
+    author_header_image: Option<RgbaImage>,
+    home_tile_images: HashMap<usize, RgbaImage>,
+    author_tile_images: HashMap<usize, RgbaImage>,
+    segment_protocols: HashMap<SegmentKey, StatefulProtocol>,
 }
 
 impl MainKittyOverlay {
     pub fn new() -> Self {
+        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
         Self {
-            image_ids: HashMap::new(),
-            image_sizes: HashMap::new(),
-            transmitted: HashSet::new(),
-            next_image_id: 5000,
-            last_slots: HashMap::new(),
+            picker,
             last_term_size: None,
-            last_quality: 0,
+            last_content_hash: None,
+            playlist_header_image: None,
+            author_header_image: None,
+            home_tile_images: HashMap::new(),
+            author_tile_images: HashMap::new(),
+            segment_protocols: HashMap::new(),
         }
     }
 
     pub fn on_terminal_reset(&mut self) {
-        self.last_slots.clear();
-        self.transmitted.clear();
-        self.image_sizes.clear();
         self.last_term_size = None;
+        self.last_content_hash = None;
+        self.playlist_header_image = None;
+        self.author_header_image = None;
+        self.home_tile_images.clear();
+        self.author_tile_images.clear();
+        self.segment_protocols.clear();
     }
 
-    pub async fn paint(&mut self, app: &mut App, size: Rect) {
-        let kitty_enabled = app.config.kitty_graphics && kitty_graphics_supported();
-        if !kitty_enabled {
+    pub fn paint(&mut self, app: &mut App, frame: &mut Frame<'_>) {
+        if !app.config.kitty_graphics {
             self.clear_all();
             return;
         }
 
-        let quality = app.config.kitty_cover_scale_percent.clamp(25, 100);
-        if self.last_quality == 0 {
-            self.last_quality = quality;
-        }
-
-        if self.last_quality != quality {
-            self.last_quality = quality;
-            self.clear_all();
-        }
-
+        let size = frame.area();
         let current_size = (size.width, size.height);
+
         if self.last_term_size != Some(current_size) {
             self.last_term_size = Some(current_size);
-            // Terminal resize can drop placements; force re-place on next step.
-            self.last_slots.clear();
+            self.playlist_header_image = None;
+            self.author_header_image = None;
+            self.home_tile_images.clear();
+            self.author_tile_images.clear();
+            self.segment_protocols.clear();
         }
 
-        let targets = collect_cover_targets(app, size).await;
         let occluders = collect_occluders(app, size);
-        let old_slots = self.last_slots.clone();
-        let mut new_slots: HashMap<CoverSlotKey, SlotPlacementState> = HashMap::new();
+        let targets = collect_cover_targets(app, size);
+
+        let content_hash = compute_targets_content_hash(&targets);
+        if self.last_content_hash != Some(content_hash) {
+            self.last_content_hash = Some(content_hash);
+            self.playlist_header_image = None;
+            self.author_header_image = None;
+            self.home_tile_images.clear();
+            self.author_tile_images.clear();
+            self.segment_protocols.clear();
+        }
 
         for target in targets {
             if target.base_rect.width == 0
@@ -104,141 +114,118 @@ impl MainKittyOverlay {
                 continue;
             }
 
-            let (max_w, max_h) =
-                target_px(target.base_rect.width, target.base_rect.height, quality);
-
-            let bytes_hash = hash_bytes(&target.bytes);
-            let render_hash = hash_render_variant(bytes_hash, max_w, max_h, quality);
-
-            if !self.transmitted.contains(&render_hash) {
-                self.transmit_image_variant(render_hash, &target.bytes, max_w, max_h);
-            }
-
-            if !self.transmitted.contains(&render_hash) {
-                continue;
-            }
-
-            let image_id = self.image_id_for_hash(render_hash);
-            let Some(&(img_w, img_h)) = self.image_sizes.get(&render_hash) else {
-                continue;
-            };
-
-            let new_state = SlotPlacementState {
-                hash: render_hash,
-                image_id,
-                segments: rect_segments_signature(&segments),
-            };
-
-            let prev_state = old_slots.get(&target.slot);
-            if prev_state != Some(&new_state) {
-                if let Some(prev) = prev_state {
-                    self.delete_slot_placements(target.slot, prev.image_id);
-                }
-
-                for (idx, segment) in segments.iter().take(SLOT_SEGMENT_CAP).enumerate() {
-                    if let Some((src_x, src_y, src_w, src_h)) =
-                        map_segment_to_cover_crop(target.base_rect, *segment, img_w, img_h)
-                    {
-                        let placement_id = placement_id_for_segment(target.slot, idx as u32);
-                        let _ = kitty_graphics::place_image_cropped(
-                            *segment,
-                            image_id,
-                            placement_id,
-                            src_x,
-                            src_y,
-                            src_w,
-                            src_h,
-                        );
+            let img = match target.slot {
+                CoverSlotKey::PlaylistHeader => {
+                    if self.playlist_header_image.is_none() {
+                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
+                            self.playlist_header_image = Some(dyn_img.to_rgba8());
+                        }
+                    }
+                    match &self.playlist_header_image {
+                        Some(img) => img,
+                        None => continue,
                     }
                 }
+                CoverSlotKey::AuthorHeader => {
+                    if self.author_header_image.is_none() {
+                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
+                            self.author_header_image = Some(dyn_img.to_rgba8());
+                        }
+                    }
+                    match &self.author_header_image {
+                        Some(img) => img,
+                        None => continue,
+                    }
+                }
+                CoverSlotKey::HomeTile(index) => {
+                    if !self.home_tile_images.contains_key(&index) {
+                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
+                            self.home_tile_images.insert(index, dyn_img.to_rgba8());
+                        }
+                    }
+                    match self.home_tile_images.get(&index) {
+                        Some(img) => img,
+                        None => continue,
+                    }
+                }
+                CoverSlotKey::AuthorTile(index) => {
+                    if !self.author_tile_images.contains_key(&index) {
+                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
+                            self.author_tile_images.insert(index, dyn_img.to_rgba8());
+                        }
+                    }
+                    match self.author_tile_images.get(&index) {
+                        Some(img) => img,
+                        None => continue,
+                    }
+                }
+            };
+            let (img_w, img_h) = img.dimensions();
+
+            for segment in segments {
+                let segment_key = SegmentKey {
+                    slot: target.slot,
+                    x: segment.x,
+                    y: segment.y,
+                    width: segment.width,
+                    height: segment.height,
+                };
+
+                if !self.segment_protocols.contains_key(&segment_key) {
+                    let Some((src_x, src_y, src_w, src_h)) =
+                        map_segment_to_cover_crop(target.base_rect, segment, img_w, img_h)
+                    else {
+                        continue;
+                    };
+                    let cropped = img.clone().sub_image(src_x, src_y, src_w, src_h).to_image();
+                    let proto = self
+                        .picker
+                        .new_resize_protocol(image::DynamicImage::ImageRgba8(cropped));
+                    self.segment_protocols.insert(segment_key.clone(), proto);
+                }
+
+                if let Some(ref mut proto) = self.segment_protocols.get_mut(&segment_key) {
+                    let widget = StatefulImage::<StatefulProtocol>::default();
+                    frame.render_stateful_widget(widget, segment, proto);
+                }
             }
-
-            new_slots.insert(target.slot, new_state);
-        }
-
-        for (slot, state) in old_slots {
-            if !new_slots.contains_key(&slot) {
-                self.delete_slot_placements(slot, state.image_id);
-            }
-        }
-
-        self.last_slots = new_slots;
-    }
-
-    fn image_id_for_hash(&mut self, hash: u64) -> u32 {
-        if let Some(id) = self.image_ids.get(&hash).copied() {
-            return id;
-        }
-        let id = self.next_image_id;
-        self.next_image_id = self.next_image_id.saturating_add(1);
-        self.image_ids.insert(hash, id);
-        id
-    }
-
-    fn transmit_image_variant(&mut self, hash: u64, bytes: &[u8], max_w: u32, max_h: u32) {
-        let image_id = self.image_id_for_hash(hash);
-
-        let Some((b64, w, h)) =
-            kitty_graphics::encode_image_bytes_to_png_base64(bytes, max_w, max_h)
-        else {
-            return;
-        };
-
-        if kitty_graphics::transmit_png_base64(image_id, &b64).is_ok() {
-            self.transmitted.insert(hash);
-            self.image_sizes.insert(hash, (w, h));
-        }
-    }
-
-    fn delete_slot_placements(&self, slot: CoverSlotKey, image_id: u32) {
-        for seg_idx in 0..SLOT_SEGMENT_CAP {
-            let placement_id = placement_id_for_segment(slot, seg_idx as u32);
-            let _ = kitty_graphics::delete_image_placement(image_id, placement_id, false);
         }
     }
 
     fn clear_all(&mut self) {
-        let stale_slots: Vec<(CoverSlotKey, SlotPlacementState)> =
-            self.last_slots.drain().collect();
-        for (slot, state) in stale_slots {
-            self.delete_slot_placements(slot, state.image_id);
-        }
-
-        for &image_id in self.image_ids.values() {
-            let _ = kitty_graphics::delete_image(image_id, true);
-        }
-
-        self.image_ids.clear();
-        self.image_sizes.clear();
-        self.transmitted.clear();
-        self.next_image_id = 5000;
-        self.last_term_size = None;
-        self.last_quality = 0;
+        self.last_content_hash = None;
+        self.playlist_header_image = None;
+        self.author_header_image = None;
+        self.home_tile_images.clear();
+        self.author_tile_images.clear();
+        self.segment_protocols.clear();
     }
 }
 
-async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
+fn collect_cover_targets<'a>(app: &'a mut App, size: Rect) -> Vec<CoverTarget<'a>> {
     let mut targets = Vec::new();
 
     match app.page {
         Page::Home => {
-            for (hit, index) in &app.home_tile_hits {
-                let Some(tile) = app.home.tiles.get_mut(*index) else {
-                    continue;
-                };
-                let Some(bytes) = peek_shared_future(&tile.cover_bytes) else {
-                    continue;
-                };
-                let tile_rect = rect_from_hit(*hit);
+            let home_data: Vec<(HitRect, usize, &'a [u8])> = app
+                .home_tile_hits
+                .iter()
+                .filter_map(|(hit, index)| {
+                    let tile = app.home.tiles.get(*index)?;
+                    let bytes = peek_shared_future(&tile.cover_bytes)?;
+                    Some((*hit, *index, &bytes[..]))
+                })
+                .collect();
+            for (hit, index, bytes) in home_data {
+                let tile_rect = rect_from_hit(hit);
                 let cover_rect = tile_cover_rect(tile_rect);
                 if cover_rect.width == 0 || cover_rect.height == 0 {
                     continue;
                 }
-
                 targets.push(CoverTarget {
-                    slot: CoverSlotKey::HomeTile(*index),
+                    slot: CoverSlotKey::HomeTile(index),
                     base_rect: cover_rect,
-                    bytes: bytes.clone(),
+                    bytes,
                 });
             }
         }
@@ -248,7 +235,7 @@ async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::PlaylistHeader,
                         base_rect: cover_rect,
-                        bytes: bytes.clone(),
+                        bytes: bytes.as_ref(),
                     });
                 }
             }
@@ -259,7 +246,7 @@ async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::AuthorHeader,
                         base_rect: cover_rect,
-                        bytes: Arc::new(Vec::from(bytes)),
+                        bytes,
                     });
                 }
             }
@@ -281,7 +268,7 @@ async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
                 targets.push(CoverTarget {
                     slot: CoverSlotKey::AuthorTile(*index),
                     base_rect: cover_rect,
-                    bytes: Arc::new(Vec::from(bytes)),
+                    bytes,
                 });
             }
         }
@@ -721,49 +708,6 @@ fn cover_viewport(
     }
 }
 
-fn target_px(w_cells: u16, h_cells: u16, quality: u8) -> (u32, u32) {
-    let q = quality.clamp(25, 100);
-    if q >= 100 {
-        return (u32::MAX, u32::MAX);
-    }
-
-    let scale = q as u32;
-    let w = (w_cells as u32)
-        .saturating_mul(CELL_W_PX)
-        .saturating_mul(scale)
-        / 100;
-    let h = (h_cells as u32)
-        .saturating_mul(CELL_H_PX)
-        .saturating_mul(scale)
-        / 100;
-
-    (w.clamp(64, 1024), h.clamp(64, 1024))
-}
-
-fn placement_base_for_slot(slot: CoverSlotKey) -> u32 {
-    match slot {
-        CoverSlotKey::PlaylistHeader => 1_000_000,
-        CoverSlotKey::AuthorHeader => 1_010_000,
-        CoverSlotKey::HomeTile(index) => {
-            2_000_000_u32.saturating_add((index as u32).saturating_mul(SLOT_SEGMENT_CAP as u32))
-        }
-        CoverSlotKey::AuthorTile(index) => {
-            3_000_000_u32.saturating_add((index as u32).saturating_mul(SLOT_SEGMENT_CAP as u32))
-        }
-    }
-}
-
-fn placement_id_for_segment(slot: CoverSlotKey, seg_idx: u32) -> u32 {
-    placement_base_for_slot(slot).saturating_add(seg_idx)
-}
-
-fn rect_segments_signature(rects: &[Rect]) -> Vec<(u16, u16, u16, u16)> {
-    rects
-        .iter()
-        .map(|rect| (rect.x, rect.y, rect.width, rect.height))
-        .collect()
-}
-
 fn rect_from_hit(hit: HitRect) -> Rect {
     Rect {
         x: hit.x,
@@ -779,11 +723,12 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     hasher.finish()
 }
 
-fn hash_render_variant(content_hash: u64, max_w: u32, max_h: u32, quality: u8) -> u64 {
+fn compute_targets_content_hash(targets: &[CoverTarget]) -> u64 {
     let mut hasher = DefaultHasher::new();
-    content_hash.hash(&mut hasher);
-    max_w.hash(&mut hasher);
-    max_h.hash(&mut hasher);
-    quality.hash(&mut hasher);
+    for target in targets {
+        target.slot.hash(&mut hasher);
+        target.base_rect.hash(&mut hasher);
+        hash_bytes(target.bytes).hash(&mut hasher);
+    }
     hasher.finish()
 }
