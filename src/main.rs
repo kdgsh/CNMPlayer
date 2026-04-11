@@ -222,15 +222,17 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         if needs_redraw || last_draw_at.elapsed() >= frame_dt {
             terminal.draw(|frame| ui::draw(frame, app))?;
             let size = terminal.size()?;
-            kitty_overlay.paint(
-                app,
-                Rect {
-                    x: 0,
-                    y: 0,
-                    width: size.width,
-                    height: size.height,
-                },
-            );
+            kitty_overlay
+                .paint(
+                    app,
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        width: size.width,
+                        height: size.height,
+                    },
+                )
+                .await;
             last_draw_at = Instant::now();
             needs_redraw = false;
             if app.should_quit {

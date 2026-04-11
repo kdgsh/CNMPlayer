@@ -16,6 +16,7 @@ use anyhow::{Result, anyhow};
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use futures::{FutureExt, future::Shared};
 use ncm_api::ApiResponse;
 use reqwest::{Client, header};
 use serde_json::Value;
@@ -24,6 +25,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -226,13 +229,26 @@ impl LoginState {
     }
 }
 
+type CoverFutureInner = dyn Future<Output = Option<Arc<Vec<u8>>>> + Send;
+type CoverFuture = Shared<Pin<Box<CoverFutureInner>>>;
+type AsciiFutureInner = dyn Future<Output = String> + Send;
+type AsciiFuture = Shared<Pin<Box<AsciiFutureInner>>>;
+
+fn shot_and_share<T: 'static + Clone + Send + Sync>(
+    fut: Pin<Box<dyn Future<Output = T> + Send>>,
+) -> Shared<Pin<Box<dyn Future<Output = T> + Send>>> {
+    let shared = fut.shared();
+    tokio::spawn(shared.clone());
+    shared
+}
+
 pub struct HomeTile {
     pub id: Option<String>,
     pub title: String,
     pub subtitle: String,
     pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
+    pub cover_bytes: Option<CoverFuture>,
+    cover_ascii: Option<AsciiFuture>,
     cover_ascii_size: (u16, u16),
 }
 
@@ -243,9 +259,9 @@ impl HomeTile {
             title: "每日推荐".to_string(),
             subtitle: String::new(),
             cover_url: None,
-            cover_bytes: None,
-            cover_ascii: String::new(),
             cover_ascii_size: (0, 0),
+            cover_bytes: None,
+            cover_ascii: None,
         }
     }
 
@@ -260,28 +276,49 @@ impl HomeTile {
             title,
             subtitle,
             cover_url,
-            cover_bytes: None,
-            cover_ascii: String::new(),
             cover_ascii_size: (0, 0),
+            cover_bytes: None,
+            cover_ascii: None,
         }
     }
 
     pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
+        let placeholder = move || placeholder_cover_ascii(width, height, '░');
 
         if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
+            if let Some(fut) = &mut self.cover_bytes {
+                if let Some(Some(bytes)) = fut.peek() {
+                    let bytes = bytes.clone();
+                    let fut: Pin<Box<AsciiFutureInner>> = Box::pin(async move {
+                        let hnd = tokio::task::spawn_blocking(move || {
+                            render_cover_ascii(&bytes, width, height).unwrap_or_else(placeholder)
+                        });
+                        hnd.await.ok().unwrap_or_else(placeholder)
+                    });
+                    self.cover_ascii = Some(shot_and_share(fut));
+                    self.cover_ascii_size = (width, height);
+                }
+            }
         }
-
-        self.cover_ascii.clone()
+        match &mut self.cover_ascii {
+            Some(fut) => match fut.peek() {
+                Some(x) => x.clone(),
+                None => placeholder(),
+            },
+            None => placeholder(),
+        }
     }
+}
+
+fn make_cover_fetch_future(api: ApiState, url: String) -> CoverFuture {
+    let fut: Pin<Box<CoverFutureInner>> = Box::pin(async move {
+        api.fetch_cover_bytes(&url)
+            .await
+            .ok()
+            .filter(|bytes| !bytes.is_empty())
+            .map(Arc::new)
+    });
+    shot_and_share(fut)
 }
 
 pub struct HomeState {
@@ -5634,30 +5671,19 @@ impl App {
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
-    async fn fetch_playlist_first_song_cover(
-        &mut self,
-        playlist_id: &str,
-    ) -> Option<(String, Vec<u8>)> {
+    async fn fetch_playlist_first_song_cover(&mut self, playlist_id: &str) -> Option<String> {
         let response = self.api.playlist_detail(playlist_id).await.ok()?;
         if response_code(&response) != 200 {
             return None;
         }
 
-        let cover_url = response
+        response
             .body
             .pointer("/playlist/tracks")
             .and_then(|value| value.as_array())
             .and_then(|items| items.first())
-            .and_then(|track| first_non_empty(track, &["/al/picUrl", "/album/picUrl"]))?;
-
-        let cover_bytes = self
-            .api
-            .fetch_cover_bytes(&cover_url)
-            .await
-            .ok()
-            .filter(|bytes| !bytes.is_empty())?;
-
-        Some((cover_url, cover_bytes))
+            .and_then(|track| first_non_empty(track, &["/al/picUrl", "/album/picUrl"]))
+            .map(|s| s.to_string())
     }
 
     async fn load_home_recommendations(&mut self) -> Result<()> {
@@ -5670,11 +5696,8 @@ impl App {
                         .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
                     {
                         daily_tile.cover_url = Some(cover_url.clone());
-                        if let Ok(bytes) = self.api.fetch_cover_bytes(&cover_url).await {
-                            if !bytes.is_empty() {
-                                daily_tile.cover_bytes = Some(bytes);
-                            }
-                        }
+                        daily_tile.cover_bytes =
+                            Some(make_cover_fetch_future(self.api.clone(), cover_url.clone()));
                     }
                 }
             }
@@ -5706,22 +5729,17 @@ impl App {
 
             if pinned_title == Some("私人雷达") {
                 if let Some(playlist_id) = tile.id.clone() {
-                    if let Some((cover_url, cover_bytes)) =
+                    if let Some(cover_url) =
                         self.fetch_playlist_first_song_cover(&playlist_id).await
                     {
                         tile.cover_url = Some(cover_url);
-                        tile.cover_bytes = Some(cover_bytes);
                     }
                 }
             }
 
             if tile.cover_bytes.is_none() {
                 if let Some(url) = tile.cover_url.clone() {
-                    if let Ok(bytes) = self.api.fetch_cover_bytes(&url).await {
-                        if !bytes.is_empty() {
-                            tile.cover_bytes = Some(bytes);
-                        }
-                    }
+                    tile.cover_bytes = Some(make_cover_fetch_future(self.api.clone(), url));
                 }
             }
 

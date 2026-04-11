@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 const CELL_W_PX: u32 = 8;
 const CELL_H_PX: u32 = 16;
@@ -25,10 +26,10 @@ struct SlotPlacementState {
     segments: Vec<(u16, u16, u16, u16)>,
 }
 
-struct CoverTarget<'a> {
+struct CoverTarget {
     slot: CoverSlotKey,
     base_rect: Rect,
-    bytes: &'a [u8],
+    bytes: Arc<Vec<u8>>,
 }
 
 pub struct MainKittyOverlay {
@@ -61,7 +62,7 @@ impl MainKittyOverlay {
         self.last_term_size = None;
     }
 
-    pub fn paint(&mut self, app: &App, size: Rect) {
+    pub async fn paint(&mut self, app: &mut App, size: Rect) {
         let kitty_enabled = app.config.kitty_graphics && kitty_graphics_supported();
         if !kitty_enabled {
             self.clear_all();
@@ -85,7 +86,7 @@ impl MainKittyOverlay {
             self.last_slots.clear();
         }
 
-        let targets = collect_cover_targets(app, size);
+        let targets = collect_cover_targets(app, size).await;
         let occluders = collect_occluders(app, size);
         let old_slots = self.last_slots.clone();
         let mut new_slots: HashMap<CoverSlotKey, SlotPlacementState> = HashMap::new();
@@ -106,11 +107,11 @@ impl MainKittyOverlay {
             let (max_w, max_h) =
                 target_px(target.base_rect.width, target.base_rect.height, quality);
 
-            let bytes_hash = hash_bytes(target.bytes);
+            let bytes_hash = hash_bytes(&target.bytes);
             let render_hash = hash_render_variant(bytes_hash, max_w, max_h, quality);
 
             if !self.transmitted.contains(&render_hash) {
-                self.transmit_image_variant(render_hash, target.bytes, max_w, max_h);
+                self.transmit_image_variant(render_hash, &target.bytes, max_w, max_h);
             }
 
             if !self.transmitted.contains(&render_hash) {
@@ -216,16 +217,19 @@ impl MainKittyOverlay {
     }
 }
 
-fn collect_cover_targets<'a>(app: &'a App, size: Rect) -> Vec<CoverTarget<'a>> {
+async fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget> {
     let mut targets = Vec::new();
 
     match app.page {
         Page::Home => {
             for (hit, index) in &app.home_tile_hits {
-                let Some(tile) = app.home.tiles.get(*index) else {
+                let Some(tile) = app.home.tiles.get_mut(*index) else {
                     continue;
                 };
-                let Some(bytes) = tile.cover_bytes.as_deref() else {
+                let Some(bytes_fut) = &mut tile.cover_bytes else {
+                    continue;
+                };
+                let Some(bytes) = bytes_fut.clone().await else {
                     continue;
                 };
 
@@ -238,7 +242,7 @@ fn collect_cover_targets<'a>(app: &'a App, size: Rect) -> Vec<CoverTarget<'a>> {
                 targets.push(CoverTarget {
                     slot: CoverSlotKey::HomeTile(*index),
                     base_rect: cover_rect,
-                    bytes,
+                    bytes: bytes,
                 });
             }
         }
@@ -248,7 +252,7 @@ fn collect_cover_targets<'a>(app: &'a App, size: Rect) -> Vec<CoverTarget<'a>> {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::PlaylistHeader,
                         base_rect: cover_rect,
-                        bytes,
+                        bytes: Arc::new(Vec::from(bytes)),
                     });
                 }
             }
@@ -259,7 +263,7 @@ fn collect_cover_targets<'a>(app: &'a App, size: Rect) -> Vec<CoverTarget<'a>> {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::AuthorHeader,
                         base_rect: cover_rect,
-                        bytes,
+                        bytes: Arc::new(Vec::from(bytes)),
                     });
                 }
             }
@@ -281,7 +285,7 @@ fn collect_cover_targets<'a>(app: &'a App, size: Rect) -> Vec<CoverTarget<'a>> {
                 targets.push(CoverTarget {
                     slot: CoverSlotKey::AuthorTile(*index),
                     base_rect: cover_rect,
-                    bytes,
+                    bytes: Arc::new(Vec::from(bytes)),
                 });
             }
         }
