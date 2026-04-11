@@ -184,7 +184,6 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             BarChannels::Mono => crate::data::config::BarChannels::Mono,
         },
         bar_channel_reverse: app.config.bar_channel_reverse,
-        kitty_graphics: app.config.kitty_graphics,
     }
 }
 
@@ -240,7 +239,6 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
         crate::data::config::BarChannels::Mono => BarChannels::Mono,
     };
     app.config.bar_channel_reverse = config.bar_channel_reverse;
-    app.config.kitty_graphics = config.kitty_graphics;
 }
 
 async fn save_and_sync_host_config(

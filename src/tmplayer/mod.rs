@@ -110,7 +110,6 @@ pub struct HostConfigSync {
     pub bar_number: HostBarNumber,
     pub bar_channels: HostBarChannels,
     pub bar_channel_reverse: bool,
-    pub kitty_graphics: bool,
 }
 
 pub trait HostPlaybackBridge {
@@ -171,7 +170,7 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         transparent_background: host.transparent_background,
         page_lyrics: host.page_lyrics,
         album_border: host.album_border,
-        kitty_graphics: host.kitty_graphics,
+        kitty_graphics: false,
         kitty_cover_scale_percent: host.kitty_cover_scale_percent,
         super_smooth_bar: host.super_smooth_bar,
         bars_gap: host.bars_gap,

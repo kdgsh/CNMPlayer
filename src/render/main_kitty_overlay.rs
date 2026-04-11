@@ -1,5 +1,6 @@
 use crate::app::peek_shared_future;
 use crate::app::{App, HitRect, Overlay, Page};
+use crate::data::config::GraphicsProtocol;
 use image::{GenericImage, RgbaImage};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -46,8 +47,11 @@ pub struct MainKittyOverlay {
 }
 
 impl MainKittyOverlay {
-    pub fn new() -> Self {
-        let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    pub fn new(graphics_protocol: GraphicsProtocol) -> Self {
+        let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+        if let Some(proto) = graphics_protocol.to_ratatui_protocol() {
+            picker.set_protocol_type(proto);
+        }
         Self {
             picker,
             last_term_size: None,
@@ -71,7 +75,7 @@ impl MainKittyOverlay {
     }
 
     pub fn paint(&mut self, app: &mut App, frame: &mut Frame<'_>) {
-        if !app.config.kitty_graphics {
+        if app.config.graphics_protocol == GraphicsProtocol::Off {
             self.clear_all();
             return;
         }

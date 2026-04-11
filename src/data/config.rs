@@ -9,6 +9,53 @@ const DEFAULT_EQ_BANDS_DB: [f32; crate::tmplayer::app::state::EQ_BANDS] =
 const LEGACY_STARTUP_FOLDER_KEY: &str = concat!("default", "_opening", "_folder");
 const LEGACY_STARTUP_FOLDER_KEY_KEBAB: &str = concat!("default", "-opening", "-folder");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum GraphicsProtocol {
+    Off,
+    #[default]
+    Auto,
+    Halfblocks,
+    Sixel,
+    Kitty,
+    Iterm2,
+}
+
+impl GraphicsProtocol {
+    pub fn to_ratatui_protocol(self) -> Option<ratatui_image::picker::ProtocolType> {
+        match self {
+            GraphicsProtocol::Off => None,
+            GraphicsProtocol::Auto => None,
+            GraphicsProtocol::Halfblocks => Some(ratatui_image::picker::ProtocolType::Halfblocks),
+            GraphicsProtocol::Sixel => Some(ratatui_image::picker::ProtocolType::Sixel),
+            GraphicsProtocol::Kitty => Some(ratatui_image::picker::ProtocolType::Kitty),
+            GraphicsProtocol::Iterm2 => Some(ratatui_image::picker::ProtocolType::Iterm2),
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            GraphicsProtocol::Off => GraphicsProtocol::Auto,
+            GraphicsProtocol::Auto => GraphicsProtocol::Halfblocks,
+            GraphicsProtocol::Halfblocks => GraphicsProtocol::Sixel,
+            GraphicsProtocol::Sixel => GraphicsProtocol::Kitty,
+            GraphicsProtocol::Kitty => GraphicsProtocol::Iterm2,
+            GraphicsProtocol::Iterm2 => GraphicsProtocol::Off,
+        }
+    }
+
+    pub fn display_name(self) -> &'static str {
+        match self {
+            GraphicsProtocol::Off => "Off",
+            GraphicsProtocol::Auto => "Auto",
+            GraphicsProtocol::Halfblocks => "Halfblocks",
+            GraphicsProtocol::Sixel => "Sixel",
+            GraphicsProtocol::Kitty => "Kitty",
+            GraphicsProtocol::Iterm2 => "iTerm2",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub theme: String,
@@ -29,7 +76,7 @@ pub struct Config {
     pub album_border: bool,
 
     #[serde(default)]
-    pub kitty_graphics: bool,
+    pub graphics_protocol: GraphicsProtocol,
 
     #[serde(default = "default_kitty_cover_scale_percent")]
     pub kitty_cover_scale_percent: u8,
@@ -455,7 +502,7 @@ impl Default for Config {
             eq_bands_db: default_eq_bands_db(),
             transparent_background: true,
             album_border: default_album_border(),
-            kitty_graphics: false,
+            graphics_protocol: GraphicsProtocol::default(),
             kitty_cover_scale_percent: default_kitty_cover_scale_percent(),
             super_smooth_bar: false,
             bars_gap: false,

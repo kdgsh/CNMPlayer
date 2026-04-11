@@ -4411,7 +4411,7 @@ impl App {
             }
             3 => {
                 if delta != 0 {
-                    self.config.kitty_graphics = !self.config.kitty_graphics;
+                    self.config.graphics_protocol = self.config.graphics_protocol.next();
                     let _ = self.config.save();
                 }
             }
@@ -4911,7 +4911,6 @@ impl App {
             bar_number: self.config.bar_number,
             bar_channels: self.config.bar_channels,
             bar_channel_reverse: self.config.bar_channel_reverse,
-            kitty_graphics: self.config.kitty_graphics,
         }
     }
 
@@ -5021,11 +5020,6 @@ impl App {
 
         if self.config.bar_channel_reverse != sync.bar_channel_reverse {
             self.config.bar_channel_reverse = sync.bar_channel_reverse;
-            changed = true;
-        }
-
-        if self.config.kitty_graphics != sync.kitty_graphics {
-            self.config.kitty_graphics = sync.kitty_graphics;
             changed = true;
         }
 

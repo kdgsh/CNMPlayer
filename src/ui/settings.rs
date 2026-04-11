@@ -81,8 +81,8 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         format!(
             "{}: {}",
-            l(app, "Kitty 图形", "Kitty Graphics"),
-            on_off(app, app.config.kitty_graphics)
+            l(app, "图形协议", "Graphics"),
+            app.config.graphics_protocol.display_name()
         ),
         format!("{}...", l(app, "播放设置", "Playback Settings")),
         format!("{}...", l(app, "按键绑定", "Keybinds")),

@@ -195,7 +195,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
-    let mut kitty_overlay = MainKittyOverlay::new();
+    let mut kitty_overlay = MainKittyOverlay::new(app.config.graphics_protocol);
     let mut last_draw_at = Instant::now()
         .checked_sub(Duration::from_millis(250))
         .unwrap_or_else(Instant::now);
