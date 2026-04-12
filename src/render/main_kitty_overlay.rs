@@ -206,12 +206,12 @@ impl MainKittyOverlay {
     }
 }
 
-fn collect_cover_targets<'a>(app: &'a mut App, size: Rect) -> Vec<CoverTarget<'a>> {
+fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
     let mut targets = Vec::new();
 
     match app.page {
         Page::Home => {
-            let home_data: Vec<(HitRect, usize, &'a [u8])> = app
+            let home_data: Vec<(HitRect, usize, &[u8])> = app
                 .home_tile_hits
                 .iter()
                 .filter_map(|(hit, index)| {
@@ -721,18 +721,12 @@ fn rect_from_hit(hit: HitRect) -> Rect {
     }
 }
 
-fn hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
-}
-
 fn compute_targets_content_hash(targets: &[CoverTarget]) -> u64 {
     let mut hasher = DefaultHasher::new();
     for target in targets {
         target.slot.hash(&mut hasher);
         target.base_rect.hash(&mut hasher);
-        hash_bytes(target.bytes).hash(&mut hasher);
+        target.bytes.as_ptr().hash(&mut hasher);
     }
     hasher.finish()
 }
