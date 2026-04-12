@@ -116,7 +116,7 @@ cargo build --release
 - 运行参数：`ui_fps`、`spectrum_hz`、`mpris_poll_ms`
 - 界面：`theme`、`language`、`transparent_background`、`show_hints`、`home_more_recommend`
 - 登录标题：`default_opening_title`
-- 播放布局：`visualize`、`page_lyrics`、`album_border`、`kitty_graphics`、`kitty_cover_scale_percent`
+- 播放布局：`graphics_protocol`、`visualize`、`page_lyrics`、`album_border`、`kitty_graphics`、`kitty_cover_scale_percent`
 - Bars 模式：`super_smooth_bar`、`bars_gap`、`bar_number`、`bar_channels`、`bar_channel_reverse`
 - 播放行为：`audio_quality`、`audio_preload`、`playback_memory`、`resume_last_position`
 - 歌词与识别：`lyrics_cover_fetch`、`lyrics_cover_download`、`audio_fingerprint`、`acoustid_api_key`

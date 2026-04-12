@@ -116,7 +116,7 @@ Important settings in `config/default.toml`:
 - Runtime: `ui_fps`, `spectrum_hz`, `mpris_poll_ms`
 - Interface: `theme`, `language`, `transparent_background`, `show_hints`, `home_more_recommend`
 - Login banner: `default_opening_title`
-- Playback layout: `visualize`, `page_lyrics`, `album_border`, `kitty_graphics`, `kitty_cover_scale_percent`
+- Playback layout: `graphics_protocol`, `visualize`, `page_lyrics`, `album_border`, `kitty_graphics`, `kitty_cover_scale_percent`
 - Bars mode: `super_smooth_bar`, `bars_gap`, `bar_number`, `bar_channels`, `bar_channel_reverse`
 - Playback behavior: `audio_quality`, `audio_preload`, `playback_memory`, `resume_last_position`
 - Lyrics and recognition: `lyrics_cover_fetch`, `lyrics_cover_download`, `audio_fingerprint`, `acoustid_api_key`

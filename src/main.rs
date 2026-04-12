@@ -196,12 +196,19 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
     let mut kitty_overlay = MainKittyOverlay::new(app.config.graphics_protocol);
+    let mut active_graphics_protocol = app.config.graphics_protocol;
     let mut last_draw_at = Instant::now()
         .checked_sub(Duration::from_millis(250))
         .unwrap_or_else(Instant::now);
 
     loop {
         app.tick().await;
+
+        if app.config.graphics_protocol != active_graphics_protocol {
+            active_graphics_protocol = app.config.graphics_protocol;
+            kitty_overlay = MainKittyOverlay::new(active_graphics_protocol);
+            needs_redraw = true;
+        }
 
         if app.consume_fullscreen_launch_request() {
             let bootstrap = app.build_fullscreen_bootstrap().await;

@@ -81,7 +81,7 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         format!(
             "{}: {}",
-            l(app, "图形协议", "Graphics"),
+            l(app, "图像协议", "Image Protocol"),
             app.config.graphics_protocol.display_name()
         ),
         format!("{}...", l(app, "播放设置", "Playback Settings")),

@@ -14,44 +14,40 @@ const LEGACY_STARTUP_FOLDER_KEY_KEBAB: &str = concat!("default", "-opening", "-f
 pub enum GraphicsProtocol {
     Off,
     #[default]
-    Auto,
+    #[serde(alias = "auto")]
+    #[serde(alias = "sixel")]
+    #[serde(alias = "kitty")]
+    #[serde(alias = "iterm2")]
     Halfblocks,
-    Sixel,
-    Kitty,
-    Iterm2,
 }
 
 impl GraphicsProtocol {
+    const ALL: [Self; 2] = [Self::Off, Self::Halfblocks];
+
     pub fn to_ratatui_protocol(self) -> Option<ratatui_image::picker::ProtocolType> {
         match self {
             GraphicsProtocol::Off => None,
-            GraphicsProtocol::Auto => None,
             GraphicsProtocol::Halfblocks => Some(ratatui_image::picker::ProtocolType::Halfblocks),
-            GraphicsProtocol::Sixel => Some(ratatui_image::picker::ProtocolType::Sixel),
-            GraphicsProtocol::Kitty => Some(ratatui_image::picker::ProtocolType::Kitty),
-            GraphicsProtocol::Iterm2 => Some(ratatui_image::picker::ProtocolType::Iterm2),
         }
     }
 
-    pub fn next(self) -> Self {
-        match self {
-            GraphicsProtocol::Off => GraphicsProtocol::Auto,
-            GraphicsProtocol::Auto => GraphicsProtocol::Halfblocks,
-            GraphicsProtocol::Halfblocks => GraphicsProtocol::Sixel,
-            GraphicsProtocol::Sixel => GraphicsProtocol::Kitty,
-            GraphicsProtocol::Kitty => GraphicsProtocol::Iterm2,
-            GraphicsProtocol::Iterm2 => GraphicsProtocol::Off,
+    pub fn cycle(self, delta: i32) -> Self {
+        if delta == 0 {
+            return self;
         }
+
+        let current = match self {
+            GraphicsProtocol::Off => 0,
+            GraphicsProtocol::Halfblocks => 1,
+        };
+        let next = (current as i32 + delta).rem_euclid(Self::ALL.len() as i32) as usize;
+        Self::ALL[next]
     }
 
     pub fn display_name(self) -> &'static str {
         match self {
-            GraphicsProtocol::Off => "Off",
-            GraphicsProtocol::Auto => "Auto",
+            GraphicsProtocol::Off => "off",
             GraphicsProtocol::Halfblocks => "Halfblocks",
-            GraphicsProtocol::Sixel => "Sixel",
-            GraphicsProtocol::Kitty => "Kitty",
-            GraphicsProtocol::Iterm2 => "iTerm2",
         }
     }
 }
@@ -557,6 +553,7 @@ impl Config {
         let raw = fs::read_to_string(path)?;
         let legacy_startup_folder_key_present = raw.contains(LEGACY_STARTUP_FOLDER_KEY_KEBAB)
             || raw.contains(LEGACY_STARTUP_FOLDER_KEY);
+        let graphics_protocol_needs_save = graphics_protocol_needs_save(&raw);
         let mut cfg: Config = toml::from_str(&raw).unwrap_or_default();
 
         if cfg.ui_fps == 0 {
@@ -591,6 +588,7 @@ impl Config {
             || !raw.contains("bar_number")
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")
+            || graphics_protocol_needs_save
             || !raw.contains("keybind_search_box")
             || !raw.contains("keybind_fullscreen")
             || !raw.contains("keybind_settings")
@@ -631,5 +629,50 @@ impl Config {
 
     fn default_path() -> PathBuf {
         assets::resolve_config_path()
+    }
+}
+
+fn graphics_protocol_needs_save(raw: &str) -> bool {
+    let Some(value) = raw.lines().map(str::trim).find_map(|line| {
+        if line.starts_with('#') || !line.starts_with("graphics_protocol") {
+            return None;
+        }
+
+        let (_, value) = line.split_once('=')?;
+        let value = value.split('#').next()?.trim().trim_matches('"');
+        Some(value)
+    }) else {
+        return true;
+    };
+
+    matches!(value, "auto" | "sixel" | "kitty" | "iterm2")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GraphicsProtocol;
+    use serde::Deserialize;
+
+    #[derive(Debug, Deserialize)]
+    struct GraphicsProtocolWrapper {
+        protocol: GraphicsProtocol,
+    }
+
+    #[test]
+    fn graphics_protocol_keeps_legacy_values_loadable() {
+        let cases = [
+            ("off", GraphicsProtocol::Off),
+            ("halfblocks", GraphicsProtocol::Halfblocks),
+            ("auto", GraphicsProtocol::Halfblocks),
+            ("sixel", GraphicsProtocol::Halfblocks),
+            ("kitty", GraphicsProtocol::Halfblocks),
+            ("iterm2", GraphicsProtocol::Halfblocks),
+        ];
+
+        for (raw, expected) in cases {
+            let parsed: GraphicsProtocolWrapper =
+                toml::from_str(&format!("protocol = \"{}\"", raw)).unwrap();
+            assert_eq!(parsed.protocol, expected);
+        }
     }
 }

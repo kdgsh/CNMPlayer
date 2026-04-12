@@ -80,6 +80,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
         ])
         .split(inner);
 
+    let mut cover_line_limit = inner.height;
     let cover_block = centered_visual_square_block(cols[0]);
     if cover_block.width > 0 && cover_block.height > 0 {
         frame.render_widget(
@@ -94,6 +95,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
             vertical: 1,
         });
         if cover_area.width > 0 && cover_area.height > 0 {
+            cover_line_limit = cover_area.height;
             frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
             let cover_ascii = app
                 .playlist
@@ -107,24 +109,75 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    let info = vec![
-        Line::from(Span::styled(
-            app.playlist.title.clone(),
+    let info_area = cols[1].inner(ratatui::layout::Margin {
+        horizontal: 1,
+        vertical: 0,
+    });
+    if info_area.width == 0 || info_area.height == 0 {
+        return;
+    }
+
+    let description_line_limit =
+        intro_line_limit(&app.playlist.description, info_area.width, cover_line_limit);
+    let available_extra = info_area.height.saturating_sub(3);
+    let spacer_height = u16::from(description_line_limit > 0 && available_extra >= 2);
+    let description_height = available_extra
+        .saturating_sub(spacer_height)
+        .min(description_line_limit);
+
+    let mut cursor_y = info_area.y;
+
+    frame.render_widget(
+        Paragraph::new(app.playlist.title.as_str()).style(
             Style::default()
                 .fg(app.theme.color_text())
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            app.playlist.artist.clone(),
-            Style::default().fg(app.theme.color_subtext()),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            app.playlist.description.clone(),
-            Style::default().fg(app.theme.color_text()),
-        )),
-        Line::from(Span::styled(
-            format!(
+        ),
+        Rect {
+            x: info_area.x,
+            y: cursor_y,
+            width: info_area.width,
+            height: 1,
+        },
+    );
+    cursor_y = cursor_y.saturating_add(1);
+
+    if cursor_y < info_area.y + info_area.height {
+        frame.render_widget(
+            Paragraph::new(app.playlist.artist.as_str())
+                .style(Style::default().fg(app.theme.color_subtext())),
+            Rect {
+                x: info_area.x,
+                y: cursor_y,
+                width: info_area.width,
+                height: 1,
+            },
+        );
+        cursor_y = cursor_y.saturating_add(1);
+    }
+
+    if spacer_height > 0 && cursor_y < info_area.y + info_area.height {
+        cursor_y = cursor_y.saturating_add(1);
+    }
+
+    if description_height > 0 && cursor_y < info_area.y + info_area.height {
+        frame.render_widget(
+            Paragraph::new(app.playlist.description.as_str())
+                .style(Style::default().fg(app.theme.color_text()))
+                .wrap(Wrap { trim: true }),
+            Rect {
+                x: info_area.x,
+                y: cursor_y,
+                width: info_area.width,
+                height: description_height,
+            },
+        );
+        cursor_y = cursor_y.saturating_add(description_height);
+    }
+
+    if cursor_y < info_area.y + info_area.height {
+        frame.render_widget(
+            Paragraph::new(format!(
                 "{} {} {}",
                 match app.config.language {
                     Language::Zh => "共",
@@ -135,18 +188,16 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
                     Language::Zh => "首",
                     Language::En => "tracks",
                 }
-            ),
-            Style::default().fg(app.theme.color_subtext()),
-        )),
-    ];
-
-    frame.render_widget(
-        Paragraph::new(info).wrap(Wrap { trim: true }),
-        cols[1].inner(ratatui::layout::Margin {
-            horizontal: 1,
-            vertical: 0,
-        }),
-    );
+            ))
+            .style(Style::default().fg(app.theme.color_subtext())),
+            Rect {
+                x: info_area.x,
+                y: cursor_y,
+                width: info_area.width,
+                height: 1,
+            },
+        );
+    }
 }
 
 fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -302,6 +353,27 @@ fn surface_bg_style(app: &App) -> Style {
 
 fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
+}
+
+fn intro_line_limit(text: &str, width: u16, cover_line_limit: u16) -> u16 {
+    if width == 0 || cover_line_limit == 0 || text.trim().is_empty() {
+        return 0;
+    }
+
+    wrapped_line_count(text, width)
+        .min(20)
+        .min(usize::from(cover_line_limit)) as u16
+}
+
+fn wrapped_line_count(text: &str, width: u16) -> usize {
+    if width == 0 || text.trim().is_empty() {
+        return 0;
+    }
+
+    let max_width = usize::from(width);
+    text.split('\n')
+        .map(|line| display_width(line).max(1).div_ceil(max_width))
+        .sum()
 }
 
 fn clip_to_display_width(text: &str, max_width: usize) -> String {

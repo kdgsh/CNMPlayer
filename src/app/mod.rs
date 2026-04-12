@@ -4411,8 +4411,11 @@ impl App {
             }
             3 => {
                 if delta != 0 {
-                    self.config.graphics_protocol = self.config.graphics_protocol.next();
-                    let _ = self.config.save();
+                    let next_protocol = self.config.graphics_protocol.cycle(delta);
+                    if next_protocol != self.config.graphics_protocol {
+                        self.config.graphics_protocol = next_protocol;
+                        let _ = self.config.save();
+                    }
                 }
             }
             6 => {
