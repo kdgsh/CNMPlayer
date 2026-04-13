@@ -1182,8 +1182,8 @@ pub struct AuthorState {
     pub artist: String,
     pub description: String,
     pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
+    pub cover_bytes: Option<CoverFuture>,
+    cover_ascii: Option<AsciiFuture>,
     cover_ascii_size: (u16, u16),
     pub focused_idx: usize,
     pub columns: usize,
@@ -1205,7 +1205,7 @@ impl Default for AuthorState {
             description: "从搜索结果进入作者页后加载真实数据。".to_string(),
             cover_url: None,
             cover_bytes: None,
-            cover_ascii: String::new(),
+            cover_ascii: None,
             cover_ascii_size: (0, 0),
             focused_idx: 0,
             columns: 1,
@@ -1262,27 +1262,25 @@ impl AuthorState {
         self.clamp_scroll_row_offset();
     }
 
-    pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
-        self.cover_bytes = bytes;
-        self.cover_ascii.clear();
+    pub fn set_cover_future(&mut self, future: Option<CoverFuture>) {
+        self.cover_bytes = future;
+        self.cover_ascii = None;
         self.cover_ascii_size = (0, 0);
     }
 
     pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
+        let placeholder = move || placeholder_cover_ascii(width, height, '░');
 
         if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
+            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
+                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
+                self.cover_ascii_size = (width, height);
+            }
         }
-
-        self.cover_ascii.clone()
+        match peek_shared_future(&self.cover_ascii) {
+            Some(x) => x.clone(),
+            None => placeholder(),
+        }
     }
 
     pub fn set_tiles(&mut self, mut tiles: Vec<AuthorTile>) {
@@ -3911,19 +3909,13 @@ impl App {
 
         match self.load_author_detail(&artist_id).await {
             Ok(()) => {
-                if self.author.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.author.cover_url = fallback_cover_url;
-                            self.author.set_cover_bytes(bytes);
-                        }
+                match (&self.author.cover_bytes, fallback_cover_url) {
+                    (None, Some(url)) => {
+                        let fut = Some(make_cover_fetch_future(self.api.clone(), url.clone()));
+                        self.author.set_cover_future(fut);
+                        self.author.cover_url = Some(url);
                     }
+                    _ => (),
                 }
                 self.playlist_section_return_snapshot = None;
                 self.page = Page::Author;
@@ -6272,15 +6264,8 @@ impl App {
             tile.cover_ascii_size = (0, 0);
         }
 
-        let cover_bytes = if let Some(url) = cover_url.as_deref() {
-            self.api
-                .fetch_cover_bytes(url)
-                .await
-                .ok()
-                .filter(|content| !content.is_empty())
-        } else {
-            None
-        };
+        let url = cover_url.clone();
+        let fut = url.map(|x| make_cover_fetch_future(self.api.clone(), x));
 
         self.author.id = Some(artist_id.to_string());
         self.author.title = title;
@@ -6296,7 +6281,7 @@ impl App {
         };
         self.author.description = description;
         self.author.cover_url = cover_url;
-        self.author.set_cover_bytes(cover_bytes);
+        self.author.set_cover_future(fut);
         self.author.set_tiles(tiles);
         self.author.hot_songs = hot_songs;
         self.author.albums = albums;

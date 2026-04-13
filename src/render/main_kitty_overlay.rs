@@ -175,14 +175,14 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::PlaylistHeader,
                         base_rect: cover_rect,
-                        bytes: bytes.as_ref(),
+                        bytes,
                     });
                 }
             }
         }
         Page::Author => {
             if let Some(cover_rect) = author_header_cover_rect(app, size) {
-                if let Some(bytes) = app.author.cover_bytes.as_deref() {
+                if let Some(bytes) = peek_shared_future(&app.author.cover_bytes) {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::AuthorHeader,
                         base_rect: cover_rect,
