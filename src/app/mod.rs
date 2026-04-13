@@ -1748,7 +1748,6 @@ impl App {
         let http_client = Client::builder()
             .default_headers(headers)
             .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(12))
             .build()?;
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
