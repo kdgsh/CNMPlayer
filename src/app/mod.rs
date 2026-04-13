@@ -1123,8 +1123,8 @@ pub struct AuthorTile {
     pub title: String,
     pub subtitle: String,
     pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
+    pub cover_bytes: Option<CoverFuture>,
+    cover_ascii: Option<AsciiFuture>,
     cover_ascii_size: (u16, u16),
 }
 
@@ -1136,7 +1136,7 @@ impl AuthorTile {
             subtitle: "No content".to_string(),
             cover_url: None,
             cover_bytes: None,
-            cover_ascii: String::new(),
+            cover_ascii: None,
             cover_ascii_size: (0, 0),
         }
     }
@@ -1153,26 +1153,24 @@ impl AuthorTile {
             subtitle,
             cover_url,
             cover_bytes: None,
-            cover_ascii: String::new(),
+            cover_ascii: None,
             cover_ascii_size: (0, 0),
         }
     }
 
     pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
+        let placeholder = move || placeholder_cover_ascii(width, height, '░');
 
         if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
+            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
+                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
+                self.cover_ascii_size = (width, height);
+            }
         }
-
-        self.cover_ascii.clone()
+        match peek_shared_future(&self.cover_ascii) {
+            Some(x) => x.clone(),
+            None => placeholder(),
+        }
     }
 }
 
@@ -6250,17 +6248,9 @@ impl App {
         }
 
         for tile in &mut tiles {
-            let bytes = if let Some(url) = tile.cover_url.as_deref() {
-                self.api
-                    .fetch_cover_bytes(url)
-                    .await
-                    .ok()
-                    .filter(|content| !content.is_empty())
-            } else {
-                None
-            };
-            tile.cover_bytes = bytes;
-            tile.cover_ascii.clear();
+            let url = tile.cover_url.clone();
+            tile.cover_bytes = url.map(|x| make_cover_fetch_future(self.api.clone(), x));
+            tile.cover_ascii = None;
             tile.cover_ascii_size = (0, 0);
         }
 

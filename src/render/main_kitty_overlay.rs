@@ -9,6 +9,7 @@ use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 const CELL_W_PX: u32 = 8;
 const CELL_H_PX: u32 = 16;
@@ -147,13 +148,13 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
 
     match app.page {
         Page::Home => {
-            let home_data: Vec<(HitRect, usize, &[u8])> = app
+            let home_data: Vec<(HitRect, usize, &Arc<_>)> = app
                 .home_tile_hits
                 .iter()
                 .filter_map(|(hit, index)| {
                     let tile = app.home.tiles.get(*index)?;
                     let bytes = peek_shared_future(&tile.cover_bytes)?;
-                    Some((*hit, *index, &bytes[..]))
+                    Some((*hit, *index, bytes))
                 })
                 .collect();
             for (hit, index, bytes) in home_data {
@@ -191,22 +192,23 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
                 }
             }
 
-            for (hit, index) in &app.author_tile_hits {
-                let Some(tile) = app.author.tiles.get(*index) else {
-                    continue;
-                };
-                let Some(bytes) = tile.cover_bytes.as_deref() else {
-                    continue;
-                };
-
-                let tile_rect = rect_from_hit(*hit);
+            let author_data: Vec<(HitRect, usize, &Arc<_>)> = app
+                .author_tile_hits
+                .iter()
+                .filter_map(|(hit, index)| {
+                    let tile = app.author.tiles.get(*index)?;
+                    let bytes = peek_shared_future(&tile.cover_bytes)?;
+                    Some((*hit, *index, bytes))
+                })
+                .collect();
+            for (hit, index, bytes) in author_data {
+                let tile_rect = rect_from_hit(hit);
                 let cover_rect = tile_cover_rect(tile_rect);
                 if cover_rect.width == 0 || cover_rect.height == 0 {
                     continue;
                 }
-
                 targets.push(CoverTarget {
-                    slot: CoverSlotKey::AuthorTile(*index),
+                    slot: CoverSlotKey::AuthorTile(index),
                     base_rect: cover_rect,
                     bytes,
                 });
