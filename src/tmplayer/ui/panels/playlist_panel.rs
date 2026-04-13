@@ -1,3 +1,4 @@
+use crate::data::config::GraphicsProtocol;
 use crate::tmplayer::app::state::AppState;
 use crate::tmplayer::app::state::{LocalFolderKind, Overlay, PlayMode};
 use crate::tmplayer::render::cover_cache::CoverKey;
@@ -137,8 +138,7 @@ fn render_album_cover(f: &mut Frame, area: Rect, app: &mut AppState) {
         && app.playlist_slide_x == 0
         && app.playlist_slide_target_x == 0;
 
-    let kitty_enabled = app.config.kitty_graphics
-        && app.kitty_graphics_supported
+    let kitty_enabled = app.config.graphics_protocol != GraphicsProtocol::Off
         && app.local_view_album_cover.is_some();
 
     if kitty_enabled {

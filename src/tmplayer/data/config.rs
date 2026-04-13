@@ -1,3 +1,4 @@
+use crate::data::config::GraphicsProtocol;
 use crate::tmplayer::data::assets;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,7 @@ pub struct Config {
     pub album_border: bool,
 
     #[serde(default)]
-    pub kitty_graphics: bool,
+    pub graphics_protocol: GraphicsProtocol,
 
     #[serde(default)]
     pub page_lyrics: bool,
@@ -359,7 +360,7 @@ impl Default for Config {
             eq_bands_db: default_eq_bands_db(),
             transparent_background: false,
             album_border: default_album_border(),
-            kitty_graphics: false,
+            graphics_protocol: GraphicsProtocol::default(),
             page_lyrics: false,
             kitty_cover_scale_percent: default_kitty_cover_scale_percent(),
             super_smooth_bar: false,

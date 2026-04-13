@@ -252,8 +252,6 @@ pub struct AppState {
     pub theme: Theme,
     pub language: Language,
 
-    pub kitty_graphics_supported: bool,
-
     pub player: PlayerState,
     pub api_tracks: Vec<TrackMetadata>,
     pub playlist: Playlist,
@@ -383,7 +381,6 @@ impl AppState {
             config,
             theme,
             language,
-            kitty_graphics_supported: crate::tmplayer::utils::kitty::kitty_graphics_supported(),
             player: PlayerState::default(),
             api_tracks: Vec::new(),
             playlist: Playlist::default(),

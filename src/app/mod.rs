@@ -4891,6 +4891,7 @@ impl App {
             transparent_background: self.config.transparent_background,
             album_border: self.config.album_border,
             language: self.config.language,
+            graphics_protocol: self.config.graphics_protocol,
             page_lyrics: self.config.page_lyrics,
             audio_quality: self.config.audio_quality,
             eq_bands_db: self.config.eq_bands_db,
@@ -4932,6 +4933,11 @@ impl App {
 
         if self.config.language != sync.language {
             self.config.language = sync.language;
+            changed = true;
+        }
+
+        if self.config.graphics_protocol != sync.graphics_protocol {
+            self.config.graphics_protocol = sync.graphics_protocol;
             changed = true;
         }
 

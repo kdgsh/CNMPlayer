@@ -381,7 +381,7 @@ fn tile_cover_rect(tile_rect: Rect) -> Rect {
     Rect {
         x: inner_rect.x,
         y: inner_rect.y,
-        width: inner_rect.width,
+        width: inner_rect.width + 2,
         height: cover_height,
     }
 }
@@ -451,7 +451,7 @@ fn search_box_area(size: Rect, anim_h: u16) -> Option<Rect> {
     })
 }
 
-fn visible_segments_after_occluders(base: Rect, occluders: &[Rect]) -> Vec<Rect> {
+pub fn visible_segments_after_occluders(base: Rect, occluders: &[Rect]) -> Vec<Rect> {
     let mut segments = vec![base];
 
     for occluder in occluders {
@@ -546,7 +546,7 @@ fn subtract_rect_segments(base: Rect, cut: Rect) -> Vec<Rect> {
         .collect()
 }
 
-fn map_segment_to_cover_crop(
+pub fn map_segment_to_cover_crop(
     base: Rect,
     segment: Rect,
     image_w: u32,

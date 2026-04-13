@@ -145,6 +145,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         transparent_background: app.config.transparent_background,
         album_border: app.config.album_border,
         language: app.language,
+        graphics_protocol: app.config.graphics_protocol,
         page_lyrics: app.config.page_lyrics,
         audio_quality: match app.config.audio_quality {
             AudioQuality::Standard => crate::data::config::AudioQuality::Standard,
@@ -1943,8 +1944,8 @@ async fn apply_settings_delta(
         }
         // Kitty graphics
         3 => {
-            if delta != 0 && app.kitty_graphics_supported {
-                app.config.kitty_graphics = !app.config.kitty_graphics;
+            if delta != 0 {
+                app.config.graphics_protocol = app.config.graphics_protocol.cycle(delta);
                 save_and_sync_host_config(app, host_bridge).await;
             }
         }
