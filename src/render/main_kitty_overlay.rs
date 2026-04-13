@@ -1,7 +1,7 @@
 use crate::app::peek_shared_future;
 use crate::app::{App, HitRect, Overlay, Page};
 use crate::data::config::GraphicsProtocol;
-use image::{GenericImage, RgbImage};
+use image::{DynamicImage, GenericImageView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
@@ -39,10 +39,10 @@ pub struct MainKittyOverlay {
     picker: Picker,
     last_term_size: Option<(u16, u16)>,
     last_content_hash: Option<u64>,
-    playlist_header_image: Option<RgbImage>,
-    author_header_image: Option<RgbImage>,
-    home_tile_images: HashMap<usize, RgbImage>,
-    author_tile_images: HashMap<usize, RgbImage>,
+    playlist_header_image: Option<DynamicImage>,
+    author_header_image: Option<DynamicImage>,
+    home_tile_images: HashMap<usize, DynamicImage>,
+    author_tile_images: HashMap<usize, DynamicImage>,
     segment_protocols: HashMap<SegmentKey, StatefulProtocol>,
 }
 
@@ -122,7 +122,7 @@ impl MainKittyOverlay {
                 CoverSlotKey::PlaylistHeader => {
                     if self.playlist_header_image.is_none() {
                         if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.playlist_header_image = Some(dyn_img.to_rgb8());
+                            self.playlist_header_image = Some(dyn_img);
                         }
                     }
                     match &self.playlist_header_image {
@@ -133,7 +133,7 @@ impl MainKittyOverlay {
                 CoverSlotKey::AuthorHeader => {
                     if self.author_header_image.is_none() {
                         if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.author_header_image = Some(dyn_img.to_rgb8());
+                            self.author_header_image = Some(dyn_img);
                         }
                     }
                     match &self.author_header_image {
@@ -144,7 +144,7 @@ impl MainKittyOverlay {
                 CoverSlotKey::HomeTile(index) => {
                     if !self.home_tile_images.contains_key(&index) {
                         if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.home_tile_images.insert(index, dyn_img.to_rgb8());
+                            self.home_tile_images.insert(index, dyn_img);
                         }
                     }
                     match self.home_tile_images.get(&index) {
@@ -155,7 +155,7 @@ impl MainKittyOverlay {
                 CoverSlotKey::AuthorTile(index) => {
                     if !self.author_tile_images.contains_key(&index) {
                         if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.author_tile_images.insert(index, dyn_img.to_rgb8());
+                            self.author_tile_images.insert(index, dyn_img);
                         }
                     }
                     match self.author_tile_images.get(&index) {
@@ -181,10 +181,8 @@ impl MainKittyOverlay {
                     else {
                         continue;
                     };
-                    let cropped = img.clone().sub_image(src_x, src_y, src_w, src_h).to_image();
-                    let proto = self
-                        .picker
-                        .new_resize_protocol(image::DynamicImage::ImageRgb8(cropped));
+                    let cropped = img.crop_imm(src_x, src_y, src_w, src_h);
+                    let proto = self.picker.new_resize_protocol(cropped);
                     self.segment_protocols.insert(segment_key.clone(), proto);
                 }
 
