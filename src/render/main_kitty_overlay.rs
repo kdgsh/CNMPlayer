@@ -1,10 +1,11 @@
 use crate::app::peek_shared_future;
 use crate::app::{App, HitRect, Overlay, Page};
 use crate::data::config::GraphicsProtocol;
-use image::{DynamicImage, GenericImageView};
+use image::GenericImageView;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -39,10 +40,6 @@ pub struct MainKittyOverlay {
     picker: Picker,
     last_term_size: Option<(u16, u16)>,
     last_content_hash: Option<u64>,
-    playlist_header_image: Option<DynamicImage>,
-    author_header_image: Option<DynamicImage>,
-    home_tile_images: HashMap<usize, DynamicImage>,
-    author_tile_images: HashMap<usize, DynamicImage>,
     segment_protocols: HashMap<SegmentKey, StatefulProtocol>,
 }
 
@@ -56,10 +53,6 @@ impl MainKittyOverlay {
             picker,
             last_term_size: None,
             last_content_hash: None,
-            playlist_header_image: None,
-            author_header_image: None,
-            home_tile_images: HashMap::new(),
-            author_tile_images: HashMap::new(),
             segment_protocols: HashMap::new(),
         }
     }
@@ -67,10 +60,6 @@ impl MainKittyOverlay {
     pub fn on_terminal_reset(&mut self) {
         self.last_term_size = None;
         self.last_content_hash = None;
-        self.playlist_header_image = None;
-        self.author_header_image = None;
-        self.home_tile_images.clear();
-        self.author_tile_images.clear();
         self.segment_protocols.clear();
     }
 
@@ -85,10 +74,6 @@ impl MainKittyOverlay {
 
         if self.last_term_size != Some(current_size) {
             self.last_term_size = Some(current_size);
-            self.playlist_header_image = None;
-            self.author_header_image = None;
-            self.home_tile_images.clear();
-            self.author_tile_images.clear();
             self.segment_protocols.clear();
         }
 
@@ -98,18 +83,12 @@ impl MainKittyOverlay {
         let content_hash = compute_targets_content_hash(&targets);
         if self.last_content_hash != Some(content_hash) {
             self.last_content_hash = Some(content_hash);
-            self.playlist_header_image = None;
-            self.author_header_image = None;
-            self.home_tile_images.clear();
-            self.author_tile_images.clear();
             self.segment_protocols.clear();
         }
 
         for target in targets {
-            if target.base_rect.width == 0
-                || target.base_rect.height == 0
-                || target.bytes.is_empty()
-            {
+            let (w, h) = (target.base_rect.width, target.base_rect.height);
+            if w == 0 || h == 0 || target.bytes.is_empty() {
                 continue;
             }
 
@@ -118,53 +97,13 @@ impl MainKittyOverlay {
                 continue;
             }
 
-            let img = match target.slot {
-                CoverSlotKey::PlaylistHeader => {
-                    if self.playlist_header_image.is_none() {
-                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.playlist_header_image = Some(dyn_img);
-                        }
-                    }
-                    match &self.playlist_header_image {
-                        Some(img) => img,
-                        None => continue,
-                    }
-                }
-                CoverSlotKey::AuthorHeader => {
-                    if self.author_header_image.is_none() {
-                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.author_header_image = Some(dyn_img);
-                        }
-                    }
-                    match &self.author_header_image {
-                        Some(img) => img,
-                        None => continue,
-                    }
-                }
-                CoverSlotKey::HomeTile(index) => {
-                    if !self.home_tile_images.contains_key(&index) {
-                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.home_tile_images.insert(index, dyn_img);
-                        }
-                    }
-                    match self.home_tile_images.get(&index) {
-                        Some(img) => img,
-                        None => continue,
-                    }
-                }
-                CoverSlotKey::AuthorTile(index) => {
-                    if !self.author_tile_images.contains_key(&index) {
-                        if let Ok(dyn_img) = image::load_from_memory(target.bytes) {
-                            self.author_tile_images.insert(index, dyn_img);
-                        }
-                    }
-                    match self.author_tile_images.get(&index) {
-                        Some(img) => img,
-                        None => continue,
-                    }
-                }
+            let img_fn = || match target.slot {
+                CoverSlotKey::PlaylistHeader => image::load_from_memory(target.bytes),
+                CoverSlotKey::AuthorHeader => image::load_from_memory(target.bytes),
+                CoverSlotKey::HomeTile(_) => image::load_from_memory(target.bytes),
+                CoverSlotKey::AuthorTile(_) => image::load_from_memory(target.bytes),
             };
-            let (img_w, img_h) = img.dimensions();
+            let img = LazyCell::new(img_fn);
 
             for segment in segments {
                 let segment_key = SegmentKey {
@@ -176,9 +115,12 @@ impl MainKittyOverlay {
                 };
 
                 if !self.segment_protocols.contains_key(&segment_key) {
-                    let Some((src_x, src_y, src_w, src_h)) =
-                        map_segment_to_cover_crop(target.base_rect, segment, img_w, img_h)
-                    else {
+                    let Ok(img) = &*img else {
+                        break;
+                    };
+                    let (img_w, img_h) = img.dimensions();
+                    let rect = map_segment_to_cover_crop(target.base_rect, segment, img_w, img_h);
+                    let Some((src_x, src_y, src_w, src_h)) = rect else {
                         continue;
                     };
                     let cropped = img.crop_imm(src_x, src_y, src_w, src_h);
@@ -186,8 +128,8 @@ impl MainKittyOverlay {
                     self.segment_protocols.insert(segment_key.clone(), proto);
                 }
 
-                if let Some(ref mut proto) = self.segment_protocols.get_mut(&segment_key) {
-                    let widget = StatefulImage::<StatefulProtocol>::default();
+                if let Some(proto) = self.segment_protocols.get_mut(&segment_key) {
+                    let widget = StatefulImage::default();
                     frame.render_stateful_widget(widget, segment, proto);
                 }
             }
@@ -196,10 +138,6 @@ impl MainKittyOverlay {
 
     fn clear_all(&mut self) {
         self.last_content_hash = None;
-        self.playlist_header_image = None;
-        self.author_header_image = None;
-        self.home_tile_images.clear();
-        self.author_tile_images.clear();
         self.segment_protocols.clear();
     }
 }
