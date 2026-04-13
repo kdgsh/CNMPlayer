@@ -32,7 +32,7 @@ chromaprint = "0.2"
 # 标准 较高 极高 mp3
 # 无损 Hi-Res 高清环绕声 flac !VIP
 # 沉浸环绕声 杜比全景声 超清母带 flac !SVIP
-symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "opt-simd"] }
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2.0"
