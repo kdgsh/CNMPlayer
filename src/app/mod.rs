@@ -17,10 +17,10 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use futures::{FutureExt, future::Shared};
+use image::DynamicImage;
 use ncm_api::ApiResponse;
 use reqwest::{Client, header};
 use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
@@ -232,7 +232,7 @@ impl LoginState {
 }
 
 type SharedFuture<T> = Shared<Pin<Box<dyn Future<Output = Option<T>> + Send>>>;
-type CoverFuture = SharedFuture<Arc<Vec<u8>>>;
+type CoverFuture = SharedFuture<Arc<DynamicImage>>;
 type AsciiFuture = SharedFuture<String>;
 
 fn shot_and_share<F>(fut: F) -> Shared<F>
@@ -249,9 +249,9 @@ pub fn peek_shared_future<T>(cover_bytes: &Option<SharedFuture<T>>) -> Option<&T
     cover_bytes.as_ref()?.peek()?.as_ref()
 }
 
-fn make_ascii_future(bytes: Arc<Vec<u8>>, width: u16, height: u16) -> AsciiFuture {
+fn make_ascii_future(bytes: Arc<DynamicImage>, width: u16, height: u16) -> AsciiFuture {
     let fut = Box::pin(async move {
-        let hnd = task::spawn_blocking(move || render_cover_ascii(&bytes, width, height));
+        let hnd = task::spawn_blocking(move || render_cover_ascii(bytes, width, height));
         hnd.await.ok().flatten()
     });
     shot_and_share(fut)
@@ -262,7 +262,7 @@ pub struct HomeTile {
     pub title: String,
     pub subtitle: String,
     pub cover_url: Option<String>,
-    pub cover_bytes: Option<CoverFuture>,
+    pub cover_image: Option<CoverFuture>,
     cover_ascii: Option<AsciiFuture>,
     cover_ascii_size: (u16, u16),
 }
@@ -275,7 +275,7 @@ impl HomeTile {
             subtitle: String::new(),
             cover_url: None,
             cover_ascii_size: (0, 0),
-            cover_bytes: None,
+            cover_image: None,
             cover_ascii: None,
         }
     }
@@ -292,7 +292,7 @@ impl HomeTile {
             subtitle,
             cover_url,
             cover_ascii_size: (0, 0),
-            cover_bytes: None,
+            cover_image: None,
             cover_ascii: None,
         }
     }
@@ -301,7 +301,7 @@ impl HomeTile {
         let placeholder = move || placeholder_cover_ascii(width, height, '░');
 
         if self.cover_ascii_size != (width, height) {
-            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
+            if let Some(bytes) = peek_shared_future(&self.cover_image) {
                 self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
                 self.cover_ascii_size = (width, height);
             }
@@ -314,13 +314,15 @@ impl HomeTile {
 }
 
 fn make_cover_fetch_future(api: ApiState, url: String) -> CoverFuture {
-    let fut = Box::pin(async move {
-        api.fetch_cover_bytes(&url)
-            .await
-            .ok()
-            .filter(|bytes| !bytes.is_empty())
-            .map(Arc::new)
-    });
+    let fut = async move {
+        let bytes = api.fetch_cover_bytes(&url).await.ok();
+        let flatten = bytes.filter(|x| !x.is_empty());
+        let image = flatten.and_then(|x| image::load_from_memory(&x).ok());
+
+        // Downsampling to 500px to save memory.
+        image.map(|x| x.thumbnail(500, 500)).map(Arc::new)
+    };
+    let fut = Box::pin(fut);
     shot_and_share(fut)
 }
 
@@ -5037,15 +5039,13 @@ impl App {
             return bootstrap;
         }
 
-        let mut playlist_cover =
-            peek_shared_future(&self.playlist.cover_bytes).map(|x| Cow::Borrowed(x.as_slice()));
+        // peek_shared_future(&self.playlist.cover_bytes).map(|x| Cow::Borrowed(x.as_slice()));
+        // Todo: fixme
+        let mut playlist_cover = None;
 
         if playlist_cover.is_none() {
             if let Some(cover_url) = self.playlist.cover_url.clone() {
-                playlist_cover = self
-                    .fetch_cover_with_disk_cache(&cover_url)
-                    .await
-                    .map(Cow::Owned);
+                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await
             }
         }
 
@@ -5203,14 +5203,11 @@ impl App {
                     .or_else(|| self.now_playing.clone());
 
                 if let Some(first_track) = first_track {
-                    playlist_cover = first_track.cover.clone().map(Cow::Owned);
+                    playlist_cover = first_track.cover.clone();
 
                     if playlist_cover.is_none() {
                         if let Some(cover_url) = first_track.cover_url.as_deref() {
-                            playlist_cover = self
-                                .fetch_cover_with_disk_cache(cover_url)
-                                .await
-                                .map(Cow::Owned);
+                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url).await
                         }
                     }
 
@@ -5225,10 +5222,8 @@ impl App {
                                 if let Some(cover_url) =
                                     song.pointer("/al/picUrl").and_then(|value| value.as_str())
                                 {
-                                    playlist_cover = self
-                                        .fetch_cover_with_disk_cache(cover_url)
-                                        .await
-                                        .map(Cow::Owned);
+                                    playlist_cover =
+                                        self.fetch_cover_with_disk_cache(cover_url).await
                                 }
                             }
                         }
@@ -5236,7 +5231,7 @@ impl App {
                 }
             }
 
-            bootstrap.playlist_cover = playlist_cover.map(|x| x.into_owned());
+            bootstrap.playlist_cover = playlist_cover;
             bootstrap.current_track = Some(seed);
         }
 
@@ -5666,7 +5661,7 @@ impl App {
                         .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
                     {
                         daily_tile.cover_url = Some(cover_url.clone());
-                        daily_tile.cover_bytes =
+                        daily_tile.cover_image =
                             Some(make_cover_fetch_future(self.api.clone(), cover_url.clone()));
                     }
                 }
@@ -5707,9 +5702,9 @@ impl App {
                 }
             }
 
-            if tile.cover_bytes.is_none() {
+            if tile.cover_image.is_none() {
                 if let Some(url) = tile.cover_url.clone() {
-                    tile.cover_bytes = Some(make_cover_fetch_future(self.api.clone(), url));
+                    tile.cover_image = Some(make_cover_fetch_future(self.api.clone(), url));
                 }
             }
 

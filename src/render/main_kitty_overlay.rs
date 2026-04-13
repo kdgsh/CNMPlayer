@@ -1,11 +1,10 @@
 use crate::app::peek_shared_future;
 use crate::app::{App, HitRect, Overlay, Page};
 use crate::data::config::GraphicsProtocol;
-use image::GenericImageView;
+use image::{DynamicImage, GenericImageView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
-use std::cell::LazyCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -25,7 +24,7 @@ enum CoverSlotKey {
 struct CoverTarget<'a> {
     slot: CoverSlotKey,
     base_rect: Rect,
-    bytes: &'a [u8],
+    image: &'a DynamicImage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -89,7 +88,7 @@ impl MainKittyOverlay {
 
         for target in targets {
             let (w, h) = (target.base_rect.width, target.base_rect.height);
-            if w == 0 || h == 0 || target.bytes.is_empty() {
+            if w == 0 || h == 0 {
                 continue;
             }
 
@@ -97,14 +96,6 @@ impl MainKittyOverlay {
             if segments.is_empty() {
                 continue;
             }
-
-            let img_fn = || match target.slot {
-                CoverSlotKey::PlaylistHeader => image::load_from_memory(target.bytes),
-                CoverSlotKey::AuthorHeader => image::load_from_memory(target.bytes),
-                CoverSlotKey::HomeTile(_) => image::load_from_memory(target.bytes),
-                CoverSlotKey::AuthorTile(_) => image::load_from_memory(target.bytes),
-            };
-            let img = LazyCell::new(img_fn);
 
             for segment in segments {
                 let segment_key = SegmentKey {
@@ -116,9 +107,7 @@ impl MainKittyOverlay {
                 };
 
                 if !self.segment_protocols.contains_key(&segment_key) {
-                    let Ok(img) = &*img else {
-                        break;
-                    };
+                    let img = target.image;
                     let (img_w, img_h) = img.dimensions();
                     let rect = map_segment_to_cover_crop(target.base_rect, segment, img_w, img_h);
                     let Some((src_x, src_y, src_w, src_h)) = rect else {
@@ -153,11 +142,11 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
                 .iter()
                 .filter_map(|(hit, index)| {
                     let tile = app.home.tiles.get(*index)?;
-                    let bytes = peek_shared_future(&tile.cover_bytes)?;
-                    Some((*hit, *index, bytes))
+                    let image = peek_shared_future(&tile.cover_image)?;
+                    Some((*hit, *index, image))
                 })
                 .collect();
-            for (hit, index, bytes) in home_data {
+            for (hit, index, image) in home_data {
                 let tile_rect = rect_from_hit(hit);
                 let cover_rect = tile_cover_rect(tile_rect);
                 if cover_rect.width == 0 || cover_rect.height == 0 {
@@ -166,28 +155,28 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
                 targets.push(CoverTarget {
                     slot: CoverSlotKey::HomeTile(index),
                     base_rect: cover_rect,
-                    bytes,
+                    image,
                 });
             }
         }
         Page::Playlist => {
             if let Some(cover_rect) = playlist_header_cover_rect(app, size) {
-                if let Some(bytes) = peek_shared_future(&app.playlist.cover_bytes) {
+                if let Some(image) = peek_shared_future(&app.playlist.cover_bytes) {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::PlaylistHeader,
                         base_rect: cover_rect,
-                        bytes,
+                        image,
                     });
                 }
             }
         }
         Page::Author => {
             if let Some(cover_rect) = author_header_cover_rect(app, size) {
-                if let Some(bytes) = peek_shared_future(&app.author.cover_bytes) {
+                if let Some(image) = peek_shared_future(&app.author.cover_bytes) {
                     targets.push(CoverTarget {
                         slot: CoverSlotKey::AuthorHeader,
                         base_rect: cover_rect,
-                        bytes,
+                        image,
                     });
                 }
             }
@@ -201,7 +190,7 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
                     Some((*hit, *index, bytes))
                 })
                 .collect();
-            for (hit, index, bytes) in author_data {
+            for (hit, index, image) in author_data {
                 let tile_rect = rect_from_hit(hit);
                 let cover_rect = tile_cover_rect(tile_rect);
                 if cover_rect.width == 0 || cover_rect.height == 0 {
@@ -210,7 +199,7 @@ fn collect_cover_targets(app: &mut App, size: Rect) -> Vec<CoverTarget<'_>> {
                 targets.push(CoverTarget {
                     slot: CoverSlotKey::AuthorTile(index),
                     base_rect: cover_rect,
-                    bytes,
+                    image,
                 });
             }
         }
@@ -664,7 +653,7 @@ fn compute_targets_content_hash(targets: &[CoverTarget]) -> u64 {
     for target in targets {
         target.slot.hash(&mut hasher);
         target.base_rect.hash(&mut hasher);
-        target.bytes.as_ptr().hash(&mut hasher);
+        (target.image as *const DynamicImage).hash(&mut hasher);
     }
     hasher.finish()
 }
