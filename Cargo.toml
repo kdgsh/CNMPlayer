@@ -23,12 +23,16 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 unicode-width = "0.2"
-rodio = "0.22"
-symphonia = { version = "0.5", features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "wav", "vorbis"] }
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia"] }
 lofty = "0.24"
 base64 = "0.22"
 ureq = { version = "3", features = ["json"] }
 chromaprint = "0.2"
+
+# 标准 较高 极高 mp3
+# 无损 Hi-Res 高清环绕声 flac !VIP
+# 沉浸环绕声 杜比全景声 超清母带 flac !SVIP
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "opt-simd"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris = "2.0"
