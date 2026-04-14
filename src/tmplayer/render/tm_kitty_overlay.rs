@@ -2,7 +2,9 @@ use image::{DynamicImage, GenericImageView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
-use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::{cell::LazyCell, collections::HashMap};
 
 use crate::{
     data::config::GraphicsProtocol,
@@ -29,8 +31,6 @@ pub struct TmKittyOverlay {
     picker: Picker,
     last_term_size: Option<(u16, u16)>,
     last_content_hash: Option<u64>,
-    info_cover_image: Option<DynamicImage>,
-    playlist_cover_image: Option<DynamicImage>,
     segment_protocols: HashMap<SegmentKey, StatefulProtocol>,
 }
 
@@ -44,8 +44,6 @@ impl TmKittyOverlay {
             picker,
             last_term_size: None,
             last_content_hash: None,
-            info_cover_image: None,
-            playlist_cover_image: None,
             segment_protocols: HashMap::new(),
         }
     }
@@ -54,8 +52,8 @@ impl TmKittyOverlay {
         &mut self,
         app: &AppState,
         frame: &mut Frame<'_>,
-        info_cover_bytes: Option<&[u8]>,
-        playlist_cover_bytes: Option<&[u8]>,
+        info_cover: Option<&[u8]>,
+        playlist_cover: Option<&[u8]>,
         info_rect: Option<Rect>,
         playlist_rect: Option<Rect>,
         modal_area: Option<Rect>,
@@ -73,41 +71,21 @@ impl TmKittyOverlay {
             self.clear_all();
         }
 
-        let content_hash = compute_content_hash(
-            info_cover_bytes,
-            playlist_cover_bytes,
-            info_rect,
-            playlist_rect,
-        );
+        let content_hash =
+            compute_content_hash(info_cover, playlist_cover, info_rect, playlist_rect);
 
         if self.last_content_hash != Some(content_hash) {
             self.last_content_hash = Some(content_hash);
             self.clear_all();
         }
 
-        if let Some(bytes) = info_cover_bytes {
-            if self.info_cover_image.is_none() {
-                if let Ok(img) = image::load_from_memory(bytes) {
-                    self.info_cover_image = Some(img);
-                }
-            }
-        } else {
-            self.info_cover_image = None;
-        }
+        let info_image_fn = || info_cover.and_then(|x| image::load_from_memory(x).ok());
+        let playlist_image_fn = || playlist_cover.and_then(|x| image::load_from_memory(x).ok());
 
-        if let Some(bytes) = playlist_cover_bytes {
-            if self.playlist_cover_image.is_none() {
-                if let Ok(img) = image::load_from_memory(bytes) {
-                    self.playlist_cover_image = Some(img);
-                }
-            }
-        } else {
-            self.playlist_cover_image = None;
-        }
-
-        let mut paint = |rect: Rect, slot: TmCoverSlot, img: &DynamicImage| {
+        let mut paint = |rect: Rect, slot: TmCoverSlot, img: &dyn Fn() -> Option<DynamicImage>| {
             let occluders: Vec<Rect> = modal_area.into_iter().collect();
             let segments = visible_segments_after_occluders(rect, &occluders);
+            let img = LazyCell::new(img);
 
             for segment in segments {
                 let segment_key = SegmentKey {
@@ -118,22 +96,16 @@ impl TmKittyOverlay {
                     height: segment.height,
                 };
 
-                if !self.segment_protocols.contains_key(&segment_key) {
+                let need_init = !self.segment_protocols.contains_key(&segment_key);
+                if need_init && let Some(img) = &*img {
                     let (img_w, img_h) = img.dimensions();
-                    let Some((crop_x, crop_y, crop_w, crop_h)) =
-                        map_segment_to_cover_crop(rect, segment, img_w, img_h)
-                    else {
+                    let crop = map_segment_to_cover_crop(rect, segment, img_w, img_h);
+                    let Some((crop_x, crop_y, crop_w, crop_h)) = crop else {
                         continue;
                     };
-                    let cropped = image::DynamicImage::ImageRgba8(img.to_rgba8())
-                        .crop_imm(crop_x, crop_y, crop_w, crop_h);
+                    let cropped = img.crop_imm(crop_x, crop_y, crop_w, crop_h);
                     let proto = self.picker.new_resize_protocol(cropped);
                     self.segment_protocols.insert(segment_key.clone(), proto);
-                }
-
-                if let Some(proto) = self.segment_protocols.get_mut(&segment_key) {
-                    let widget = StatefulImage::default();
-                    frame.render_stateful_widget(widget, segment, proto);
                 }
 
                 if let Some(proto) = self.segment_protocols.get_mut(&segment_key) {
@@ -143,22 +115,16 @@ impl TmKittyOverlay {
             }
         };
 
-        if let Some(img) = &self.info_cover_image {
-            if let Some(rect) = info_rect {
-                paint(rect, TmCoverSlot::InfoCover, img);
-            }
+        if let Some(rect) = info_rect {
+            paint(rect, TmCoverSlot::InfoCover, &info_image_fn);
         }
 
-        if let Some(img) = &self.playlist_cover_image {
-            if let Some(rect) = playlist_rect {
-                paint(rect, TmCoverSlot::PlaylistCover, img);
-            }
+        if let Some(rect) = playlist_rect {
+            paint(rect, TmCoverSlot::PlaylistCover, &playlist_image_fn);
         }
     }
 
     fn clear_all(&mut self) {
-        self.info_cover_image = None;
-        self.playlist_cover_image = None;
         self.segment_protocols.clear();
     }
 }
@@ -169,20 +135,10 @@ fn compute_content_hash(
     info_rect: Option<Rect>,
     playlist_rect: Option<Rect>,
 ) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
     let mut hasher = DefaultHasher::new();
-    if let Some(bytes) = info {
-        bytes.as_ptr().hash(&mut hasher);
-    }
-    if let Some(bytes) = playlist {
-        bytes.as_ptr().hash(&mut hasher);
-    }
-    if let Some(r) = info_rect {
-        (r.x, r.y, r.width, r.height).hash(&mut hasher);
-    }
-    if let Some(r) = playlist_rect {
-        (r.x, r.y, r.width, r.height).hash(&mut hasher);
-    }
+    info.map(|x| x.as_ptr()).hash(&mut hasher);
+    playlist.map(|x| x.as_ptr()).hash(&mut hasher);
+    info_rect.hash(&mut hasher);
+    playlist_rect.hash(&mut hasher);
     hasher.finish()
 }

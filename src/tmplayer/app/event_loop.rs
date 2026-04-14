@@ -551,7 +551,7 @@ pub async fn run(
     mut host_bridge: Option<&mut impl HostPlaybackBridge>,
 ) -> Result<crate::tmplayer::FullscreenExit> {
     enable_raw_mode()?;
-    let mut tui = Tui::new()?;
+    let mut tui = Tui::new(app)?;
     tui.enter()?;
 
     let mut mode_manager = ModeManager::new();
