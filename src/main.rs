@@ -195,7 +195,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
-    let mut kitty_overlay = GraphicsOverlay::new(app.config.graphics_protocol);
+    let mut graphics_overlay = GraphicsOverlay::new(app.config.graphics_protocol);
     let mut active_graphics_protocol = app.config.graphics_protocol;
     let mut last_draw_at = Instant::now()
         .checked_sub(Duration::from_millis(250))
@@ -206,14 +206,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 
         if app.config.graphics_protocol != active_graphics_protocol {
             active_graphics_protocol = app.config.graphics_protocol;
-            kitty_overlay = GraphicsOverlay::new(active_graphics_protocol);
+            graphics_overlay = GraphicsOverlay::new(active_graphics_protocol);
             needs_redraw = true;
         }
 
         if app.consume_fullscreen_launch_request() {
             let bootstrap = app.build_fullscreen_bootstrap().await;
             launch_tmplayer_fullscreen(terminal, app, bootstrap).await?;
-            kitty_overlay.on_terminal_reset();
+            graphics_overlay.on_terminal_reset();
             needs_redraw = true;
             continue;
         }
@@ -229,7 +229,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         if needs_redraw || last_draw_at.elapsed() >= frame_dt {
             terminal.draw(|frame| {
                 ui::draw(frame, app);
-                kitty_overlay.paint(app, frame);
+                graphics_overlay.paint(app, frame);
             })?;
             last_draw_at = Instant::now();
             needs_redraw = false;
@@ -257,7 +257,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                 }
                 Event::Resize(_, _) => {
                     // Resize can invalidate kitty image placements/cache; force re-transmit.
-                    kitty_overlay.on_terminal_reset();
+                    graphics_overlay.on_terminal_reset();
                     needs_redraw = true;
                 }
                 _ => {}

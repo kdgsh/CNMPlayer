@@ -1,5 +1,5 @@
 use crate::tmplayer::app::state::{AppState, Overlay};
-use crate::tmplayer::render::tm_kitty_overlay::TmKittyOverlay;
+use crate::tmplayer::render::graphics_overlay::GraphicsOverlay;
 use crate::tmplayer::ui::components::control_buttons;
 use crate::tmplayer::ui::panels::{info_panel, playlist_panel, visual_panel};
 use crate::tmplayer::utils::input::Action;
@@ -40,7 +40,7 @@ pub struct UiLayout {
 pub struct Tui {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     pub should_quit: bool,
-    kitty_overlay: TmKittyOverlay,
+    graphics_overlay: GraphicsOverlay,
 }
 
 impl Tui {
@@ -51,7 +51,7 @@ impl Tui {
         Ok(Self {
             terminal,
             should_quit: false,
-            kitty_overlay: TmKittyOverlay::new(app.config.graphics_protocol),
+            graphics_overlay: GraphicsOverlay::new(app.config.graphics_protocol),
         })
     }
 
@@ -299,14 +299,14 @@ impl Tui {
             }
 
             // Paint kitty images on top of ratatui widgets.
-            Self::paint_kitty_images(&mut self.kitty_overlay, f, app, &layout_out);
+            Self::paint_kitty_images(&mut self.graphics_overlay, f, app, &layout_out);
         })?;
 
         Ok(layout_out)
     }
 
     fn paint_kitty_images(
-        kitty_overlay: &mut TmKittyOverlay,
+        graphics_overlay: &mut GraphicsOverlay,
         f: &mut ratatui::Frame<'_>,
         app: &mut AppState,
         layout: &UiLayout,
@@ -346,7 +346,7 @@ impl Tui {
                 None
             };
 
-        kitty_overlay.paint(
+        graphics_overlay.paint(
             app,
             f,
             info_cover_bytes,
