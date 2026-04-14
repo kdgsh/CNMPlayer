@@ -1,7 +1,7 @@
-use image::RgbaImage;
+use image::{DynamicImage, GenericImageView};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
 use std::collections::HashMap;
 
 use crate::{
@@ -29,8 +29,8 @@ pub struct TmKittyOverlay {
     picker: Picker,
     last_term_size: Option<(u16, u16)>,
     last_content_hash: Option<u64>,
-    info_cover_image: Option<RgbaImage>,
-    playlist_cover_image: Option<RgbaImage>,
+    info_cover_image: Option<DynamicImage>,
+    playlist_cover_image: Option<DynamicImage>,
     segment_protocols: HashMap<SegmentKey, StatefulProtocol>,
 }
 
@@ -88,7 +88,7 @@ impl TmKittyOverlay {
         if let Some(bytes) = info_cover_bytes {
             if self.info_cover_image.is_none() {
                 if let Ok(img) = image::load_from_memory(bytes) {
-                    self.info_cover_image = Some(img.to_rgba8());
+                    self.info_cover_image = Some(img);
                 }
             }
         } else {
@@ -98,25 +98,60 @@ impl TmKittyOverlay {
         if let Some(bytes) = playlist_cover_bytes {
             if self.playlist_cover_image.is_none() {
                 if let Ok(img) = image::load_from_memory(bytes) {
-                    self.playlist_cover_image = Some(img.to_rgba8());
+                    self.playlist_cover_image = Some(img);
                 }
             }
         } else {
             self.playlist_cover_image = None;
         }
 
-        let info_img = self.info_cover_image.clone();
-        let playlist_img = self.playlist_cover_image.clone();
+        let mut paint = |rect: Rect, slot: TmCoverSlot, img: &DynamicImage| {
+            let occluders: Vec<Rect> = modal_area.into_iter().collect();
+            let segments = visible_segments_after_occluders(rect, &occluders);
 
-        if let Some(img) = info_img {
+            for segment in segments {
+                let segment_key = SegmentKey {
+                    slot,
+                    x: segment.x,
+                    y: segment.y,
+                    width: segment.width,
+                    height: segment.height,
+                };
+
+                if !self.segment_protocols.contains_key(&segment_key) {
+                    let (img_w, img_h) = img.dimensions();
+                    let Some((crop_x, crop_y, crop_w, crop_h)) =
+                        map_segment_to_cover_crop(rect, segment, img_w, img_h)
+                    else {
+                        continue;
+                    };
+                    let cropped = image::DynamicImage::ImageRgba8(img.to_rgba8())
+                        .crop_imm(crop_x, crop_y, crop_w, crop_h);
+                    let proto = self.picker.new_resize_protocol(cropped);
+                    self.segment_protocols.insert(segment_key.clone(), proto);
+                }
+
+                if let Some(proto) = self.segment_protocols.get_mut(&segment_key) {
+                    let widget = StatefulImage::default();
+                    frame.render_stateful_widget(widget, segment, proto);
+                }
+
+                if let Some(proto) = self.segment_protocols.get_mut(&segment_key) {
+                    let widget = StatefulImage::default();
+                    frame.render_stateful_widget(widget, segment, proto);
+                }
+            }
+        };
+
+        if let Some(img) = &self.info_cover_image {
             if let Some(rect) = info_rect {
-                self.paint_cover(frame, &img, TmCoverSlot::InfoCover, rect, modal_area);
+                paint(rect, TmCoverSlot::InfoCover, img);
             }
         }
 
-        if let Some(img) = playlist_img {
+        if let Some(img) = &self.playlist_cover_image {
             if let Some(rect) = playlist_rect {
-                self.paint_cover(frame, &img, TmCoverSlot::PlaylistCover, rect, modal_area);
+                paint(rect, TmCoverSlot::PlaylistCover, img);
             }
         }
     }
@@ -125,52 +160,6 @@ impl TmKittyOverlay {
         self.info_cover_image = None;
         self.playlist_cover_image = None;
         self.segment_protocols.clear();
-    }
-
-    fn paint_cover(
-        &mut self,
-        frame: &mut Frame<'_>,
-        img: &RgbaImage,
-        slot: TmCoverSlot,
-        base_rect: Rect,
-        modal_area: Option<Rect>,
-    ) {
-        let occluders: Vec<Rect> = modal_area.into_iter().collect();
-        let segments = visible_segments_after_occluders(base_rect, &occluders);
-
-        for segment in segments {
-            let segment_key = SegmentKey {
-                slot,
-                x: segment.x,
-                y: segment.y,
-                width: segment.width,
-                height: segment.height,
-            };
-
-            if !self.segment_protocols.contains_key(&segment_key) {
-                let (img_w, img_h) = img.dimensions();
-                let Some((crop_x, crop_y, crop_w, crop_h)) =
-                    map_segment_to_cover_crop(base_rect, segment, img_w, img_h)
-                else {
-                    continue;
-                };
-                let cropped = image::DynamicImage::ImageRgba8(img.clone())
-                    .crop_imm(crop_x, crop_y, crop_w, crop_h);
-                let proto = self.picker.new_resize_protocol(cropped);
-                self.segment_protocols.insert(segment_key.clone(), proto);
-            }
-
-            if let Some(ref mut proto) = self.segment_protocols.get_mut(&segment_key) {
-                let widget = StatefulImage::<StatefulProtocol>::default();
-                frame.render_stateful_widget(widget, segment, proto);
-            }
-
-            if let Some(ref mut proto) = self.segment_protocols.get_mut(&segment_key) {
-                let widget =
-                    StatefulImage::<StatefulProtocol>::default().resize(Resize::Scale(None));
-                frame.render_stateful_widget(widget, segment, proto);
-            }
-        }
     }
 }
 
