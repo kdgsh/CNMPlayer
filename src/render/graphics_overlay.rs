@@ -1,5 +1,5 @@
 use crate::app::peek_shared_future;
-use crate::app::{App, HitRect, Overlay, Page};
+use crate::app::{App, HitRect, Page};
 use crate::data::config::GraphicsProtocol;
 use image::{DynamicImage, GenericImageView};
 use ratatui::Frame;
@@ -77,7 +77,7 @@ impl GraphicsOverlay {
             self.segment_protocols.clear();
         }
 
-        let occluders = collect_occluders(app, size);
+        let occluders = collect_occluders(app);
         let targets = collect_cover_targets(app, size);
 
         let content_hash = compute_targets_content_hash(&targets);
@@ -386,16 +386,8 @@ fn tile_cover_rect(tile_rect: Rect) -> Rect {
     }
 }
 
-fn collect_occluders(app: &App, size: Rect) -> Vec<Rect> {
+fn collect_occluders(app: &App) -> Vec<Rect> {
     let mut occluders = Vec::new();
-
-    if let Some(rect) = settings_modal_area(size, app.overlay) {
-        occluders.push(rect);
-    }
-
-    if let Some(rect) = search_box_area(size, app.search_box_anim_height) {
-        occluders.push(rect);
-    }
 
     if app.page == Page::Home {
         if let Some(hit) = app.home_sidebar_panel_hit {
@@ -407,48 +399,6 @@ fn collect_occluders(app: &App, size: Rect) -> Vec<Rect> {
     }
 
     occluders
-}
-
-fn settings_modal_area(size: Rect, overlay: Option<Overlay>) -> Option<Rect> {
-    match overlay {
-        Some(Overlay::Settings)
-        | Some(Overlay::SettingsPlayback)
-        | Some(Overlay::SettingsKeybinds) => Some(centered_rect(70, 20, size)),
-        Some(Overlay::SettingsAbout) => Some(centered_rect(70, 22, size)),
-        _ => None,
-    }
-}
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let w = width.min(area.width.saturating_sub(2)).max(12);
-    let h = height.min(area.height.saturating_sub(2)).max(5);
-    Rect {
-        x: area.x + area.width.saturating_sub(w) / 2,
-        y: area.y + area.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
-    }
-}
-
-fn search_box_area(size: Rect, anim_h: u16) -> Option<Rect> {
-    if size.width < 20 || size.height < 2 {
-        return None;
-    }
-
-    let visible_h = anim_h
-        .min(crate::ui::search_box::TARGET_HEIGHT)
-        .min(size.height);
-    if visible_h == 0 {
-        return None;
-    }
-
-    let width = (size.width / 2).max(24).min(size.width.saturating_sub(2));
-    Some(Rect {
-        x: size.x + size.width.saturating_sub(width) / 2,
-        y: size.y,
-        width,
-        height: visible_h,
-    })
 }
 
 pub fn visible_segments_after_occluders(base: Rect, occluders: &[Rect]) -> Vec<Rect> {

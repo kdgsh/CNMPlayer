@@ -230,6 +230,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             terminal.draw(|frame| {
                 ui::draw(frame, app);
                 graphics_overlay.paint(app, frame);
+                ui::draw_settings(frame, app);
             })?;
             last_draw_at = Instant::now();
             needs_redraw = false;

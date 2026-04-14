@@ -7,8 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::{cell::LazyCell, collections::HashMap};
 
 use crate::{
-    data::config::GraphicsProtocol,
-    render::graphics_overlay::{map_segment_to_cover_crop, visible_segments_after_occluders},
+    data::config::GraphicsProtocol, render::graphics_overlay::map_segment_to_cover_crop,
     tmplayer::app::state::AppState,
 };
 
@@ -56,7 +55,6 @@ impl GraphicsOverlay {
         playlist_cover: Option<&[u8]>,
         info_rect: Option<Rect>,
         playlist_rect: Option<Rect>,
-        modal_area: Option<Rect>,
     ) {
         if app.config.graphics_protocol == GraphicsProtocol::Off {
             self.clear_all();
@@ -71,11 +69,10 @@ impl GraphicsOverlay {
             self.clear_all();
         }
 
-        let content_hash =
-            compute_content_hash(info_cover, playlist_cover, info_rect, playlist_rect);
+        let hash = compute_content_hash(info_cover, playlist_cover, info_rect, playlist_rect);
 
-        if self.last_content_hash != Some(content_hash) {
-            self.last_content_hash = Some(content_hash);
+        if self.last_content_hash != Some(hash) {
+            self.last_content_hash = Some(hash);
             self.clear_all();
         }
 
@@ -83,8 +80,7 @@ impl GraphicsOverlay {
         let playlist_image_fn = || playlist_cover.and_then(|x| image::load_from_memory(x).ok());
 
         let mut paint = |rect: Rect, slot: TmCoverSlot, img: &dyn Fn() -> Option<DynamicImage>| {
-            let occluders: Vec<Rect> = modal_area.into_iter().collect();
-            let segments = visible_segments_after_occluders(rect, &occluders);
+            let segments = vec![rect];
             let img = LazyCell::new(img);
 
             for segment in segments {

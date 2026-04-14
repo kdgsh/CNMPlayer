@@ -152,18 +152,10 @@ impl Tui {
             layout_out.info_controls = info_l.controls;
 
             // For kitty graphics, we draw into the inner area (optional border).
-            layout_out.info_cover_image = if app.config.album_border {
-                info_l.cover.inner(ratatui::layout::Margin {
-                    horizontal: 1,
-                    vertical: 1,
-                })
-            } else {
-                // Reserve one ring for visual breathing room even without border.
-                info_l.cover.inner(ratatui::layout::Margin {
-                    horizontal: 1,
-                    vertical: 1,
-                })
-            };
+            layout_out.info_cover_image = info_l.cover.inner(ratatui::layout::Margin {
+                horizontal: 1,
+                vertical: 1,
+            });
 
             // base styling
             f.render_widget(ratatui::widgets::Clear, size);
@@ -286,6 +278,9 @@ impl Tui {
                 );
             }
 
+            // Paint kitty images on top of ratatui widgets.
+            Self::paint_kitty_images(&mut self.graphics_overlay, f, app, &layout_out);
+
             // modals (top-most)
             match app.overlay {
                 Overlay::SettingsModal => render_settings_modal(f, size, app),
@@ -297,9 +292,6 @@ impl Tui {
                 Overlay::EqModal => render_eq_modal(f, size, app),
                 _ => {}
             }
-
-            // Paint kitty images on top of ratatui widgets.
-            Self::paint_kitty_images(&mut self.graphics_overlay, f, app, &layout_out);
         })?;
 
         Ok(layout_out)
@@ -311,8 +303,6 @@ impl Tui {
         app: &mut AppState,
         layout: &UiLayout,
     ) {
-        let modal_area = settings_modal_area(layout.full, app.overlay);
-
         let playlist_overlay_visible = app.overlay == Overlay::Playlist
             || app.playlist_slide_x != app.playlist_slide_target_x
             || layout.playlist_rect.width > 0;
@@ -353,7 +343,6 @@ impl Tui {
             playlist_cover_bytes,
             info_rect,
             playlist_rect,
-            modal_area,
         );
     }
 }
@@ -366,18 +355,6 @@ fn centered_rect(size: Rect, width: u16, height: u16) -> Rect {
         y: size.y + (size.height.saturating_sub(h)) / 2,
         width: w,
         height: h,
-    }
-}
-
-fn settings_modal_area(size: Rect, overlay: Overlay) -> Option<Rect> {
-    match overlay {
-        Overlay::SettingsModal => Some(centered_rect(size, 70, 20)),
-        Overlay::BarSettingsModal => Some(centered_rect(size, 70, 20)),
-        Overlay::LocalAudioSettingsModal => Some(centered_rect(size, 60, 12)),
-        Overlay::AboutModal => Some(centered_rect(size, 70, 22)),
-        Overlay::AcoustIdModal => Some(centered_rect(size, 60, 8)),
-        Overlay::HelpModal => Some(centered_rect(size, 70, 20)),
-        _ => None,
     }
 }
 
