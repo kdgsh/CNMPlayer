@@ -18,7 +18,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
-use render::main_kitty_overlay::MainKittyOverlay;
+use render::graphics_overlay::GraphicsOverlay;
 use rustls::crypto::ring;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
@@ -195,7 +195,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
-    let mut kitty_overlay = MainKittyOverlay::new(app.config.graphics_protocol);
+    let mut kitty_overlay = GraphicsOverlay::new(app.config.graphics_protocol);
     let mut active_graphics_protocol = app.config.graphics_protocol;
     let mut last_draw_at = Instant::now()
         .checked_sub(Duration::from_millis(250))
@@ -206,7 +206,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 
         if app.config.graphics_protocol != active_graphics_protocol {
             active_graphics_protocol = app.config.graphics_protocol;
-            kitty_overlay = MainKittyOverlay::new(active_graphics_protocol);
+            kitty_overlay = GraphicsOverlay::new(active_graphics_protocol);
             needs_redraw = true;
         }
 

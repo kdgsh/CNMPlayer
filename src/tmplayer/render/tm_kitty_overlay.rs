@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::{
     data::config::GraphicsProtocol,
-    render::main_kitty_overlay::{map_segment_to_cover_crop, visible_segments_after_occluders},
+    render::graphics_overlay::{map_segment_to_cover_crop, visible_segments_after_occluders},
     tmplayer::app::state::AppState,
 };
 

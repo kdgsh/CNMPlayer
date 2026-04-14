@@ -36,14 +36,14 @@ struct SegmentKey {
     height: u16,
 }
 
-pub struct MainKittyOverlay {
+pub struct GraphicsOverlay {
     picker: Picker,
     last_term_size: Option<(u16, u16)>,
     last_content_hash: Option<u64>,
     segment_protocols: HashMap<SegmentKey, StatefulProtocol>,
 }
 
-impl MainKittyOverlay {
+impl GraphicsOverlay {
     pub fn new(graphics_protocol: GraphicsProtocol) -> Self {
         let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
         if let Some(proto) = graphics_protocol.to_ratatui_protocol() {
