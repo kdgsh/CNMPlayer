@@ -96,7 +96,7 @@ fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
             horizontal: 1,
             vertical: 1,
         });
-        if cover_area.width > 0 && cover_area.height > 0 {
+        if cover_area.width > 0 && cover_area.height > 0 && app.draw_ascii() {
             cover_line_limit = cover_area.height;
             frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
             let cover_ascii = app.author.cover_ascii(cover_area.width, cover_area.height);
@@ -312,7 +312,7 @@ fn draw_author_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             height: text_rows,
         };
 
-        if cover_rect.width > 0 && cover_rect.height > 0 {
+        if cover_rect.width > 0 && cover_rect.height > 0 && app.draw_ascii() {
             let ascii = {
                 let tile = &mut app.author.tiles[index];
                 tile.cover_ascii(cover_rect.width, cover_rect.height)

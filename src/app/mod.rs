@@ -2,8 +2,8 @@ mod api;
 mod mpris_bridge;
 pub(crate) mod player;
 
-use crate::data::config::Config;
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
+use crate::data::config::{Config, GraphicsProtocol};
 use crate::data::playback_session;
 use crate::data::session;
 use crate::data::theme_loader::ThemeLoader;
@@ -1734,6 +1734,10 @@ pub struct App {
 }
 
 impl App {
+    pub fn draw_ascii(&self) -> bool {
+        self.config.graphics_protocol == GraphicsProtocol::Off
+    }
+
     pub async fn new(config: Config, theme: Theme) -> Result<Self> {
         let saved_cookie = session::load_cookie().ok().flatten();
         let audio_player = AudioPlayer::new(&config);

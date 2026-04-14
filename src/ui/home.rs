@@ -166,7 +166,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             height: text_rows,
         };
 
-        if cover_rect.width > 0 && cover_rect.height > 0 {
+        if cover_rect.width > 0 && cover_rect.height > 0 && app.draw_ascii() {
             let ascii = {
                 let tile = &mut app.home.tiles[index];
                 tile.cover_ascii(cover_rect.width, cover_rect.height)

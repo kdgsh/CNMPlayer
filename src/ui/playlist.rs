@@ -94,7 +94,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
             horizontal: 1,
             vertical: 1,
         });
-        if cover_area.width > 0 && cover_area.height > 0 {
+        if cover_area.width > 0 && cover_area.height > 0 && app.draw_ascii() {
             cover_line_limit = cover_area.height;
             frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
             let cover_ascii = app

@@ -381,7 +381,7 @@ fn tile_cover_rect(tile_rect: Rect) -> Rect {
     Rect {
         x: inner_rect.x,
         y: inner_rect.y,
-        width: inner_rect.width + 2,
+        width: inner_rect.width,
         height: cover_height,
     }
 }
