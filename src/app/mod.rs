@@ -1841,7 +1841,9 @@ impl App {
         };
 
         if let Ok(_) = Picker::from_query_stdio() {
-            // Don't use queried picker, this cause image layouted improperly.
+            // Don't use queried picker, this cause image layouted improperly on konsole.
+            // It's ok to not set this if we just use Halfblocks.
+
             // app.graphics_picker = picker;
         }
         if let Some(protocol) = app.config.graphics_protocol.to_ratatui_protocol() {
