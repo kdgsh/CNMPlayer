@@ -21,7 +21,7 @@ use futures::{FutureExt, future::Shared};
 use image::{DynamicImage, GenericImageView};
 use ncm_api::ApiResponse;
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Rect, Size};
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Paragraph};
 use ratatui_image::StatefulImage;
@@ -260,19 +260,29 @@ pub fn peek_shared_future<T>(cover_bytes: &Option<SharedFuture<T>>) -> Option<&T
 
 #[derive(Clone, Default)]
 pub struct CoverFetchState {
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<CoverFuture>,
-    cover_ascii: Option<AsciiFuture>,
-    cover_ascii_size: (u16, u16),
-    pub cover_protocol: Option<Arc<Mutex<StatefulProtocol>>>,
+    pub url: Option<String>,
+    pub image: Option<CoverFuture>,
+    ascii: Option<AsciiFuture>,
+    size: Size,
+    protocol: Option<Arc<Mutex<StatefulProtocol>>>,
 }
 
 impl CoverFetchState {
-    pub fn set_cover_future(&mut self, future: Option<CoverFuture>) {
-        self.cover_bytes = future;
-        self.cover_ascii = None;
-        self.cover_ascii_size = (0, 0);
-        self.cover_protocol = None;
+    pub fn load(&mut self, api: ApiState, url: String) {
+        let cover_url = url.clone();
+        let fut = async move {
+            let bytes = api.fetch_cover_bytes(&cover_url).await.ok();
+            let flatten = bytes.filter(|x| !x.is_empty());
+            let image = flatten.and_then(|x| image::load_from_memory(&x).ok());
+
+            // Downsampling to 500px to save memory.
+            image.map(|x| x.thumbnail(500, 500)).map(Arc::new)
+        };
+        let fut = Box::pin(fut);
+        self.image = Some(shot_and_share(fut));
+        self.url = Some(url);
+        self.size = Size::ZERO;
+        self.protocol = None;
     }
 
     pub fn render(
@@ -291,28 +301,29 @@ impl CoverFetchState {
         let (w, h) = (area.width, area.height);
         if draw_ascii {
             let placeholder = move || placeholder_cover_ascii(w, h, '░');
-            if self.cover_ascii_size != (w, h) {
-                if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
-                    self.cover_ascii = Some(make_ascii_future(bytes.clone(), w, h));
-                    self.cover_ascii_size = (w, h);
+            if self.size != area.as_size() {
+                if let Some(bytes) = peek_shared_future(&self.image) {
+                    self.ascii = Some(make_ascii_future(bytes.clone(), w, h));
+                    self.size = area.as_size();
                 }
             }
-            let ascii = match peek_shared_future(&self.cover_ascii) {
+            let ascii = match peek_shared_future(&self.ascii) {
                 Some(x) => x.clone(),
                 None => placeholder(),
             };
             frame.render_widget(Paragraph::new(ascii).style(text_style), area);
         } else {
-            let Some(img) = peek_shared_future(&self.cover_bytes) else {
+            let Some(img) = peek_shared_future(&self.image) else {
                 return;
             };
-            if self.cover_protocol.is_none() {
+            if self.protocol.is_none() || self.size != area.as_size() {
                 let (img_w, img_h) = img.dimensions();
                 let (x, y, w, h) = cover_viewport(img_w, img_h, w, h);
                 let img = img.crop_imm(x, y, w, h);
-                self.cover_protocol = Some(Arc::new(Mutex::new(picker.new_resize_protocol(img))));
+                self.protocol = Some(Arc::new(Mutex::new(picker.new_resize_protocol(img))));
+                self.size = area.as_size();
             }
-            if let Some(ref proto) = self.cover_protocol {
+            if let Some(proto) = &self.protocol {
                 let mut proto = proto.lock().unwrap();
                 let widget = StatefulImage::<StatefulProtocol>::default();
                 frame.render_stateful_widget(widget, area, &mut proto);
@@ -347,13 +358,14 @@ impl HomeTile {
     }
 
     fn from_recommendation(
+        api: &ApiState,
         id: Option<String>,
         title: String,
         subtitle: String,
         cover_url: Option<String>,
     ) -> Self {
         let mut cover = CoverFetchState::default();
-        cover.cover_url = cover_url;
+        cover_url.map(|x| cover.load(api.clone(), x));
         Self {
             id,
             title,
@@ -361,19 +373,6 @@ impl HomeTile {
             cover,
         }
     }
-}
-
-fn make_cover_fetch_future(api: ApiState, url: String) -> CoverFuture {
-    let fut = async move {
-        let bytes = api.fetch_cover_bytes(&url).await.ok();
-        let flatten = bytes.filter(|x| !x.is_empty());
-        let image = flatten.and_then(|x| image::load_from_memory(&x).ok());
-
-        // Downsampling to 500px to save memory.
-        image.map(|x| x.thumbnail(500, 500)).map(Arc::new)
-    };
-    let fut = Box::pin(fut);
-    shot_and_share(fut)
 }
 
 pub struct HomeState {
@@ -1133,10 +1132,6 @@ impl PlaylistState {
         self.ensure_focus_visible();
         true
     }
-
-    pub fn set_cover_future(&mut self, fut: Option<CoverFuture>) {
-        self.cover.set_cover_future(fut);
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1165,13 +1160,14 @@ impl AuthorTile {
     }
 
     fn from_album(
+        api: &ApiState,
         title: String,
         subtitle: String,
         cover_url: Option<String>,
         kind: AuthorTileKind,
     ) -> Self {
         let mut cover = CoverFetchState::default();
-        cover.cover_url = cover_url;
+        cover_url.map(|x| cover.load(api.clone(), x));
         Self {
             kind,
             title,
@@ -1259,10 +1255,6 @@ impl AuthorState {
         }
 
         self.clamp_scroll_row_offset();
-    }
-
-    pub fn set_cover_future(&mut self, future: Option<CoverFuture>) {
-        self.cover.set_cover_future(future);
     }
 
     pub fn set_tiles(&mut self, mut tiles: Vec<AuthorTile>) {
@@ -3757,7 +3749,7 @@ impl App {
                     .hot_songs
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
             AuthorTileKind::Album => (
                 self.lang_text("专辑", "Albums").to_string(),
@@ -3766,7 +3758,7 @@ impl App {
                     .albums
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
             AuthorTileKind::Ep => (
                 "EP".to_string(),
@@ -3775,7 +3767,7 @@ impl App {
                     .eps
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
             AuthorTileKind::Single => (
                 "Single".to_string(),
@@ -3784,7 +3776,7 @@ impl App {
                     .singles
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
         };
 
@@ -3811,11 +3803,8 @@ impl App {
                 "Press Enter to open album or play song, Esc to return",
             )
             .to_string();
-        self.playlist.cover.cover_url = section_cover.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_future = section_cover.map(|url| make_cover_fetch_future(self.api.clone(), url));
-        self.playlist.set_cover_future(cover_future);
+        section_cover.map(|x| self.playlist.cover.load(self.api.clone(), x));
         self.page = Page::Playlist;
     }
 
@@ -3855,12 +3844,8 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = section_snapshot;
-                match (&self.playlist.cover.cover_bytes, fallback_cover_url) {
-                    (None, Some(url)) => {
-                        let fut = make_cover_fetch_future(self.api.clone(), url.clone());
-                        self.playlist.set_cover_future(Some(fut));
-                        self.playlist.cover.cover_url = Some(url);
-                    }
+                match (&self.playlist.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
                     _ => (),
                 }
                 self.set_runtime_status(format!(
@@ -3906,12 +3891,8 @@ impl App {
 
         match self.load_author_detail(&artist_id).await {
             Ok(()) => {
-                match (&self.author.cover.cover_bytes, fallback_cover_url) {
-                    (None, Some(url)) => {
-                        self.author.cover.cover_url = Some(url.clone());
-                        self.author
-                            .set_cover_future(Some(make_cover_fetch_future(self.api.clone(), url)));
-                    }
+                match (&self.author.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.author.cover.load(self.api.clone(), url),
                     _ => (),
                 }
                 self.playlist_section_return_snapshot = None;
@@ -3962,12 +3943,8 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                match (&self.playlist.cover.cover_bytes, fallback_cover_url) {
-                    (None, Some(url)) => {
-                        let fut = make_cover_fetch_future(self.api.clone(), url.clone());
-                        self.playlist.set_cover_future(Some(fut));
-                        self.playlist.cover.cover_url = Some(url);
-                    }
+                match (&self.playlist.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
                     _ => (),
                 }
                 self.playlist_return_page = Page::Search;
@@ -4017,12 +3994,8 @@ impl App {
         match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                match (&self.playlist.cover.cover_bytes, fallback_cover_url) {
-                    (None, Some(url)) => {
-                        let fut = make_cover_fetch_future(self.api.clone(), url.clone());
-                        self.playlist.set_cover_future(Some(fut));
-                        self.playlist.cover.cover_url = Some(url);
-                    }
+                match (&self.playlist.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
                     _ => (),
                 }
                 self.playlist_return_page = Page::Search;
@@ -5048,7 +5021,7 @@ impl App {
         let mut playlist_cover = None;
 
         if playlist_cover.is_none() {
-            if let Some(cover_url) = self.playlist.cover.cover_url.clone() {
+            if let Some(cover_url) = self.playlist.cover.url.clone() {
                 playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await
             }
         }
@@ -5664,9 +5637,7 @@ impl App {
                         .iter()
                         .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
                     {
-                        daily_tile.cover.cover_url = Some(cover_url.clone());
-                        daily_tile.cover.cover_bytes =
-                            Some(make_cover_fetch_future(self.api.clone(), cover_url.clone()));
+                        daily_tile.cover.load(self.api.clone(), cover_url);
                     }
                 }
             }
@@ -5693,22 +5664,21 @@ impl App {
                 continue;
             }
 
-            let mut tile =
-                HomeTile::from_recommendation(card.id, card.title, card.subtitle, card.cover_url);
+            let mut tile = HomeTile::from_recommendation(
+                &self.api,
+                card.id,
+                card.title,
+                card.subtitle,
+                card.cover_url,
+            );
 
             if pinned_title == Some("私人雷达") {
                 if let Some(playlist_id) = tile.id.clone() {
                     if let Some(cover_url) =
                         self.fetch_playlist_first_song_cover(&playlist_id).await
                     {
-                        tile.cover.cover_url = Some(cover_url);
+                        tile.cover.load(self.api.clone(), cover_url);
                     }
-                }
-            }
-
-            if tile.cover.cover_bytes.is_none() {
-                if let Some(url) = tile.cover.cover_url.clone() {
-                    tile.cover.cover_bytes = Some(make_cover_fetch_future(self.api.clone(), url));
                 }
             }
 
@@ -5716,6 +5686,7 @@ impl App {
         }
 
         self.home.set_tiles(prioritize_home_tiles(
+            &self.api,
             tiles,
             self.config.home_more_recommend,
         ));
@@ -5927,12 +5898,8 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
-        self.playlist.cover.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
-        self.playlist.set_cover_future(cover_future);
-
+        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
         Ok(())
     }
 
@@ -5973,12 +5940,8 @@ impl App {
                 "Daily songs from Netease. Press Enter to play",
             )
             .to_string();
-        self.playlist.cover.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
-        self.playlist.set_cover_future(cover_future);
-
+        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
         Ok(())
     }
 
@@ -6039,12 +6002,8 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
-        self.playlist.cover.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
-        self.playlist.set_cover_future(cover_future);
-
+        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
         Ok(())
     }
 
@@ -6205,6 +6164,7 @@ impl App {
 
         let mut tiles = vec![
             AuthorTile::from_album(
+                &self.api,
                 self.lang_text("热门歌曲", "Hot Songs").to_string(),
                 format!("{} {}", hot_count, self.lang_text("首", "tracks")),
                 hot_songs
@@ -6214,6 +6174,7 @@ impl App {
                 AuthorTileKind::HotSong,
             ),
             AuthorTile::from_album(
+                &self.api,
                 self.lang_text("专辑", "Albums").to_string(),
                 format!("{} {}", album_count, self.lang_text("张", "items")),
                 albums
@@ -6223,6 +6184,7 @@ impl App {
                 AuthorTileKind::Album,
             ),
             AuthorTile::from_album(
+                &self.api,
                 "EP".to_string(),
                 format!("{} {}", ep_count, self.lang_text("张", "items")),
                 eps.first()
@@ -6231,6 +6193,7 @@ impl App {
                 AuthorTileKind::Ep,
             ),
             AuthorTile::from_album(
+                &self.api,
                 "Single".to_string(),
                 format!("{} {}", single_count, self.lang_text("张", "items")),
                 singles
@@ -6245,16 +6208,6 @@ impl App {
             tiles.push(AuthorTile::placeholder());
         }
 
-        for tile in &mut tiles {
-            let url = tile.cover.cover_url.clone();
-            tile.cover.cover_bytes = url.map(|x| make_cover_fetch_future(self.api.clone(), x));
-            tile.cover.cover_ascii = None;
-            tile.cover.cover_ascii_size = (0, 0);
-        }
-
-        let url = cover_url.clone();
-        let fut = url.map(|x| make_cover_fetch_future(self.api.clone(), x));
-
         self.author.id = Some(artist_id.to_string());
         self.author.title = title;
         self.author.artist = match self.config.language {
@@ -6268,8 +6221,7 @@ impl App {
             ),
         };
         self.author.description = description;
-        self.author.cover.cover_url = cover_url;
-        self.author.set_cover_future(fut);
+        cover_url.map(|x| self.author.cover.load(self.api.clone(), x));
         self.author.set_tiles(tiles);
         self.author.hot_songs = hot_songs;
         self.author.albums = albums;
@@ -6723,7 +6675,11 @@ fn normalize_home_pinned_title(title: &str) -> Option<&'static str> {
     None
 }
 
-fn prioritize_home_tiles(mut tiles: Vec<HomeTile>, show_more: bool) -> Vec<HomeTile> {
+fn prioritize_home_tiles(
+    api: &ApiState,
+    mut tiles: Vec<HomeTile>,
+    show_more: bool,
+) -> Vec<HomeTile> {
     let mut pinned = Vec::with_capacity(HOME_PINNED_TITLES.len());
 
     for target in HOME_PINNED_TITLES {
@@ -6742,6 +6698,7 @@ fn prioritize_home_tiles(mut tiles: Vec<HomeTile>, show_more: bool) -> Vec<HomeT
             pinned.push(HomeTile::placeholder_daily());
         } else {
             pinned.push(HomeTile::from_recommendation(
+                api,
                 None,
                 target.to_string(),
                 String::new(),
