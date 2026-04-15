@@ -18,7 +18,6 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
-use render::graphics_overlay::GraphicsOverlay;
 use rustls::crypto::ring;
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
@@ -195,7 +194,6 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut needs_redraw = true;
-    let mut graphics_overlay = GraphicsOverlay::new(app.config.graphics_protocol);
     let mut active_graphics_protocol = app.config.graphics_protocol;
     let mut last_draw_at = Instant::now()
         .checked_sub(Duration::from_millis(250))
@@ -206,14 +204,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
 
         if app.config.graphics_protocol != active_graphics_protocol {
             active_graphics_protocol = app.config.graphics_protocol;
-            graphics_overlay = GraphicsOverlay::new(active_graphics_protocol);
             needs_redraw = true;
         }
 
         if app.consume_fullscreen_launch_request() {
             let bootstrap = app.build_fullscreen_bootstrap().await;
             launch_tmplayer_fullscreen(terminal, app, bootstrap).await?;
-            graphics_overlay.on_terminal_reset();
             needs_redraw = true;
             continue;
         }
@@ -229,7 +225,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         if needs_redraw || last_draw_at.elapsed() >= frame_dt {
             terminal.draw(|frame| {
                 ui::draw(frame, app);
-                graphics_overlay.paint(app, frame);
                 ui::draw_settings(frame, app);
             })?;
             last_draw_at = Instant::now();
@@ -257,8 +252,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
                     needs_redraw = true;
                 }
                 Event::Resize(_, _) => {
-                    // Resize can invalidate kitty image placements/cache; force re-transmit.
-                    graphics_overlay.on_terminal_reset();
                     needs_redraw = true;
                 }
                 _ => {}

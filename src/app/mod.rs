@@ -8,6 +8,7 @@ use crate::data::playback_session;
 use crate::data::session;
 use crate::data::theme_loader::ThemeLoader;
 use crate::render::cover_renderer::render_cover_ascii;
+use crate::render::graphics_overlay::cover_viewport;
 use crate::tmplayer::app::state::LyricLine;
 use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
 use crate::tmplayer::playback::metadata::{parse_lrc, parse_plain_lyrics};
@@ -17,8 +18,15 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use futures::{FutureExt, future::Shared};
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use ncm_api::ApiResponse;
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Paragraph};
+use ratatui_image::StatefulImage;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use reqwest::{Client, header};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -28,6 +36,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -249,6 +258,69 @@ pub fn peek_shared_future<T>(cover_bytes: &Option<SharedFuture<T>>) -> Option<&T
     cover_bytes.as_ref()?.peek()?.as_ref()
 }
 
+#[derive(Clone, Default)]
+pub struct CoverFetchState {
+    pub cover_url: Option<String>,
+    pub cover_bytes: Option<CoverFuture>,
+    cover_ascii: Option<AsciiFuture>,
+    cover_ascii_size: (u16, u16),
+    pub cover_protocol: Option<Arc<Mutex<StatefulProtocol>>>,
+}
+
+impl CoverFetchState {
+    pub fn set_cover_future(&mut self, future: Option<CoverFuture>) {
+        self.cover_bytes = future;
+        self.cover_ascii = None;
+        self.cover_ascii_size = (0, 0);
+        self.cover_protocol = None;
+    }
+
+    pub fn render(
+        &mut self,
+        frame: &mut Frame,
+        picker: &mut Picker,
+        area: Rect,
+        text_style: Style,
+        bg_style: Option<Style>,
+        draw_ascii: bool,
+    ) {
+        if let Some(bg) = bg_style {
+            frame.render_widget(Block::default().style(bg), area);
+        }
+
+        let (w, h) = (area.width, area.height);
+        if draw_ascii {
+            let placeholder = move || placeholder_cover_ascii(w, h, '░');
+            if self.cover_ascii_size != (w, h) {
+                if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
+                    self.cover_ascii = Some(make_ascii_future(bytes.clone(), w, h));
+                    self.cover_ascii_size = (w, h);
+                }
+            }
+            let ascii = match peek_shared_future(&self.cover_ascii) {
+                Some(x) => x.clone(),
+                None => placeholder(),
+            };
+            frame.render_widget(Paragraph::new(ascii).style(text_style), area);
+        } else {
+            let Some(img) = peek_shared_future(&self.cover_bytes) else {
+                return;
+            };
+            if self.cover_protocol.is_none() {
+                let (img_w, img_h) = img.dimensions();
+                let (x, y, w, h) = cover_viewport(img_w, img_h, w, h);
+                let img = img.crop_imm(x, y, w, h);
+                self.cover_protocol = Some(Arc::new(Mutex::new(picker.new_resize_protocol(img))));
+            }
+            if let Some(ref proto) = self.cover_protocol {
+                let mut proto = proto.lock().unwrap();
+                let widget = StatefulImage::<StatefulProtocol>::default();
+                frame.render_stateful_widget(widget, area, &mut proto);
+            }
+        }
+    }
+}
+
 fn make_ascii_future(bytes: Arc<DynamicImage>, width: u16, height: u16) -> AsciiFuture {
     let fut = Box::pin(async move {
         let hnd = task::spawn_blocking(move || render_cover_ascii(bytes, width, height));
@@ -261,10 +333,7 @@ pub struct HomeTile {
     pub id: Option<String>,
     pub title: String,
     pub subtitle: String,
-    pub cover_url: Option<String>,
-    pub cover_image: Option<CoverFuture>,
-    cover_ascii: Option<AsciiFuture>,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
 }
 
 impl HomeTile {
@@ -273,10 +342,7 @@ impl HomeTile {
             id: Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string()),
             title: "每日推荐".to_string(),
             subtitle: String::new(),
-            cover_url: None,
-            cover_ascii_size: (0, 0),
-            cover_image: None,
-            cover_ascii: None,
+            cover: CoverFetchState::default(),
         }
     }
 
@@ -286,29 +352,13 @@ impl HomeTile {
         subtitle: String,
         cover_url: Option<String>,
     ) -> Self {
+        let mut cover = CoverFetchState::default();
+        cover.cover_url = cover_url;
         Self {
             id,
             title,
             subtitle,
-            cover_url,
-            cover_ascii_size: (0, 0),
-            cover_image: None,
-            cover_ascii: None,
-        }
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        let placeholder = move || placeholder_cover_ascii(width, height, '░');
-
-        if self.cover_ascii_size != (width, height) {
-            if let Some(bytes) = peek_shared_future(&self.cover_image) {
-                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
-                self.cover_ascii_size = (width, height);
-            }
-        }
-        match peek_shared_future(&self.cover_ascii) {
-            Some(x) => x.clone(),
-            None => placeholder(),
+            cover,
         }
     }
 }
@@ -965,10 +1015,7 @@ pub struct PlaylistState {
     pub title: String,
     pub artist: String,
     pub description: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<CoverFuture>,
-    cover_ascii: Option<AsciiFuture>,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
     pub focused_idx: usize,
     pub scroll_offset: usize,
     pub visible_rows: usize,
@@ -982,10 +1029,7 @@ impl Default for PlaylistState {
             title: "歌单详情".to_string(),
             artist: "网易云音乐".to_string(),
             description: "从主页进入歌单后加载真实数据。".to_string(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: None,
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
             focused_idx: 0,
             scroll_offset: 0,
             visible_rows: 1,
@@ -1091,24 +1135,7 @@ impl PlaylistState {
     }
 
     pub fn set_cover_future(&mut self, fut: Option<CoverFuture>) {
-        self.cover_bytes = fut;
-        self.cover_ascii = None;
-        self.cover_ascii_size = (0, 0);
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        let placeholder = move || placeholder_cover_ascii(width, height, '░');
-
-        if self.cover_ascii_size != (width, height) {
-            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
-                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
-                self.cover_ascii_size = (width, height);
-            }
-        }
-        match peek_shared_future(&self.cover_ascii) {
-            Some(x) => x.clone(),
-            None => placeholder(),
-        }
+        self.cover.set_cover_future(fut);
     }
 }
 
@@ -1124,10 +1151,7 @@ pub struct AuthorTile {
     pub kind: AuthorTileKind,
     pub title: String,
     pub subtitle: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<CoverFuture>,
-    cover_ascii: Option<AsciiFuture>,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
 }
 
 impl AuthorTile {
@@ -1136,10 +1160,7 @@ impl AuthorTile {
             kind: AuthorTileKind::Album,
             title: "暂无内容".to_string(),
             subtitle: "No content".to_string(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: None,
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
         }
     }
 
@@ -1149,29 +1170,13 @@ impl AuthorTile {
         cover_url: Option<String>,
         kind: AuthorTileKind,
     ) -> Self {
+        let mut cover = CoverFetchState::default();
+        cover.cover_url = cover_url;
         Self {
             kind,
             title,
             subtitle,
-            cover_url,
-            cover_bytes: None,
-            cover_ascii: None,
-            cover_ascii_size: (0, 0),
-        }
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        let placeholder = move || placeholder_cover_ascii(width, height, '░');
-
-        if self.cover_ascii_size != (width, height) {
-            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
-                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
-                self.cover_ascii_size = (width, height);
-            }
-        }
-        match peek_shared_future(&self.cover_ascii) {
-            Some(x) => x.clone(),
-            None => placeholder(),
+            cover,
         }
     }
 }
@@ -1181,10 +1186,7 @@ pub struct AuthorState {
     pub title: String,
     pub artist: String,
     pub description: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<CoverFuture>,
-    cover_ascii: Option<AsciiFuture>,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
     pub focused_idx: usize,
     pub columns: usize,
     pub scroll_row_offset: usize,
@@ -1203,10 +1205,7 @@ impl Default for AuthorState {
             title: "作者页".to_string(),
             artist: "网易云音乐".to_string(),
             description: "从搜索结果进入作者页后加载真实数据。".to_string(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: None,
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
             focused_idx: 0,
             columns: 1,
             scroll_row_offset: 0,
@@ -1263,24 +1262,7 @@ impl AuthorState {
     }
 
     pub fn set_cover_future(&mut self, future: Option<CoverFuture>) {
-        self.cover_bytes = future;
-        self.cover_ascii = None;
-        self.cover_ascii_size = (0, 0);
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        let placeholder = move || placeholder_cover_ascii(width, height, '░');
-
-        if self.cover_ascii_size != (width, height) {
-            if let Some(bytes) = peek_shared_future(&self.cover_bytes) {
-                self.cover_ascii = Some(make_ascii_future(bytes.clone(), width, height));
-                self.cover_ascii_size = (width, height);
-            }
-        }
-        match peek_shared_future(&self.cover_ascii) {
-            Some(x) => x.clone(),
-            None => placeholder(),
-        }
+        self.cover.set_cover_future(future);
     }
 
     pub fn set_tiles(&mut self, mut tiles: Vec<AuthorTile>) {
@@ -1731,6 +1713,7 @@ pub struct App {
     mpris_last_playback: PlaybackRuntimeState,
     api: ApiState,
     audio_player: AudioPlayer,
+    pub graphics_picker: Picker,
 }
 
 impl App {
@@ -1854,7 +1837,16 @@ impl App {
             mpris_last_playback: PlaybackRuntimeState::Stopped,
             api,
             audio_player,
+            graphics_picker: Picker::halfblocks(),
         };
+
+        if let Ok(_) = Picker::from_query_stdio() {
+            // Don't use queried picker, this cause image layouted improperly.
+            // app.graphics_picker = picker;
+        }
+        if let Some(protocol) = app.config.graphics_protocol.to_ratatui_protocol() {
+            app.graphics_picker.set_protocol_type(protocol);
+        }
 
         app.ensure_main_cava();
 
@@ -3763,7 +3755,7 @@ impl App {
                     .hot_songs
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.cover_url.clone()),
             ),
             AuthorTileKind::Album => (
                 self.lang_text("专辑", "Albums").to_string(),
@@ -3772,7 +3764,7 @@ impl App {
                     .albums
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.cover_url.clone()),
             ),
             AuthorTileKind::Ep => (
                 "EP".to_string(),
@@ -3781,7 +3773,7 @@ impl App {
                     .eps
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.cover_url.clone()),
             ),
             AuthorTileKind::Single => (
                 "Single".to_string(),
@@ -3790,7 +3782,7 @@ impl App {
                     .singles
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.cover_url.clone()),
             ),
         };
 
@@ -3817,7 +3809,7 @@ impl App {
                 "Press Enter to open album or play song, Esc to return",
             )
             .to_string();
-        self.playlist.cover_url = section_cover.clone();
+        self.playlist.cover.cover_url = section_cover.clone();
         self.playlist.set_tracks(tracks);
 
         let cover_future = section_cover.map(|url| make_cover_fetch_future(self.api.clone(), url));
@@ -3861,11 +3853,11 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = section_snapshot;
-                match (&self.playlist.cover_bytes, fallback_cover_url) {
+                match (&self.playlist.cover.cover_bytes, fallback_cover_url) {
                     (None, Some(url)) => {
                         let fut = make_cover_fetch_future(self.api.clone(), url.clone());
                         self.playlist.set_cover_future(Some(fut));
-                        self.playlist.cover_url = Some(url);
+                        self.playlist.cover.cover_url = Some(url);
                     }
                     _ => (),
                 }
@@ -3912,11 +3904,11 @@ impl App {
 
         match self.load_author_detail(&artist_id).await {
             Ok(()) => {
-                match (&self.author.cover_bytes, fallback_cover_url) {
+                match (&self.author.cover.cover_bytes, fallback_cover_url) {
                     (None, Some(url)) => {
-                        let fut = Some(make_cover_fetch_future(self.api.clone(), url.clone()));
-                        self.author.set_cover_future(fut);
-                        self.author.cover_url = Some(url);
+                        self.author.cover.cover_url = Some(url.clone());
+                        self.author
+                            .set_cover_future(Some(make_cover_fetch_future(self.api.clone(), url)));
                     }
                     _ => (),
                 }
@@ -3968,11 +3960,11 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                match (&self.playlist.cover_bytes, fallback_cover_url) {
+                match (&self.playlist.cover.cover_bytes, fallback_cover_url) {
                     (None, Some(url)) => {
                         let fut = make_cover_fetch_future(self.api.clone(), url.clone());
                         self.playlist.set_cover_future(Some(fut));
-                        self.playlist.cover_url = Some(url);
+                        self.playlist.cover.cover_url = Some(url);
                     }
                     _ => (),
                 }
@@ -4023,11 +4015,11 @@ impl App {
         match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                match (&self.playlist.cover_bytes, fallback_cover_url) {
+                match (&self.playlist.cover.cover_bytes, fallback_cover_url) {
                     (None, Some(url)) => {
                         let fut = make_cover_fetch_future(self.api.clone(), url.clone());
                         self.playlist.set_cover_future(Some(fut));
-                        self.playlist.cover_url = Some(url);
+                        self.playlist.cover.cover_url = Some(url);
                     }
                     _ => (),
                 }
@@ -5054,7 +5046,7 @@ impl App {
         let mut playlist_cover = None;
 
         if playlist_cover.is_none() {
-            if let Some(cover_url) = self.playlist.cover_url.clone() {
+            if let Some(cover_url) = self.playlist.cover.cover_url.clone() {
                 playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await
             }
         }
@@ -5670,8 +5662,8 @@ impl App {
                         .iter()
                         .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
                     {
-                        daily_tile.cover_url = Some(cover_url.clone());
-                        daily_tile.cover_image =
+                        daily_tile.cover.cover_url = Some(cover_url.clone());
+                        daily_tile.cover.cover_bytes =
                             Some(make_cover_fetch_future(self.api.clone(), cover_url.clone()));
                     }
                 }
@@ -5707,14 +5699,14 @@ impl App {
                     if let Some(cover_url) =
                         self.fetch_playlist_first_song_cover(&playlist_id).await
                     {
-                        tile.cover_url = Some(cover_url);
+                        tile.cover.cover_url = Some(cover_url);
                     }
                 }
             }
 
-            if tile.cover_image.is_none() {
-                if let Some(url) = tile.cover_url.clone() {
-                    tile.cover_image = Some(make_cover_fetch_future(self.api.clone(), url));
+            if tile.cover.cover_bytes.is_none() {
+                if let Some(url) = tile.cover.cover_url.clone() {
+                    tile.cover.cover_bytes = Some(make_cover_fetch_future(self.api.clone(), url));
                 }
             }
 
@@ -5933,7 +5925,7 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
-        self.playlist.cover_url = cover_url.clone();
+        self.playlist.cover.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
 
         let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
@@ -5979,7 +5971,7 @@ impl App {
                 "Daily songs from Netease. Press Enter to play",
             )
             .to_string();
-        self.playlist.cover_url = cover_url.clone();
+        self.playlist.cover.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
 
         let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
@@ -6045,7 +6037,7 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
-        self.playlist.cover_url = cover_url.clone();
+        self.playlist.cover.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
 
         let cover_future = cover_url.map(|url| make_cover_fetch_future(self.api.clone(), url));
@@ -6252,10 +6244,10 @@ impl App {
         }
 
         for tile in &mut tiles {
-            let url = tile.cover_url.clone();
-            tile.cover_bytes = url.map(|x| make_cover_fetch_future(self.api.clone(), x));
-            tile.cover_ascii = None;
-            tile.cover_ascii_size = (0, 0);
+            let url = tile.cover.cover_url.clone();
+            tile.cover.cover_bytes = url.map(|x| make_cover_fetch_future(self.api.clone(), x));
+            tile.cover.cover_ascii = None;
+            tile.cover.cover_ascii_size = (0, 0);
         }
 
         let url = cover_url.clone();
@@ -6274,7 +6266,7 @@ impl App {
             ),
         };
         self.author.description = description;
-        self.author.cover_url = cover_url;
+        self.author.cover.cover_url = cover_url;
         self.author.set_cover_future(fut);
         self.author.set_tiles(tiles);
         self.author.hot_songs = hot_songs;

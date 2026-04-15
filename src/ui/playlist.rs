@@ -82,7 +82,7 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut cover_line_limit = inner.height;
     let cover_block = centered_visual_square_block(cols[0]);
-    if cover_block.width > 0 && cover_block.height > 0 {
+    if !cover_block.is_empty() {
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
@@ -94,17 +94,18 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
             horizontal: 1,
             vertical: 1,
         });
-        if cover_area.width > 0 && cover_area.height > 0 && app.draw_ascii() {
+        if !cover_area.is_empty() {
             cover_line_limit = cover_area.height;
-            frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
-            let cover_ascii = app
-                .playlist
-                .cover_ascii(cover_area.width, cover_area.height);
-            frame.render_widget(
-                Paragraph::new(cover_ascii)
-                    .alignment(Alignment::Center)
-                    .style(Style::default().fg(app.theme.color_text())),
+            let bg_style = surface_bg_style(app);
+            let draw_ascii = app.draw_ascii();
+            let text_style = Style::default().fg(app.theme.color_text());
+            app.playlist.cover.render(
+                frame,
+                &mut app.graphics_picker,
                 cover_area,
+                text_style,
+                Some(bg_style),
+                draw_ascii,
             );
         }
     }

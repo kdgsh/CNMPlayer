@@ -84,7 +84,7 @@ fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut cover_line_limit = inner.height;
     let cover_block = centered_visual_square_block(cols[0]);
-    if cover_block.width > 0 && cover_block.height > 0 {
+    if !cover_block.is_empty() {
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
@@ -96,15 +96,18 @@ fn draw_author_header(frame: &mut Frame, app: &mut App, area: Rect) {
             horizontal: 1,
             vertical: 1,
         });
-        if cover_area.width > 0 && cover_area.height > 0 && app.draw_ascii() {
+        if !cover_area.is_empty() {
             cover_line_limit = cover_area.height;
-            frame.render_widget(Block::default().style(surface_bg_style(app)), cover_area);
-            let cover_ascii = app.author.cover_ascii(cover_area.width, cover_area.height);
-            frame.render_widget(
-                Paragraph::new(cover_ascii)
-                    .alignment(Alignment::Center)
-                    .style(Style::default().fg(app.theme.color_text())),
+            let bg_style = surface_bg_style(app);
+            let draw_ascii = app.draw_ascii();
+            let text_style = Style::default().fg(app.theme.color_text());
+            app.author.cover.render(
+                frame,
+                &mut app.graphics_picker,
                 cover_area,
+                text_style,
+                Some(bg_style),
+                draw_ascii,
             );
         }
     }
@@ -312,17 +315,21 @@ fn draw_author_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             height: text_rows,
         };
 
-        if cover_rect.width > 0 && cover_rect.height > 0 && app.draw_ascii() {
-            let ascii = {
-                let tile = &mut app.author.tiles[index];
-                tile.cover_ascii(cover_rect.width, cover_rect.height)
-            };
-            let cover_style = if focused {
+        if !cover_rect.is_empty() {
+            let draw_ascii = app.draw_ascii();
+            let text_style = if focused {
                 Style::default().fg(app.theme.color_accent2())
             } else {
                 Style::default().fg(app.theme.color_text())
             };
-            frame.render_widget(Paragraph::new(ascii).style(cover_style), cover_rect);
+            app.author.tiles[index].cover.render(
+                frame,
+                &mut app.graphics_picker,
+                cover_rect,
+                text_style,
+                None,
+                draw_ascii,
+            );
         }
 
         let (title, subtitle) = {
