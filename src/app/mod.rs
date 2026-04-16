@@ -1,6 +1,7 @@
 mod api;
 mod mpris_bridge;
 pub(crate) mod player;
+pub(crate) mod streaming;
 
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
 use crate::data::config::{Config, GraphicsProtocol};
@@ -40,12 +41,14 @@ use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::watch;
 use tokio::task;
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
 use mpris_bridge::{MprisBridge, MprisControlEvent, MprisSyncPayload};
 use player::{AudioPlayer, AudioPlayerState, cleanup_cache_dir, resolve_cache_root};
+use streaming::StreamingReader;
 
 const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
@@ -63,7 +66,6 @@ const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
 const COVER_CACHE_SUBDIR: &str = "cover";
 const COVER_FETCH_RETRY_MS: u64 = 1500;
 const LYRICS_FETCH_RETRY_MS: u64 = 1500;
-const AUDIO_PREFETCH_RETRY_MS: u64 = 2000;
 const SIDEBAR_SLIDE_STEP_CELLS: f32 = 4.0;
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
@@ -1537,29 +1539,6 @@ struct LyricFetchResult {
     lyrics: Option<Vec<LyricLine>>,
 }
 
-#[derive(Debug, Clone)]
-struct AudioPrefetchRequest {
-    request_id: u64,
-    song_id: String,
-    quality_level: String,
-    cache_path: PathBuf,
-    cookie: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct AudioPrefetchResult {
-    request_id: u64,
-    success: bool,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PendingPlayRequest {
-    request_id: u64,
-    index: usize,
-    announce: bool,
-}
-
 async fn loop_cover_fetch(
     mut rx: UnboundedReceiver<CoverFetchRequest>,
     tx: Sender<CoverFetchResult>,
@@ -1580,30 +1559,6 @@ async fn loop_cover_fetch(
             song_id: req.song_id,
             url: req.url,
             bytes: bytes,
-        });
-    }
-}
-
-async fn loop_audio_prefetch(
-    mut rx: UnboundedReceiver<AudioPrefetchRequest>,
-    tx: Sender<AudioPrefetchResult>,
-    mut api: ApiState,
-) {
-    let mut process_fn = async move |req: &AudioPrefetchRequest| {
-        if let Some(cookie) = &req.cookie {
-            api.set_cookie(cookie.to_string());
-        }
-        let stream_url = api
-            .song_stream_url_with_quality(&req.song_id, &req.quality_level)
-            .await?;
-        api.fetch_audio_to_path(&stream_url, &req.cache_path).await
-    };
-    while let Some(req) = rx.recv().await {
-        let result = process_fn(&req).await;
-        let _ = tx.send(AudioPrefetchResult {
-            request_id: req.request_id,
-            success: result.is_ok(),
-            error: result.err().map(|e| e.to_string()),
         });
     }
 }
@@ -1690,15 +1645,6 @@ pub struct App {
     lyric_fetch_rx: Receiver<LyricFetchResult>,
     lyric_fetch_inflight_song_id: Option<String>,
     lyric_fetch_last_attempt_at: Option<Instant>,
-    audio_prefetch_tx: UnboundedSender<AudioPrefetchRequest>,
-    audio_prefetch_rx: Receiver<AudioPrefetchResult>,
-    audio_prefetch_pending: Option<PendingPlayRequest>,
-    audio_prefetch_inflight_id: Option<u64>,
-    audio_prefetch_last_attempt_at: Option<Instant>,
-    audio_preload_inflight_id: Option<u64>,
-    audio_preload_target_song_id: Option<String>,
-    audio_preload_last_attempt_at: Option<Instant>,
-    audio_prefetch_next_id: u64,
     mpris_bridge: MprisBridge,
     mpris_last_sync_at: Instant,
     mpris_last_signature: Option<u64>,
@@ -1748,11 +1694,6 @@ impl App {
         let (lyric_fetch_tx, lyric_fetch_req_rx) = unbounded_channel();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
         let worker = loop_lyric_fetch(lyric_fetch_req_rx, lyric_fetch_res_tx, api.clone());
-        tokio::spawn(worker);
-
-        let (audio_prefetch_tx, audio_prefetch_req_rx) = unbounded_channel();
-        let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
-        let worker = loop_audio_prefetch(audio_prefetch_req_rx, audio_prefetch_res_tx, api.clone());
         tokio::spawn(worker);
 
         let mut app = Self {
@@ -1814,15 +1755,6 @@ impl App {
             lyric_fetch_rx,
             lyric_fetch_inflight_song_id: None,
             lyric_fetch_last_attempt_at: None,
-            audio_prefetch_tx,
-            audio_prefetch_rx,
-            audio_prefetch_pending: None,
-            audio_prefetch_inflight_id: None,
-            audio_prefetch_last_attempt_at: None,
-            audio_preload_inflight_id: None,
-            audio_preload_target_song_id: None,
-            audio_preload_last_attempt_at: None,
-            audio_prefetch_next_id: 1,
             mpris_bridge,
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
@@ -1871,7 +1803,6 @@ impl App {
     }
 
     pub async fn tick(&mut self) {
-        self.tick_audio_prefetch();
         self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
@@ -2189,6 +2120,12 @@ impl App {
         Duration::from_secs(0)
     }
 
+    /// Returns (downloaded_bytes, total_bytes) for streaming buffer progress.
+    /// Returns None if not streaming or if total is unknown.
+    pub fn buffer_progress(&mut self) -> Option<(u64, u64)> {
+        self.audio_player.recv_progress()
+    }
+
     pub fn now_playing_artist_text(&self) -> String {
         self.now_playing
             .as_ref()
@@ -2287,7 +2224,6 @@ impl App {
     }
 
     pub async fn fullscreen_tick_playback(&mut self) {
-        self.tick_audio_prefetch();
         self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
@@ -3068,23 +3004,18 @@ impl App {
         self.maybe_schedule_now_playing_lyric_fetch();
         self.persist_playback_memory();
 
-        let request_id = self.audio_prefetch_next_id;
-        self.audio_prefetch_next_id = self.audio_prefetch_next_id.saturating_add(1);
-        self.audio_prefetch_pending = Some(PendingPlayRequest {
-            request_id,
-            index,
-            announce,
-        });
-        self.audio_prefetch_inflight_id = None;
-        self.audio_prefetch_last_attempt_at = None;
-        self.audio_preload_last_attempt_at = None;
-
-        match self
-            .audio_player
-            .play_cached_song(&track.song_id, self.config.audio_quality.as_api_level())
-        {
+        let quality = self.config.audio_quality.as_api_level();
+        let fail = move |err, app: &mut Self| {
+            app.now_playing_liked = false;
+            app.playback_state = PlaybackRuntimeState::Stopped;
+            app.set_runtime_status(format!(
+                "{}: {}",
+                app.lang_text("播放失败", "Playback failed"),
+                err
+            ));
+        };
+        match self.audio_player.play_cached_song(&track.song_id, quality) {
             Ok(true) => {
-                self.audio_prefetch_pending = None;
                 self.playback_state = PlaybackRuntimeState::Playing;
                 if announce {
                     self.set_runtime_status(format!(
@@ -3096,260 +3027,63 @@ impl App {
                 }
             }
             Ok(false) => {
-                // Do not keep old audio running; switch to target state and prefetch in background.
+                // Song not cached - start streaming playback while prefetching in background.
                 self.audio_player.stop();
-                self.playback_state = PlaybackRuntimeState::Stopped;
                 self.set_runtime_status(format!(
                     "{}: {} - {}",
                     self.lang_text("正在缓冲", "Buffering"),
                     enriched.title,
                     enriched.artist
                 ));
-                self.maybe_schedule_audio_prefetch(true);
-            }
-            Err(err) => {
-                self.now_playing_liked = false;
-                self.playback_state = PlaybackRuntimeState::Stopped;
-                self.set_runtime_status(format!(
-                    "{}: {}",
-                    self.lang_text("播放失败", "Playback failed"),
-                    err
-                ));
-            }
-        }
-    }
 
-    fn maybe_schedule_audio_prefetch(&mut self, force: bool) {
-        let Some(pending) = self.audio_prefetch_pending else {
-            return;
-        };
+                // Start streaming playback
+                let cache_path = self.audio_player.cached_song_path(&track.song_id, quality);
 
-        if self.audio_prefetch_inflight_id == Some(pending.request_id) {
-            return;
-        }
-
-        let Some(track) = self.playback_queue.get(pending.index) else {
-            self.audio_prefetch_pending = None;
-            return;
-        };
-
-        let quality_level = self.config.audio_quality.as_api_level().to_string();
-        let cache_path = self
-            .audio_player
-            .cached_song_path(&track.song_id, &quality_level);
-        if cache_path.is_file() {
-            return;
-        }
-
-        if self.audio_preload_target_song_id.as_deref() == Some(track.song_id.as_str())
-            && self.audio_preload_inflight_id.is_some()
-        {
-            return;
-        }
-
-        let now = Instant::now();
-        if !force {
-            if let Some(last) = self.audio_prefetch_last_attempt_at {
-                if now.duration_since(last) < Duration::from_millis(AUDIO_PREFETCH_RETRY_MS) {
-                    return;
-                }
-            }
-        }
-
-        let req = AudioPrefetchRequest {
-            request_id: pending.request_id,
-            song_id: track.song_id.clone(),
-            quality_level,
-            cache_path,
-            cookie: self
-                .api
-                .session_cookie()
-                .map(|value| value.to_string())
-                .or_else(|| self.session_cookie.clone()),
-        };
-
-        if self.audio_prefetch_tx.send(req).is_ok() {
-            self.audio_prefetch_inflight_id = Some(pending.request_id);
-            self.audio_prefetch_last_attempt_at = Some(now);
-        }
-    }
-
-    fn next_audio_preload_index(&self) -> Option<usize> {
-        if !self.config.audio_preload {
-            return None;
-        }
-        if self.playback_repeat_mode == PlaybackRepeatMode::LoopOne {
-            return None;
-        }
-        let len = self.playback_queue.len();
-        if len <= 1 {
-            return None;
-        }
-
-        let current = self.playback_index?.min(len.saturating_sub(1));
-        match self.playback_repeat_mode {
-            PlaybackRepeatMode::Sequence => {
-                if current + 1 < len {
-                    Some(current + 1)
-                } else {
-                    None
-                }
-            }
-            PlaybackRepeatMode::LoopAll => Some((current + 1) % len),
-            PlaybackRepeatMode::Shuffle => {
-                if current + 1 < len {
-                    Some(current + 1)
-                } else {
-                    None
-                }
-            }
-            PlaybackRepeatMode::LoopOne => None,
-        }
-    }
-
-    fn maybe_schedule_next_audio_preload(&mut self) {
-        if self.audio_prefetch_pending.is_some() {
-            return;
-        }
-
-        let Some(index) = self.next_audio_preload_index() else {
-            self.audio_preload_inflight_id = None;
-            self.audio_preload_target_song_id = None;
-            return;
-        };
-
-        let Some(track) = self.playback_queue.get(index) else {
-            return;
-        };
-        let quality_level = self.config.audio_quality.as_api_level().to_string();
-        let cache_path = self
-            .audio_player
-            .cached_song_path(&track.song_id, &quality_level);
-        if cache_path.is_file() {
-            self.audio_preload_inflight_id = None;
-            self.audio_preload_target_song_id = Some(track.song_id.clone());
-            return;
-        }
-
-        if self.audio_preload_target_song_id.as_deref() == Some(track.song_id.as_str())
-            && self.audio_preload_inflight_id.is_some()
-        {
-            return;
-        }
-
-        let now = Instant::now();
-        if let Some(last) = self.audio_preload_last_attempt_at {
-            if now.duration_since(last) < Duration::from_millis(AUDIO_PREFETCH_RETRY_MS) {
-                return;
-            }
-        }
-
-        let request_id = self.audio_prefetch_next_id;
-        self.audio_prefetch_next_id = self.audio_prefetch_next_id.saturating_add(1);
-        let req = AudioPrefetchRequest {
-            request_id,
-            song_id: track.song_id.clone(),
-            quality_level,
-            cache_path,
-            cookie: self
-                .api
-                .session_cookie()
-                .map(|value| value.to_string())
-                .or_else(|| self.session_cookie.clone()),
-        };
-
-        if self.audio_prefetch_tx.send(req).is_ok() {
-            self.audio_preload_inflight_id = Some(request_id);
-            self.audio_preload_target_song_id = Some(track.song_id.clone());
-            self.audio_preload_last_attempt_at = Some(now);
-        }
-    }
-
-    fn try_start_pending_playback(&mut self) {
-        let Some(pending) = self.audio_prefetch_pending else {
-            return;
-        };
-        let Some(track) = self.playback_queue.get(pending.index).cloned() else {
-            self.audio_prefetch_pending = None;
-            return;
-        };
-
-        match self
-            .audio_player
-            .play_cached_song(&track.song_id, self.config.audio_quality.as_api_level())
-        {
-            Ok(true) => {
-                self.audio_prefetch_pending = None;
-                self.playback_state = PlaybackRuntimeState::Playing;
-                if pending.announce {
-                    self.set_runtime_status(format!(
-                        "{}: {} - {}",
-                        self.lang_text("正在播放", "Now Playing"),
-                        track.title,
-                        track.artist
-                    ));
-                }
-            }
-            Ok(false) => {}
-            Err(err) => {
-                self.audio_prefetch_pending = None;
-                self.playback_state = PlaybackRuntimeState::Stopped;
-                self.set_runtime_status(format!(
-                    "{}: {}",
-                    self.lang_text("播放失败", "Playback failed"),
-                    err
-                ));
-            }
-        }
-    }
-
-    fn tick_audio_prefetch(&mut self) {
-        if self.audio_prefetch_pending.is_none()
-            && self.audio_prefetch_inflight_id.is_none()
-            && self.audio_preload_inflight_id.is_none()
-            && !self.config.audio_preload
-        {
-            return;
-        }
-
-        loop {
-            match self.audio_prefetch_rx.try_recv() {
-                Ok(result) => {
-                    if self.audio_prefetch_inflight_id == Some(result.request_id) {
-                        self.audio_prefetch_inflight_id = None;
+                match self
+                    .api
+                    .song_stream_url_with_quality(&track.song_id, quality)
+                    .await
+                {
+                    Ok(url) => {
+                        let (progress_tx, progress_rx) = watch::channel::<(u64, u64)>((0, 0));
+                        match StreamingReader::new(
+                            &self.api.http_client(),
+                            &url,
+                            cache_path.clone(),
+                            self.api.session_cookie(),
+                            progress_tx,
+                        )
+                        .await
+                        {
+                            Ok(reader) => {
+                                match self.audio_player.play_streaming(
+                                    reader,
+                                    &track.song_id,
+                                    cache_path,
+                                    progress_rx,
+                                ) {
+                                    Ok(()) => {
+                                        self.playback_state = PlaybackRuntimeState::Playing;
+                                        if announce {
+                                            self.set_runtime_status(format!(
+                                                "{}: {} - {}",
+                                                self.lang_text("正在播放", "Now Playing"),
+                                                enriched.title,
+                                                enriched.artist
+                                            ));
+                                        }
+                                    }
+                                    Err(err) => fail(err, self),
+                                }
+                            }
+                            Err(err) => fail(err, self),
+                        }
                     }
-
-                    if self.audio_preload_inflight_id == Some(result.request_id) {
-                        self.audio_preload_inflight_id = None;
-                        continue;
-                    }
-
-                    if self.audio_prefetch_pending.map(|p| p.request_id) != Some(result.request_id)
-                    {
-                        continue;
-                    }
-
-                    if result.success {
-                        self.try_start_pending_playback();
-                    } else if let Some(err) = result.error {
-                        self.set_runtime_status(format!(
-                            "{}: {}",
-                            self.lang_text("缓冲失败，正在重试", "Buffering failed, retrying"),
-                            err
-                        ));
-                    }
+                    Err(err) => fail(err, self),
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
             }
+            Err(err) => fail(err, self),
         }
-
-        if self.audio_prefetch_pending.is_some() {
-            self.try_start_pending_playback();
-            self.maybe_schedule_audio_prefetch(false);
-        }
-
-        self.maybe_schedule_next_audio_preload();
     }
 
     fn cover_cache_path_for_url(&self, url: &str) -> Option<PathBuf> {

@@ -179,17 +179,65 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         let ratio = progress_ratio(position, duration);
         let filled = ((ratio * progress_w as f32).round() as u16).min(progress_w);
 
+        // Get buffer progress if streaming
+        let buffer_ratio = app.buffer_progress().and_then(|(downloaded, total)| {
+            if total > 0 {
+                Some((downloaded as f32 / total as f32).min(1.0))
+            } else {
+                None
+            }
+        });
+        let buffer_filled = buffer_ratio
+            .map(|r| ((r * progress_w as f32).round() as u16).min(progress_w))
+            .unwrap_or(0);
+
         let mut spans = Vec::new();
-        spans.push(Span::styled(
-            "▁".repeat(filled as usize),
-            Style::default()
-                .fg(app.theme.color_accent3())
-                .add_modifier(Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            "▁".repeat(progress_w.saturating_sub(filled) as usize),
-            Style::default().fg(app.theme.color_surface()),
-        ));
+
+        if buffer_filled == 0 {
+            // No buffer data (cached playback): accent3 for played, text for remaining
+            if filled > 0 {
+                spans.push(Span::styled(
+                    "▁".repeat(filled as usize),
+                    Style::default()
+                        .fg(app.theme.color_accent3())
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            let remaining = progress_w.saturating_sub(filled);
+            if remaining > 0 {
+                spans.push(Span::styled(
+                    "▁".repeat(remaining as usize),
+                    Style::default().fg(app.theme.color_text()),
+                ));
+            }
+        } else {
+            // accent3 for played, text for buffered-not-played, surface for not-buffered
+            let accent_len = filled.min(buffer_filled);
+            if accent_len > 0 {
+                spans.push(Span::styled(
+                    "▁".repeat(accent_len as usize),
+                    Style::default()
+                        .fg(app.theme.color_accent3())
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            let buffered_not_played = buffer_filled.saturating_sub(filled);
+            if buffered_not_played > 0 {
+                spans.push(Span::styled(
+                    "▁".repeat(buffered_not_played as usize),
+                    Style::default().fg(app.theme.color_text()),
+                ));
+            }
+
+            let unbuffered = progress_w.saturating_sub(buffer_filled);
+            if unbuffered > 0 {
+                spans.push(Span::styled(
+                    "▁".repeat(unbuffered as usize),
+                    Style::default().fg(app.theme.color_surface()),
+                ));
+            }
+        }
 
         frame.render_widget(
             Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
