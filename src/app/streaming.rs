@@ -3,6 +3,7 @@
 //! Implements a Read + Seek trait that blocks when data isn't yet downloaded.
 
 use anyhow::{Context, Result, bail};
+use reqwest::Client;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tokio::sync::watch::Sender;
+use tokio::task::AbortHandle;
 use tokio::time::sleep;
 
 /// A streaming reader that downloads data while allowing reads.
@@ -21,6 +23,8 @@ pub struct StreamingReader {
     file: File,
     /// Temp path for cleanup on drop
     tmp_path: PathBuf,
+    /// Handle to cancel writer
+    writer: AbortHandle,
 }
 
 #[derive(Default)]
@@ -41,9 +45,11 @@ struct StreamingState {
 
 impl Drop for StreamingReader {
     fn drop(&mut self) {
+        self.writer.abort();
+
         // Clean up temp file if download not complete
         let done = self.state.done.load(Ordering::SeqCst);
-        if done == 0 {
+        if done != 1 {
             let _ = std::fs::remove_file(&self.tmp_path);
         }
     }
@@ -74,36 +80,33 @@ impl StreamingReader {
             .open(&tmp_path)
             .context("create streaming temp file")?;
 
-        let reader = Self {
-            state: state.clone(),
-            file,
-            tmp_path: tmp_path.clone(),
-        };
-
         // Start background download
-        let http = http.clone();
-        let url = url.to_string();
-        let cookie_clone = cookie.map(|s| s.to_string());
-        let progress_tx_clone = progress_tx.clone();
+        let download = download_streaming(
+            http.clone(),
+            url.to_string(),
+            tmp_path.clone(),
+            cache_path,
+            state.clone(),
+            cookie.map(|s| s.to_string()),
+            progress_tx,
+        );
 
-        tokio::spawn(async move {
-            if let Err(e) = download_streaming(
-                &http,
-                &url,
-                &tmp_path,
-                &cache_path,
-                &state,
-                cookie_clone.as_deref(),
-                progress_tx_clone,
-            )
-            .await
-            {
+        let state_clone = state.clone();
+        let hnd = tokio::spawn(async move {
+            if let Err(e) = download.await {
                 let mut err = state.error.lock().unwrap();
                 *err = Some(e.to_string());
                 state.done.store(2, Ordering::SeqCst);
                 state.condvar.notify_all();
             }
         });
+
+        let reader = Self {
+            state: state_clone,
+            file,
+            tmp_path: tmp_path,
+            writer: hnd.abort_handle(),
+        };
 
         Ok(reader)
     }
@@ -228,12 +231,12 @@ impl Seek for StreamingReader {
 }
 
 async fn download_streaming(
-    http: &reqwest::Client,
-    url: &str,
-    tmp_path: &PathBuf,
-    cache_path: &PathBuf,
-    state: &StreamingState,
-    cookie: Option<&str>,
+    http: Client,
+    url: String,
+    tmp_path: PathBuf,
+    cache_path: PathBuf,
+    state: Arc<StreamingState>,
+    cookie: Option<String>,
     progress_tx: Sender<(u64, u64)>,
 ) -> Result<()> {
     let mut request = http.get(url);
@@ -255,7 +258,7 @@ async fn download_streaming(
         OpenOptions::new()
             .write(true)
             .append(true)
-            .open(tmp_path)
+            .open(&tmp_path)
             .context("open streaming temp file for write")?
     };
 
@@ -293,7 +296,7 @@ async fn download_streaming(
     {
         let _guard = state.file_lock.lock().unwrap();
         drop(file);
-        std::fs::rename(tmp_path, cache_path).context("rename streaming temp file")?;
+        std::fs::rename(&tmp_path, cache_path).context("rename streaming temp file")?;
     }
 
     state.done.store(1, Ordering::SeqCst);
