@@ -3,6 +3,19 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::thread;
 
+fn should_drop_stderr_line(line: &str) -> bool {
+    // Drop typical libasound spam.
+    // Some backends may prefix with brackets or other chars.
+    if line.contains("ALSA lib") {
+        return true;
+    }
+
+    // Suppress only this known noisy probe line when source is empty.
+    // Example:
+    // [2026-..Z ERROR symphonia_core::probe] probe reach EOF at 0 bytes.
+    line.contains("probe reach EOF at 0 bytes")
+}
+
 /// Installs a stderr filter that drops libasound (ALSA) spam lines like:
 /// `ALSA lib pcm.c:... underrun occurred`
 ///
@@ -49,9 +62,7 @@ pub fn install_alsa_stderr_filter() {
                 match reader.read_line(&mut line) {
                     Ok(0) => break, // EOF
                     Ok(_) => {
-                        // Drop typical libasound spam.
-                        // Some backends may prefix with brackets or other chars.
-                        if line.contains("ALSA lib") {
+                        if should_drop_stderr_line(&line) {
                             continue;
                         }
                         let _ = orig_file.write_all(line.as_bytes());

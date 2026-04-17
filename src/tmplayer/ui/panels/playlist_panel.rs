@@ -597,6 +597,7 @@ mod tests {
                     subtext: (0, 0, 0),
                     base: (0, 0, 0),
                     surface: (0, 0, 0),
+                    buff: (10, 10, 10),
                     accent: (0, 0, 0),
                     accent2: (0, 0, 0),
                     accent3: (0, 0, 0),

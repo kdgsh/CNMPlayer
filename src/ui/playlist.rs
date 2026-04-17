@@ -202,10 +202,12 @@ fn draw_playlist_header(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
-    let inner = area.inner(ratatui::layout::Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
+    let inner = Rect {
+        x: area.x.saturating_add(1),
+        y: area.y.saturating_add(1),
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(1),
+    };
     if inner.width < 8 || inner.height < 3 {
         return;
     }

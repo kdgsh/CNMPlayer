@@ -194,7 +194,7 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         let mut spans = Vec::new();
 
         if buffer_filled == 0 {
-            // No buffer data (cached playback): accent3 for played, text for remaining
+            // No buffer data (cached/unknown progress): accent3 for played, buff for remaining
             if filled > 0 {
                 spans.push(Span::styled(
                     "▁".repeat(filled as usize),
@@ -207,11 +207,11 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
             if remaining > 0 {
                 spans.push(Span::styled(
                     "▁".repeat(remaining as usize),
-                    Style::default().fg(app.theme.color_text()),
+                    Style::default().fg(app.theme.color_buff()),
                 ));
             }
         } else {
-            // accent3 for played, text for buffered-not-played, surface for not-buffered
+            // accent3 for played, buff for buffered-not-played, surface for not-buffered
             let accent_len = filled.min(buffer_filled);
             if accent_len > 0 {
                 spans.push(Span::styled(
@@ -226,7 +226,7 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
             if buffered_not_played > 0 {
                 spans.push(Span::styled(
                     "▁".repeat(buffered_not_played as usize),
-                    Style::default().fg(app.theme.color_text()),
+                    Style::default().fg(app.theme.color_buff()),
                 ));
             }
 

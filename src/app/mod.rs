@@ -303,7 +303,7 @@ impl CoverFetchState {
         let (w, h) = (area.width, area.height);
         if draw_ascii {
             let placeholder = move || placeholder_cover_ascii(w, h, '░');
-            if self.size != area.as_size() {
+            if self.ascii.is_none() || self.size != area.as_size() {
                 if let Some(bytes) = peek_shared_future(&self.image) {
                     self.ascii = Some(make_ascii_future(bytes.clone(), w, h));
                     self.size = area.as_size();
