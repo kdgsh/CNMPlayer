@@ -22,38 +22,49 @@
 	<img src="https://img.shields.io/github/languages/code-size/professor-lee/CNMPlayer?style=flat&color=blueviolet" alt="Code Size">
 </p>
 
-<h2 align="center">项目概述</h2>
+## 项目概述
 
 CNMPlayer（Customized Netease Music Player）是一个运行在终端中的网易云音乐客户端。
-它支持二维码、邮箱和手机号登录，可以浏览推荐、搜索结果、歌单、作者页和专辑页，并把歌曲流式播放到终端中，同时缓存音频到本地。
+它支持二维码、账号（用户名/邮箱）和手机号验证码登录，启动时会自动恢复上次会话；
+可以浏览首页推荐、歌单/专辑结果、作者页和搜索页，并把歌曲流式播放到终端中，同时缓存音频到本地。
+切换到全屏播放时，CNMPlayer 会交给内置的 TMPlayer 全屏播放页。
 
-切换到全屏播放时，CNMPlayer 使用内置的 TMPlayer 播放页。
+## 主要功能
 
-<h2 align="center">已有功能</h2>
-
-- 二维码、邮箱、手机号登录
+- 二维码、账号（用户名/邮箱）和手机号验证码登录
 - 启动时自动恢复上次登录会话
-- 首页推荐、歌单页、作者页、专辑页和搜索页
-- 搜索后缀筛选：`@single`、`@album`、`@list`、`@author`，以及 `@artist` 别名
+- 首页推荐、歌单页、作者页和搜索页；`@album` 搜索结果会以歌单页样式展示
+- 搜索后缀支持 `@single`、`@album`、`@list`、`@author`，以及 `@artist` 别名；空查询的 `@author` 会列出已关注作者
 - 流式播放，并带本地音频缓存
+- 支持播放队列记忆，以及本地播放位置恢复
 - 支持按 VIP 权限自动裁剪的音质选择
-- 内容页页面歌词浮层
+- 内容页歌词浮层
 - 主题切换、语言切换、透明背景、提示开关和可配置快捷键
-- 频谱条 / 示波器可视化
-- 内置的全屏播放页，来源于 TMPlayer
-- 下载音频的缓存清理控制
+- 频谱条 / 示波器可视化；如果系统里没有 `cava`，可视化会自动关闭
+- 内置 TMPlayer 全屏播放页，并会在进出全屏时自动暂停 / 恢复主界面的 `cava`
+- Linux 下支持 MPRIS 媒体控制同步
+- 音频缓存清理控制
 
-<h2 align="center">技术栈</h2>
+## 注意事项
+
+- 当前图像协议只实现 `off` / `halfblocks`；旧的 `auto`、`sixel`、`kitty`、`iterm2` 会自动迁移到 `halfblocks`
+- 目前没有独立的“专辑页”；专辑搜索结果会以歌单页样式展示
+- `Esc`、`Ctrl+K` 和 `Ctrl+Up/Down` 属于固定快捷键，不在可重绑项内
+- 应用启动后会自动补齐缺失配置字段，并在需要时重写 `config/default.toml`
+
+## 技术栈
 
 - Rust 2024
 - TUI：ratatui + crossterm
 - 网络：tokio + reqwest + ncm-api-rs
 - 播放：rodio + symphonia + cpal
 - 元数据与封面：lofty + image + qrcode
+- 图像渲染：ratatui-image + chafa
 - 可视化：外部 `cava`
 - 全屏播放整合：TMPlayer
+- Linux 媒体控制：MPRIS
 
-<h2 align="center">开发与运行</h2>
+## 开发与运行
 
 ### 终端字体
 
@@ -71,7 +82,7 @@ sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-de
 ### 频谱可视化（`cava`）
 
 CNMPlayer 会查找外部 `cava` 可执行文件来生成实时频谱可视化。
-如果系统里没有 `cava`，程序仍然可以运行，但条形频谱会保持空白。
+如果系统里没有 `cava`，程序仍然可以运行，但条形频谱和示波器会自动关闭。
 
 可执行文件的查找顺序如下：
 
@@ -83,7 +94,7 @@ CNMPlayer 会查找外部 `cava` 可执行文件来生成实时频谱可视化�
 
 ### 运行
 
-开发环境运行：
+开发环境直接运行：
 
 ```bash
 cargo run
@@ -96,59 +107,58 @@ cargo build --release
 ./target/release/cnmplayer
 ```
 
-首次运行时，程序会在系统配置目录下创建配置文件。
+### 首次运行与资源目录
 
-- Linux：`~/.config/cnmplayer`
+首次运行时，程序会在系统配置目录下创建资产目录；Linux 上通常是 `~/.config/cnmplayer`。
+如果设置了 `CNMPLAYER_ASSET_DIR`，则会改用该目录作为资产根目录。
+程序会在这个根目录下维护 `config/`、`themes/` 和 `auth/` 子目录。
 
-你可以使用 `CNMPLAYER_ASSET_DIR` 覆盖资源根目录。程序仍然会在这个根目录下使用 `config/`、`themes/` 和 `auth/` 子目录。
+首次运行后你会看到：
+
+- `config/default.toml`
+- `themes/*.toml`
+- `auth/session.toml`
 
 音频缓存默认保存在系统缓存目录中；如果你在 `config/default.toml` 里设置了 `cache.path`，则会改用该目录。
 
-<h2 align="center">配置</h2>
+## 配置
 
 - `config/default.toml`：程序配置、播放配置、快捷键和缓存策略
 - `themes/*.toml`：主题定义
 - `auth/session.toml`：持久化登录 cookie
 - 缓存根目录：默认使用系统缓存目录，也可以通过 `cache.path` 指定
 
+程序启动后会自动补齐缺失配置字段，并在需要时重写 `config/default.toml`。旧版 `graphics_protocol` 的 `auto`、`sixel`、`kitty`、`iterm2` 值也会自动迁移为 `halfblocks`。
+
 `config/default.toml` 里比较重要的配置项：
 
 - 运行参数：`ui_fps`、`spectrum_hz`、`mpris_poll_ms`
-- 界面：`theme`、`language`、`transparent_background`、`show_hints`、`home_more_recommend`
-- 登录标题：`default_opening_title`
-- 播放布局：`visualize`、`page_lyrics`、`album_border`、`kitty_graphics`、`kitty_cover_scale_percent`
-- Bars 模式：`super_smooth_bar`、`bars_gap`、`bar_number`、`bar_channels`、`bar_channel_reverse`
-- 播放行为：`audio_quality`、`audio_preload`、`playback_memory`、`resume_last_position`
-- 歌词与识别：`lyrics_cover_fetch`、`lyrics_cover_download`、`audio_fingerprint`、`acoustid_api_key`
-- 全局快捷键：`keybind_search_box`、`keybind_fullscreen`、`keybind_settings`、`keybind_sidebar`、`keybind_quit`、`keybind_prev`、`keybind_next`、`keybind_toggle_play_pause`、`keybind_toggle_mode`
-- 全屏快捷键：`keybind_fullscreen_prev`、`keybind_fullscreen_next`、`keybind_fullscreen_toggle_play_pause`、`keybind_fullscreen_toggle_mode`、`keybind_fullscreen_eq`、`keybind_fullscreen_eq_reset`、`keybind_toggle_like_fullscreen`
-- 折叠栏快捷键：`keybind_toggle_like_collapsed`
+- 外观：`theme`、`language`、`transparent_background`、`show_hints`、`home_more_recommend`、`album_border`
+- 登录页：`default_opening_title`（支持 `\n` 换行）
+- 图像与可视化：`graphics_protocol`、`visualize`、`super_smooth_bar`、`bars_gap`、`bar_number`、`bar_channels`、`bar_channel_reverse`、`kitty_cover_scale_percent`
+- 播放行为：`audio_quality`、`playback_memory`、`resume_last_position`、`eq_bands_db`
+- 歌词与识别：`page_lyrics`、`lyrics_cover_fetch`、`lyrics_cover_download`、`audio_fingerprint`、`acoustid_api_key`
+- 快捷键：`keybind_*`（详见下文，可在设置页重绑）
 - 缓存策略：`cache.path`、`cache.clean_strategy`、`cache.max_size_mb`、`cache.max_age_days`、`cache.clean_on_startup`
 
-可用的音质档位：
+补充说明：
 
-- `standard`
-- `higher`
-- `exhigh`
-- `lossless`
-- `hires`
-- `jyeffect`
-- `sky`
-- `dolby`
-- `jymaster`
+- `theme` 可选 `system`、`latte`、`frappe`、`macchiato`、`mocha`，默认 `frappe`
+- `graphics_protocol` 当前只实现 `off` / `halfblocks`
+- `visualize` 支持 `off`、`bars`、`oscilloscope`；没有 `cava` 时会自动回退到 `off`
+- `cache.clean_strategy` 支持 `size`、`age`、`both`
+- `audio_quality` 支持 `standard`、`higher`、`exhigh`、`lossless`、`hires`、`jyeffect`、`sky`、`dolby`、`jymaster`
+- 如果当前账号没有 VIP 权限，程序会把音质限制到免费档位
 
-如果当前账号没有 VIP 权限，程序会把音质限制到免费档位。
+## 快捷键
 
-<h2 align="center">快捷键</h2>
-
-可配置快捷键（默认值）：
+可重绑快捷键（默认值）：
 
 - `Ctrl+S`：打开搜索框
-- `Ctrl+F`：打开全屏播放页
+- `Ctrl+F`：打开 / 返回全屏播放页
 - `T`：打开设置
 - `P`：切换侧边栏
 - `Q`：退出主程序
-- `Esc`：关闭浮层或返回当前页面
 - `Alt+Space`：播放 / 暂停
 - `Alt+Left`：上一首
 - `Alt+Right`：下一首
@@ -162,15 +172,16 @@ cargo build --release
 - `L`：在全屏页切换收藏状态
 - `Alt+L`：在折叠播放器栏切换收藏状态
 
-额外的固定快捷键：
+固定快捷键：
 
+- `Esc`：关闭浮层或返回当前页面
 - `Ctrl+Up` / `Ctrl+Down`：在侧边栏展开时切换歌单分区（用户创建 / 用户收藏）
 - `Ctrl+K`：打开帮助
 
 登录页：
 
 - `F1`：二维码登录
-- `F2`：用户名登录
+- `F2`：账号登录（用户名 / 邮箱）
 - `F3`：手机号登录
 - `Q`：退出程序
 - `Tab` / `↑` / `↓`：切换焦点
@@ -196,12 +207,12 @@ cargo build --release
 - `Ctrl+Alt+R`：恢复默认快捷键
 - `Esc`：返回
 
-<h2 align="center">相关项目</h2>
+## 相关项目
 
 - [TMPlayer](https://github.com/professor-lee/TMPlayer)：CNMPlayer 使用的全屏播放页实现
 - [ncm-api-rs](https://github.com/imsyy/ncm-api-rs)：CNMPlayer 使用的网易云音乐 API 客户端
 
-<h2 align="center">许可证</h2>
+## 许可证
 
 CNMPlayer 采用 [AGPL-3.0-only](LICENSE) 许可证。
 

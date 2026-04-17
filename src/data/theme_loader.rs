@@ -13,6 +13,7 @@ struct ThemeToml {
     subtext: String,
     base: String,
     surface: String,
+    buff: Option<String>,
     accent: String,
     accent2: String,
     accent3: String,
@@ -32,8 +33,16 @@ impl ThemeLoader {
         };
 
         let path = assets::resolve_asset_path(&rel);
-        let raw = fs::read_to_string(path)?;
+        let raw = fs::read_to_string(&path)?;
         let parsed: ThemeToml = toml::from_str(&raw)?;
+        let buff_hex = if let Some(buff) = parsed.buff.clone() {
+            buff
+        } else {
+            let generated = derive_buff_hex(&parsed.surface);
+            let upgraded = inject_buff_entry(&raw, &generated);
+            let _ = fs::write(&path, upgraded);
+            generated
+        };
 
         Ok(Theme {
             name,
@@ -43,6 +52,7 @@ impl ThemeLoader {
                 subtext: parse_hex(&parsed.subtext),
                 base: parse_hex(&parsed.base),
                 surface: parse_hex(&parsed.surface),
+                buff: parse_hex(&buff_hex),
                 accent: parse_hex(&parsed.accent),
                 accent2: parse_hex(&parsed.accent2),
                 accent3: parse_hex(&parsed.accent3),
@@ -61,4 +71,49 @@ fn parse_hex(raw: &str) -> (u8, u8, u8) {
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
     (r, g, b)
+}
+
+fn derive_buff_hex(surface_hex: &str) -> String {
+    let (r, g, b) = parse_hex(surface_hex);
+    format!(
+        "#{:02X}{:02X}{:02X}",
+        r.saturating_add(10),
+        g.saturating_add(10),
+        b.saturating_add(10)
+    )
+}
+
+fn inject_buff_entry(raw: &str, buff_hex: &str) -> String {
+    if raw.lines().any(|line| is_toml_key(line, "buff")) {
+        return raw.to_string();
+    }
+
+    let mut out = String::with_capacity(raw.len() + 24);
+    let mut inserted = false;
+
+    for line in raw.lines() {
+        out.push_str(line);
+        out.push('\n');
+        if !inserted && is_toml_key(line, "surface") {
+            out.push_str(&format!("buff = \"{}\"\n", buff_hex));
+            inserted = true;
+        }
+    }
+
+    if !inserted {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!("buff = \"{}\"\n", buff_hex));
+    }
+
+    out
+}
+
+fn is_toml_key(line: &str, key: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with(key) {
+        return false;
+    }
+    trimmed[key.len()..].trim_start().starts_with('=')
 }

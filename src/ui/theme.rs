@@ -34,6 +34,7 @@ pub struct ThemePalette {
     pub subtext: (u8, u8, u8),
     pub base: (u8, u8, u8),
     pub surface: (u8, u8, u8),
+    pub buff: (u8, u8, u8),
     pub accent: (u8, u8, u8),
     pub accent2: (u8, u8, u8),
     pub accent3: (u8, u8, u8),
@@ -64,6 +65,10 @@ impl Theme {
         map_color(self.capability, self.palette.surface)
     }
 
+    pub fn color_buff(&self) -> Color {
+        map_color(self.capability, self.palette.buff)
+    }
+
     pub fn color_accent(&self) -> Color {
         map_color(self.capability, self.palette.accent)
     }
@@ -87,6 +92,7 @@ impl Default for Theme {
                 subtext: (170, 170, 170),
                 base: (0, 0, 0),
                 surface: (32, 32, 32),
+                buff: (42, 42, 42),
                 accent: (255, 255, 255),
                 accent2: (255, 255, 255),
                 accent3: (255, 255, 255),

@@ -1,3 +1,4 @@
+use crate::data::config::GraphicsProtocol;
 use crate::tmplayer::data::assets;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -29,7 +30,7 @@ pub struct Config {
     pub album_border: bool,
 
     #[serde(default)]
-    pub kitty_graphics: bool,
+    pub graphics_protocol: GraphicsProtocol,
 
     #[serde(default)]
     pub page_lyrics: bool,
@@ -45,9 +46,6 @@ pub struct Config {
 
     #[serde(default = "default_audio_quality")]
     pub audio_quality: AudioQuality,
-
-    #[serde(default)]
-    pub audio_preload: bool,
 
     #[serde(default)]
     pub playback_memory: bool,
@@ -359,13 +357,12 @@ impl Default for Config {
             eq_bands_db: default_eq_bands_db(),
             transparent_background: false,
             album_border: default_album_border(),
-            kitty_graphics: false,
+            graphics_protocol: GraphicsProtocol::default(),
             page_lyrics: false,
             kitty_cover_scale_percent: default_kitty_cover_scale_percent(),
             super_smooth_bar: false,
             bars_gap: false,
             audio_quality: default_audio_quality(),
-            audio_preload: false,
             playback_memory: false,
             show_hints: default_show_hints(),
             home_more_recommend: false,
@@ -436,7 +433,6 @@ impl Config {
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")
             || !raw.contains("audio_quality")
-            || !raw.contains("audio_preload")
             || !raw.contains("playback_memory")
             || !raw.contains("page_lyrics")
             || !raw.contains("show_hints")

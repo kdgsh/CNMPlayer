@@ -1,13 +1,10 @@
-use image::imageops::FilterType;
+use std::sync::Arc;
+
+use image::{DynamicImage, imageops::FilterType};
 
 pub const COVER_CHARSET: &str = "⠀░▒▓█";
 
-pub fn render_cover_ascii(image_bytes: &[u8], width: u16, height: u16) -> Option<String> {
-    if width == 0 || height == 0 {
-        return None;
-    }
-
-    let img = image::load_from_memory(image_bytes).ok()?;
+pub fn render_cover_ascii(img: Arc<DynamicImage>, width: u16, height: u16) -> Option<String> {
     let resized = img.resize_exact(
         width as u32,
         (height as u32).saturating_mul(2),

@@ -81,8 +81,8 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         format!(
             "{}: {}",
-            l(app, "Kitty 图形", "Kitty Graphics"),
-            on_off(app, app.config.kitty_graphics)
+            l(app, "图像协议", "Image Protocol"),
+            app.config.graphics_protocol.display_name()
         ),
         format!("{}...", l(app, "播放设置", "Playback Settings")),
         format!("{}...", l(app, "按键绑定", "Keybinds")),
@@ -191,11 +191,6 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             "{}: {}",
             l(app, "音质", "Audio Quality"),
             audio_quality_label(app, app.config.audio_quality)
-        ),
-        format!(
-            "{}: {}",
-            l(app, "音频预加载", "Audio Preload"),
-            on_off(app, app.config.audio_preload)
         ),
         format!(
             "{}: {}",

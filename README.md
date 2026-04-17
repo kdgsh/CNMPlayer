@@ -22,38 +22,49 @@
 	<img src="https://img.shields.io/github/languages/code-size/professor-lee/CNMPlayer?style=flat&color=blueviolet" alt="Code Size">
 </p>
 
-<h2 align="center">Project Overview</h2>
+## Project Overview
 
-CNMPlayer, short for Customized Netease Music Player, is a terminal music client for NetEase Cloud Music.
-It supports QR code, email, and phone login, browses recommendations and search results, and streams music in the terminal with local caching.
+CNMPlayer (Customized Netease Music Player) is a terminal NetEase Cloud Music client.
+It supports QR code, account (username/email), and phone verification-code login; automatically restores the last session on startup;
+browses home recommendations, playlist/album results, artist pages, and search pages; and streams songs in the terminal with local caching.
+When you switch into fullscreen playback, CNMPlayer hands control to the embedded TMPlayer fullscreen page.
 
-When you switch into fullscreen playback, CNMPlayer uses the embedded TMPlayer playback page.
+## Main Features
 
-<h2 align="center">Features</h2>
-
-- QR code, email, and phone login
-- Session cookie restore on startup
-- Home recommendations, playlist pages, author pages, album pages, and search pages
-- Search suffix filters: `@single`, `@album`, `@list`, `@author`, and the `@artist` alias
-- Stream playback with a local audio cache
-- Audio quality selection with VIP-aware clamping
+- QR code, account (username/email), and phone verification-code login
+- Automatic session restore on startup
+- Home recommendations, playlist pages, artist pages, and search pages; `@album` search results reuse the playlist-page layout
+- Search suffixes: `@single`, `@album`, `@list`, `@author`, and the `@artist` alias; an empty `@author` query lists followed artists
+- Streaming playback with a local audio cache
+- Playback queue memory and local playback position restore
+- VIP-aware audio quality clamping
 - Page lyrics overlay on content pages
-- Theme switching, language switching, transparency, hint toggles, and configurable keybinds
-- Playback visualizer with bars or oscilloscope mode
-- Embedded fullscreen playback page integrated from TMPlayer
-- Cache cleanup controls for downloaded audio
+- Theme switching, language switching, transparent background, hint toggles, and configurable keybinds
+- Bars / oscilloscope visualization; if `cava` is not installed, visualization is automatically disabled
+- Embedded TMPlayer fullscreen page; the main UI's `cava` is paused/resumed when entering/leaving fullscreen
+- Linux MPRIS sync
+- Audio cache cleanup controls
 
-<h2 align="center">Tech Stack</h2>
+## Notes
+
+- Current image protocol only implements `off` / `halfblocks`; legacy `auto`, `sixel`, `kitty`, and `iterm2` values are migrated to `halfblocks`
+- There is no dedicated album page; album search results are shown with the playlist-page layout
+- `Esc`, `Ctrl+K`, and `Ctrl+Up/Down` are fixed shortcuts and cannot be rebound
+- The app fills in missing config fields on startup and rewrites `config/default.toml` when needed
+
+## Tech Stack
 
 - Rust 2024
 - TUI: ratatui + crossterm
 - Networking: tokio + reqwest + ncm-api-rs
 - Playback: rodio + symphonia + cpal
 - Metadata and artwork: lofty + image + qrcode
+- Image rendering: ratatui-image + chafa
 - Visualization: external `cava`
 - Fullscreen playback integration: TMPlayer
+- Linux media control: MPRIS
 
-<h2 align="center">Development Setup</h2>
+## Development and Run
 
 ### Terminal Font
 
@@ -71,7 +82,7 @@ sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-de
 ### Spectrum Visualization (`cava`)
 
 CNMPlayer looks for an external `cava` binary for the live spectrum visualizer.
-If `cava` is not available, the app still runs, but the bars visualizer stays empty.
+If `cava` is not available, the app still runs, but the bars and oscilloscope visualizers are automatically disabled.
 
 The executable lookup order is:
 
@@ -96,59 +107,58 @@ cargo build --release
 ./target/release/cnmplayer
 ```
 
-On first run, the app creates its configuration files under your OS config directory.
+### First Run and Asset Root
 
-- Linux: `~/.config/cnmplayer`
+On first run, the app creates its asset directory under your OS config directory; on Linux this is usually `~/.config/cnmplayer`.
+If `CNMPLAYER_ASSET_DIR` is set, that directory becomes the asset root instead.
+The app keeps `config/`, `themes/`, and `auth/` under that root.
 
-You can override the asset root with `CNMPLAYER_ASSET_DIR`. The app will still use `config/`, `themes/`, and `auth/` under that root.
+After the first run you will see:
+
+- `config/default.toml`
+- `themes/*.toml`
+- `auth/session.toml`
 
 Audio cache files are stored under your OS cache directory unless you set `cache.path` in `config/default.toml`.
 
-<h2 align="center">Configuration</h2>
+## Configuration
 
 - `config/default.toml`: application settings, playback settings, keybinds, and cache policy
 - `themes/*.toml`: theme definitions
 - `auth/session.toml`: persisted login cookie
 - Cache root: OS cache directory by default, or `cache.path` if you set one
 
+The app fills in missing config fields on startup and rewrites `config/default.toml` when needed. Legacy `graphics_protocol` values `auto`, `sixel`, `kitty`, and `iterm2` are migrated to `halfblocks`.
+
 Important settings in `config/default.toml`:
 
 - Runtime: `ui_fps`, `spectrum_hz`, `mpris_poll_ms`
-- Interface: `theme`, `language`, `transparent_background`, `show_hints`, `home_more_recommend`
-- Login banner: `default_opening_title`
-- Playback layout: `visualize`, `page_lyrics`, `album_border`, `kitty_graphics`, `kitty_cover_scale_percent`
-- Bars mode: `super_smooth_bar`, `bars_gap`, `bar_number`, `bar_channels`, `bar_channel_reverse`
-- Playback behavior: `audio_quality`, `audio_preload`, `playback_memory`, `resume_last_position`
-- Lyrics and recognition: `lyrics_cover_fetch`, `lyrics_cover_download`, `audio_fingerprint`, `acoustid_api_key`
-- Global keybinds: `keybind_search_box`, `keybind_fullscreen`, `keybind_settings`, `keybind_sidebar`, `keybind_quit`, `keybind_prev`, `keybind_next`, `keybind_toggle_play_pause`, `keybind_toggle_mode`
-- Fullscreen keybinds: `keybind_fullscreen_prev`, `keybind_fullscreen_next`, `keybind_fullscreen_toggle_play_pause`, `keybind_fullscreen_toggle_mode`, `keybind_fullscreen_eq`, `keybind_fullscreen_eq_reset`, `keybind_toggle_like_fullscreen`
-- Collapsed player keybind: `keybind_toggle_like_collapsed`
+- Interface: `theme`, `language`, `transparent_background`, `show_hints`, `home_more_recommend`, `album_border`
+- Login banner: `default_opening_title` (supports `\n` line breaks)
+- Image and visualization: `graphics_protocol`, `visualize`, `super_smooth_bar`, `bars_gap`, `bar_number`, `bar_channels`, `bar_channel_reverse`, `kitty_cover_scale_percent`
+- Playback behavior: `audio_quality`, `playback_memory`, `resume_last_position`, `eq_bands_db`
+- Lyrics and recognition: `page_lyrics`, `lyrics_cover_fetch`, `lyrics_cover_download`, `audio_fingerprint`, `acoustid_api_key`
+- Keybinds: `keybind_*` (see below; can be rebound in Settings)
 - Cache policy: `cache.path`, `cache.clean_strategy`, `cache.max_size_mb`, `cache.max_age_days`, `cache.clean_on_startup`
 
-The available audio quality levels are:
+Additional notes:
 
-- `standard`
-- `higher`
-- `exhigh`
-- `lossless`
-- `hires`
-- `jyeffect`
-- `sky`
-- `dolby`
-- `jymaster`
+- `theme` can be `system`, `latte`, `frappe`, `macchiato`, or `mocha`; the default is `frappe`
+- `graphics_protocol` currently only implements `off` / `halfblocks`
+- `visualize` supports `off`, `bars`, and `oscilloscope`; if `cava` is unavailable it falls back to `off`
+- `cache.clean_strategy` supports `size`, `age`, and `both`
+- `audio_quality` supports `standard`, `higher`, `exhigh`, `lossless`, `hires`, `jyeffect`, `sky`, `dolby`, and `jymaster`
+- If the current account does not have VIP access, CNMPlayer clamps the quality to the free range
 
-If the current account does not have VIP access, CNMPlayer clamps the quality to the free range.
-
-<h2 align="center">Keyboard Shortcuts</h2>
+## Keyboard Shortcuts
 
 Configurable shortcuts (default bindings):
 
 - `Ctrl+S`: open the search box
-- `Ctrl+F`: open fullscreen playback
+- `Ctrl+F`: open / return to fullscreen playback
 - `T`: open settings
 - `P`: toggle the sidebar
 - `Q`: quit the host app
-- `Esc`: close overlays or go back from the current page
 - `Alt+Space`: toggle play/pause
 - `Alt+Left`: previous track
 - `Alt+Right`: next track
@@ -162,15 +172,16 @@ Configurable shortcuts (default bindings):
 - `L`: toggle like/unlike in fullscreen
 - `Alt+L`: toggle like/unlike in the collapsed player bar
 
-Additional fixed shortcuts:
+Fixed shortcuts:
 
+- `Esc`: close overlays or go back from the current page
 - `Ctrl+Up` / `Ctrl+Down`: switch sidebar playlist section (Created / Collected) when the sidebar is expanded
 - `Ctrl+K`: open help
 
 Login page:
 
 - `F1`: QR login
-- `F2`: username login
+- `F2`: account login (username / email)
 - `F3`: phone login
 - `Q`: quit the app
 - `Tab` / `Up` / `Down`: switch focus
@@ -196,19 +207,18 @@ Settings keybind page:
 - `Ctrl+Alt+R`: reset keybinds to defaults
 - `Esc`: return
 
-<h2 align="center">Related Projects</h2>
+## Related Projects
 
 - [TMPlayer](https://github.com/professor-lee/TMPlayer): fullscreen playback UI used by CNMPlayer
 - [ncm-api-rs](https://github.com/imsyy/ncm-api-rs): NetEase Cloud Music API client used by CNMPlayer
 
-<h2 align="center">License</h2>
+## License
 
 CNMPlayer is licensed under [AGPL-3.0-only](LICENSE).
 
 Third-party attributions and license notices for vendored code are documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 See [CITATION.cff](CITATION.cff) for the standard citation metadata and upstream references.
-
 
 ---
 ## Star History

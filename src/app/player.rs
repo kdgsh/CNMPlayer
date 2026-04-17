@@ -1,3 +1,4 @@
+use crate::app::streaming::StreamingReader;
 use crate::data::assets;
 use crate::data::config::{CacheCleanStrategy, Config};
 use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings};
@@ -12,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
+use tokio::sync::watch::Receiver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioPlayerState {
@@ -31,6 +33,8 @@ pub struct AudioPlayer {
     started_at: Option<Instant>,
     eq: EqSettings,
     eq_params: Arc<EqParams>,
+    /// Receives buffer progress updates pushed from StreamingReader.
+    progress_rx: Option<Receiver<(u64, u64)>>,
 }
 
 impl AudioPlayer {
@@ -60,6 +64,7 @@ impl AudioPlayer {
             started_at: None,
             eq,
             eq_params,
+            progress_rx: None,
         };
 
         if let Err(err) = player.ensure_output_device_sink() {
@@ -111,6 +116,46 @@ impl AudioPlayer {
         self.total_duration = total_duration;
         self.paused_position = Duration::from_secs(0);
         self.started_at = Some(Instant::now());
+        self.progress_rx = None;
+        Ok(())
+    }
+
+    /// Play audio from a streaming reader that downloads while playing.
+    /// The streaming reader handles the background download.
+    /// Progress updates are pushed through `progress_rx`.
+    pub fn play_streaming(
+        &mut self,
+        reader: StreamingReader,
+        song_id: &str,
+        cache_path: PathBuf,
+        progress_rx: Receiver<(u64, u64)>,
+    ) -> Result<()> {
+        self.ensure_output_device_sink()?;
+
+        let decoder = Decoder::new(reader)
+            .with_context(|| format!("decode streaming audio failed for {}", song_id))?;
+        let total_duration = decoder.total_duration();
+        let source = EqSource::new(decoder, self.eq_params.clone());
+
+        let device_sink = self
+            .device_sink
+            .as_ref()
+            .context("audio output device_sink not initialized")?;
+        let player = Player::connect_new(device_sink.mixer());
+        player.append(source);
+        player.play();
+
+        if let Some(old) = self.sink.take() {
+            old.stop();
+        }
+
+        self.sink = Some(player);
+        self.current_song_id = Some(song_id.to_string());
+        self.current_file_path = Some(cache_path);
+        self.total_duration = total_duration;
+        self.paused_position = Duration::from_secs(0);
+        self.started_at = Some(Instant::now());
+        self.progress_rx = Some(progress_rx);
         Ok(())
     }
 
@@ -160,6 +205,7 @@ impl AudioPlayer {
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
+        self.progress_rx = None;
         self.current_song_id = None;
         self.current_file_path = None;
         self.total_duration = None;
@@ -169,6 +215,12 @@ impl AudioPlayer {
 
     pub fn duration(&self) -> Option<Duration> {
         self.total_duration
+    }
+
+    /// Returns the latest buffered progress (downloaded, total).
+    /// Uses watch channel which caches the latest value.
+    pub fn recv_progress(&mut self) -> Option<(u64, u64)> {
+        self.progress_rx.as_mut().map(|rx| *rx.borrow())
     }
 
     pub fn seek_to_ratio(&mut self, ratio: f32, fallback_total: Option<Duration>) -> Result<()> {

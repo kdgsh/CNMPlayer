@@ -44,6 +44,8 @@ pub struct ThemePalette {
     pub subtext: (u8, u8, u8),
     pub base: (u8, u8, u8),
     pub surface: (u8, u8, u8),
+    #[allow(dead_code)]
+    pub buff: (u8, u8, u8),
     pub accent: (u8, u8, u8),
     pub accent2: (u8, u8, u8),
     pub accent3: (u8, u8, u8),
@@ -68,6 +70,10 @@ impl Theme {
     }
     pub fn color_surface(&self) -> Color {
         map_color(self.capability, self.palette.surface)
+    }
+    #[allow(dead_code)]
+    pub fn color_buff(&self) -> Color {
+        map_color(self.capability, self.palette.buff)
     }
     pub fn color_accent(&self) -> Color {
         map_color(self.capability, self.palette.accent)

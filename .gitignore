@@ -7,3 +7,9 @@ flamegraph.svg
 
 # samply
 profile.json.gz
+
+# dhat
+dhat-heap.json
+dhat.svg
+
+/.remember

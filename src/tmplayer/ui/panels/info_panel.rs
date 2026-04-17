@@ -1,3 +1,4 @@
+use crate::data::config::GraphicsProtocol;
 use crate::tmplayer::app::state::{AppState, CoverSnapshot, Overlay, PlayMode};
 use crate::tmplayer::render::cover_cache::CoverKey;
 use crate::tmplayer::ui::borders::SOLID_BORDER;
@@ -157,8 +158,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     if l.cover.width > 0 && l.cover.height > 0 {
         let show_border = app.config.album_border;
 
-        let kitty_enabled = app.config.kitty_graphics
-            && app.kitty_graphics_supported
+        let kitty_enabled = app.config.graphics_protocol != GraphicsProtocol::Off
             && app.player.track.cover.is_some();
 
         let dominant_bg = if let (Some(bytes), Some(hash)) = (

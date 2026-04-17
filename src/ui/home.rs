@@ -166,17 +166,21 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             height: text_rows,
         };
 
-        if cover_rect.width > 0 && cover_rect.height > 0 {
-            let ascii = {
-                let tile = &mut app.home.tiles[index];
-                tile.cover_ascii(cover_rect.width, cover_rect.height)
-            };
-            let cover_style = if focused {
+        if !cover_rect.is_empty() {
+            let draw_ascii = app.draw_ascii();
+            let text_style = if focused {
                 Style::default().fg(app.theme.color_accent2())
             } else {
                 Style::default().fg(app.theme.color_text())
             };
-            frame.render_widget(Paragraph::new(ascii).style(cover_style), cover_rect);
+            app.home.tiles[index].cover.render(
+                frame,
+                &mut app.graphics_picker,
+                cover_rect,
+                text_style,
+                None,
+                draw_ascii,
+            );
         }
 
         let (title, subtitle) = {

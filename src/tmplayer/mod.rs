@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use crate::data::config::{
     AudioQuality as HostAudioQuality, BarChannels as HostBarChannels, BarNumber as HostBarNumber,
-    Config as HostConfig, Language as HostLanguage, VisualizeMode as HostVisualizeMode,
+    Config as HostConfig, GraphicsProtocol, Language as HostLanguage,
+    VisualizeMode as HostVisualizeMode,
 };
 
 #[derive(Debug, Clone)]
@@ -96,10 +97,10 @@ pub struct HostConfigSync {
     pub transparent_background: bool,
     pub album_border: bool,
     pub language: HostLanguage,
+    pub graphics_protocol: GraphicsProtocol,
     pub page_lyrics: bool,
     pub audio_quality: HostAudioQuality,
     pub eq_bands_db: [f32; crate::tmplayer::app::state::EQ_BANDS],
-    pub audio_preload: bool,
     pub playback_memory: bool,
     pub vip_audio_unlocked: bool,
     pub show_hints: bool,
@@ -110,7 +111,6 @@ pub struct HostConfigSync {
     pub bar_number: HostBarNumber,
     pub bar_channels: HostBarChannels,
     pub bar_channel_reverse: bool,
-    pub kitty_graphics: bool,
 }
 
 pub trait HostPlaybackBridge {
@@ -171,7 +171,7 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         transparent_background: host.transparent_background,
         page_lyrics: host.page_lyrics,
         album_border: host.album_border,
-        kitty_graphics: host.kitty_graphics,
+        graphics_protocol: host.graphics_protocol,
         kitty_cover_scale_percent: host.kitty_cover_scale_percent,
         super_smooth_bar: host.super_smooth_bar,
         bars_gap: host.bars_gap,
@@ -186,7 +186,6 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
             HostAudioQuality::Dolby => data::config::AudioQuality::Dolby,
             HostAudioQuality::Jymaster => data::config::AudioQuality::Jymaster,
         },
-        audio_preload: host.audio_preload,
         playback_memory: host.playback_memory,
         show_hints: host.show_hints,
         home_more_recommend: host.home_more_recommend,

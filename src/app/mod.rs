@@ -1,13 +1,15 @@
 mod api;
 mod mpris_bridge;
 pub(crate) mod player;
+pub(crate) mod streaming;
 
-use crate::data::config::Config;
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
+use crate::data::config::{Config, GraphicsProtocol};
 use crate::data::playback_session;
 use crate::data::session;
 use crate::data::theme_loader::ThemeLoader;
 use crate::render::cover_renderer::render_cover_ascii;
+use crate::render::graphics_overlay::cover_viewport;
 use crate::tmplayer::app::state::LyricLine;
 use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
 use crate::tmplayer::playback::metadata::{parse_lrc, parse_plain_lyrics};
@@ -16,7 +18,16 @@ use anyhow::{Result, anyhow};
 use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
+use futures::{FutureExt, future::Shared};
+use image::{DynamicImage, GenericImageView};
 use ncm_api::ApiResponse;
+use ratatui::Frame;
+use ratatui::layout::{Rect, Size};
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Paragraph};
+use ratatui_image::StatefulImage;
+use ratatui_image::picker::Picker;
+use ratatui_image::protocol::StatefulProtocol;
 use reqwest::{Client, header};
 use serde_json::Value;
 use std::collections::HashSet;
@@ -24,21 +35,27 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::sync::watch;
+use tokio::task;
 use unicode_width::UnicodeWidthChar;
 
 use api::ApiState;
 use mpris_bridge::{MprisBridge, MprisControlEvent, MprisSyncPayload};
 use player::{AudioPlayer, AudioPlayerState, cleanup_cache_dir, resolve_cache_root};
+use streaming::StreamingReader;
 
 const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 10;
-const SETTINGS_PLAYBACK_ITEMS: usize = 10;
+const SETTINGS_PLAYBACK_ITEMS: usize = 9;
 pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 17;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
@@ -49,7 +66,6 @@ const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
 const COVER_CACHE_SUBDIR: &str = "cover";
 const COVER_FETCH_RETRY_MS: u64 = 1500;
 const LYRICS_FETCH_RETRY_MS: u64 = 1500;
-const AUDIO_PREFETCH_RETRY_MS: u64 = 2000;
 const SIDEBAR_SLIDE_STEP_CELLS: f32 = 4.0;
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
@@ -226,14 +242,111 @@ impl LoginState {
     }
 }
 
+type SharedFuture<T> = Shared<Pin<Box<dyn Future<Output = Option<T>> + Send>>>;
+type CoverFuture = SharedFuture<Arc<DynamicImage>>;
+type AsciiFuture = SharedFuture<String>;
+
+fn shot_and_share<F>(fut: F) -> Shared<F>
+where
+    F: Future + Sized + Send + 'static,
+    F::Output: Clone + Sync + Send,
+{
+    let shared = fut.shared();
+    tokio::spawn(shared.clone());
+    shared
+}
+
+pub fn peek_shared_future<T>(cover_bytes: &Option<SharedFuture<T>>) -> Option<&T> {
+    cover_bytes.as_ref()?.peek()?.as_ref()
+}
+
+#[derive(Clone, Default)]
+pub struct CoverFetchState {
+    pub url: Option<String>,
+    pub image: Option<CoverFuture>,
+    ascii: Option<AsciiFuture>,
+    size: Size,
+    protocol: Option<Arc<Mutex<StatefulProtocol>>>,
+}
+
+impl CoverFetchState {
+    pub fn load(&mut self, api: ApiState, url: String) {
+        let cover_url = url.clone();
+        let fut = async move {
+            let bytes = api.fetch_cover_bytes(&cover_url).await.ok();
+            let flatten = bytes.filter(|x| !x.is_empty());
+            let image = flatten.and_then(|x| image::load_from_memory(&x).ok());
+
+            // Downsampling to 500px to save memory.
+            image.map(|x| x.thumbnail(500, 500)).map(Arc::new)
+        };
+        let fut = Box::pin(fut);
+        self.image = Some(shot_and_share(fut));
+        self.url = Some(url);
+        self.size = Size::ZERO;
+        self.protocol = None;
+    }
+
+    pub fn render(
+        &mut self,
+        frame: &mut Frame,
+        picker: &mut Picker,
+        area: Rect,
+        text_style: Style,
+        bg_style: Option<Style>,
+        draw_ascii: bool,
+    ) {
+        if let Some(bg) = bg_style {
+            frame.render_widget(Block::default().style(bg), area);
+        }
+
+        let (w, h) = (area.width, area.height);
+        if draw_ascii {
+            let placeholder = move || placeholder_cover_ascii(w, h, '░');
+            if self.ascii.is_none() || self.size != area.as_size() {
+                if let Some(bytes) = peek_shared_future(&self.image) {
+                    self.ascii = Some(make_ascii_future(bytes.clone(), w, h));
+                    self.size = area.as_size();
+                }
+            }
+            let ascii = match peek_shared_future(&self.ascii) {
+                Some(x) => x.clone(),
+                None => placeholder(),
+            };
+            frame.render_widget(Paragraph::new(ascii).style(text_style), area);
+        } else {
+            let Some(img) = peek_shared_future(&self.image) else {
+                return;
+            };
+            if self.protocol.is_none() || self.size != area.as_size() {
+                let (img_w, img_h) = img.dimensions();
+                let (x, y, w, h) = cover_viewport(img_w, img_h, w, h);
+                let img = img.crop_imm(x, y, w, h);
+                self.protocol = Some(Arc::new(Mutex::new(picker.new_resize_protocol(img))));
+                self.size = area.as_size();
+            }
+            if let Some(proto) = &self.protocol {
+                let mut proto = proto.lock().unwrap();
+                let widget = StatefulImage::<StatefulProtocol>::default();
+                frame.render_stateful_widget(widget, area, &mut proto);
+            }
+        }
+    }
+}
+
+fn make_ascii_future(bytes: Arc<DynamicImage>, width: u16, height: u16) -> AsciiFuture {
+    let fut = Box::pin(async move {
+        let hnd = task::spawn_blocking(move || render_cover_ascii(bytes, width, height));
+        hnd.await.ok().flatten()
+    });
+    shot_and_share(fut)
+}
+
 pub struct HomeTile {
     pub id: Option<String>,
     pub title: String,
     pub subtitle: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
 }
 
 impl HomeTile {
@@ -242,45 +355,25 @@ impl HomeTile {
             id: Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string()),
             title: "每日推荐".to_string(),
             subtitle: String::new(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
         }
     }
 
     fn from_recommendation(
+        api: &ApiState,
         id: Option<String>,
         title: String,
         subtitle: String,
         cover_url: Option<String>,
     ) -> Self {
+        let mut cover = CoverFetchState::default();
+        cover_url.map(|x| cover.load(api.clone(), x));
         Self {
             id,
             title,
             subtitle,
-            cover_url,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
+            cover,
         }
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
-
-        if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
-        }
-
-        self.cover_ascii.clone()
     }
 }
 
@@ -923,10 +1016,7 @@ pub struct PlaylistState {
     pub title: String,
     pub artist: String,
     pub description: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
     pub focused_idx: usize,
     pub scroll_offset: usize,
     pub visible_rows: usize,
@@ -940,10 +1030,7 @@ impl Default for PlaylistState {
             title: "歌单详情".to_string(),
             artist: "网易云音乐".to_string(),
             description: "从主页进入歌单后加载真实数据。".to_string(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
             focused_idx: 0,
             scroll_offset: 0,
             visible_rows: 1,
@@ -1047,29 +1134,6 @@ impl PlaylistState {
         self.ensure_focus_visible();
         true
     }
-
-    pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
-        self.cover_bytes = bytes;
-        self.cover_ascii.clear();
-        self.cover_ascii_size = (0, 0);
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
-
-        if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
-        }
-
-        self.cover_ascii.clone()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1084,10 +1148,7 @@ pub struct AuthorTile {
     pub kind: AuthorTileKind,
     pub title: String,
     pub subtitle: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
 }
 
 impl AuthorTile {
@@ -1096,45 +1157,25 @@ impl AuthorTile {
             kind: AuthorTileKind::Album,
             title: "暂无内容".to_string(),
             subtitle: "No content".to_string(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
         }
     }
 
     fn from_album(
+        api: &ApiState,
         title: String,
         subtitle: String,
         cover_url: Option<String>,
         kind: AuthorTileKind,
     ) -> Self {
+        let mut cover = CoverFetchState::default();
+        cover_url.map(|x| cover.load(api.clone(), x));
         Self {
             kind,
             title,
             subtitle,
-            cover_url,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
+            cover,
         }
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
-
-        if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
-        }
-
-        self.cover_ascii.clone()
     }
 }
 
@@ -1143,10 +1184,7 @@ pub struct AuthorState {
     pub title: String,
     pub artist: String,
     pub description: String,
-    pub cover_url: Option<String>,
-    pub cover_bytes: Option<Vec<u8>>,
-    cover_ascii: String,
-    cover_ascii_size: (u16, u16),
+    pub cover: CoverFetchState,
     pub focused_idx: usize,
     pub columns: usize,
     pub scroll_row_offset: usize,
@@ -1165,10 +1203,7 @@ impl Default for AuthorState {
             title: "作者页".to_string(),
             artist: "网易云音乐".to_string(),
             description: "从搜索结果进入作者页后加载真实数据。".to_string(),
-            cover_url: None,
-            cover_bytes: None,
-            cover_ascii: String::new(),
-            cover_ascii_size: (0, 0),
+            cover: CoverFetchState::default(),
             focused_idx: 0,
             columns: 1,
             scroll_row_offset: 0,
@@ -1222,29 +1257,6 @@ impl AuthorState {
         }
 
         self.clamp_scroll_row_offset();
-    }
-
-    pub fn set_cover_bytes(&mut self, bytes: Option<Vec<u8>>) {
-        self.cover_bytes = bytes;
-        self.cover_ascii.clear();
-        self.cover_ascii_size = (0, 0);
-    }
-
-    pub fn cover_ascii(&mut self, width: u16, height: u16) -> String {
-        if width == 0 || height == 0 {
-            return String::new();
-        }
-
-        if self.cover_ascii_size != (width, height) {
-            self.cover_ascii = self
-                .cover_bytes
-                .as_deref()
-                .and_then(|bytes| render_cover_ascii(bytes, width, height))
-                .unwrap_or_else(|| placeholder_cover_ascii(width, height, '░'));
-            self.cover_ascii_size = (width, height);
-        }
-
-        self.cover_ascii.clone()
     }
 
     pub fn set_tiles(&mut self, mut tiles: Vec<AuthorTile>) {
@@ -1527,29 +1539,6 @@ struct LyricFetchResult {
     lyrics: Option<Vec<LyricLine>>,
 }
 
-#[derive(Debug, Clone)]
-struct AudioPrefetchRequest {
-    request_id: u64,
-    song_id: String,
-    quality_level: String,
-    cache_path: PathBuf,
-    cookie: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct AudioPrefetchResult {
-    request_id: u64,
-    success: bool,
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PendingPlayRequest {
-    request_id: u64,
-    index: usize,
-    announce: bool,
-}
-
 async fn loop_cover_fetch(
     mut rx: UnboundedReceiver<CoverFetchRequest>,
     tx: Sender<CoverFetchResult>,
@@ -1570,30 +1559,6 @@ async fn loop_cover_fetch(
             song_id: req.song_id,
             url: req.url,
             bytes: bytes,
-        });
-    }
-}
-
-async fn loop_audio_prefetch(
-    mut rx: UnboundedReceiver<AudioPrefetchRequest>,
-    tx: Sender<AudioPrefetchResult>,
-    mut api: ApiState,
-) {
-    let mut process_fn = async move |req: &AudioPrefetchRequest| {
-        if let Some(cookie) = &req.cookie {
-            api.set_cookie(cookie.to_string());
-        }
-        let stream_url = api
-            .song_stream_url_with_quality(&req.song_id, &req.quality_level)
-            .await?;
-        api.fetch_audio_to_path(&stream_url, &req.cache_path).await
-    };
-    while let Some(req) = rx.recv().await {
-        let result = process_fn(&req).await;
-        let _ = tx.send(AudioPrefetchResult {
-            request_id: req.request_id,
-            success: result.is_ok(),
-            error: result.err().map(|e| e.to_string()),
         });
     }
 }
@@ -1680,24 +1645,20 @@ pub struct App {
     lyric_fetch_rx: Receiver<LyricFetchResult>,
     lyric_fetch_inflight_song_id: Option<String>,
     lyric_fetch_last_attempt_at: Option<Instant>,
-    audio_prefetch_tx: UnboundedSender<AudioPrefetchRequest>,
-    audio_prefetch_rx: Receiver<AudioPrefetchResult>,
-    audio_prefetch_pending: Option<PendingPlayRequest>,
-    audio_prefetch_inflight_id: Option<u64>,
-    audio_prefetch_last_attempt_at: Option<Instant>,
-    audio_preload_inflight_id: Option<u64>,
-    audio_preload_target_song_id: Option<String>,
-    audio_preload_last_attempt_at: Option<Instant>,
-    audio_prefetch_next_id: u64,
     mpris_bridge: MprisBridge,
     mpris_last_sync_at: Instant,
     mpris_last_signature: Option<u64>,
     mpris_last_playback: PlaybackRuntimeState,
     api: ApiState,
     audio_player: AudioPlayer,
+    pub graphics_picker: Picker,
 }
 
 impl App {
+    pub fn draw_ascii(&self) -> bool {
+        self.config.graphics_protocol == GraphicsProtocol::Off
+    }
+
     pub async fn new(config: Config, theme: Theme) -> Result<Self> {
         let saved_cookie = session::load_cookie().ok().flatten();
         let audio_player = AudioPlayer::new(&config);
@@ -1714,7 +1675,6 @@ impl App {
         let http_client = Client::builder()
             .default_headers(headers)
             .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(12))
             .build()?;
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
@@ -1734,11 +1694,6 @@ impl App {
         let (lyric_fetch_tx, lyric_fetch_req_rx) = unbounded_channel();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
         let worker = loop_lyric_fetch(lyric_fetch_req_rx, lyric_fetch_res_tx, api.clone());
-        tokio::spawn(worker);
-
-        let (audio_prefetch_tx, audio_prefetch_req_rx) = unbounded_channel();
-        let (audio_prefetch_res_tx, audio_prefetch_rx) = mpsc::channel::<AudioPrefetchResult>();
-        let worker = loop_audio_prefetch(audio_prefetch_req_rx, audio_prefetch_res_tx, api.clone());
         tokio::spawn(worker);
 
         let mut app = Self {
@@ -1800,22 +1755,24 @@ impl App {
             lyric_fetch_rx,
             lyric_fetch_inflight_song_id: None,
             lyric_fetch_last_attempt_at: None,
-            audio_prefetch_tx,
-            audio_prefetch_rx,
-            audio_prefetch_pending: None,
-            audio_prefetch_inflight_id: None,
-            audio_prefetch_last_attempt_at: None,
-            audio_preload_inflight_id: None,
-            audio_preload_target_song_id: None,
-            audio_preload_last_attempt_at: None,
-            audio_prefetch_next_id: 1,
             mpris_bridge,
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
             mpris_last_playback: PlaybackRuntimeState::Stopped,
             api,
             audio_player,
+            graphics_picker: Picker::halfblocks(),
         };
+
+        if let Ok(_) = Picker::from_query_stdio() {
+            // Don't use queried picker, this cause image layouted improperly on konsole.
+            // It's ok to not set this if we just use Halfblocks.
+
+            // app.graphics_picker = picker;
+        }
+        if let Some(protocol) = app.config.graphics_protocol.to_ratatui_protocol() {
+            app.graphics_picker.set_protocol_type(protocol);
+        }
 
         app.ensure_main_cava();
 
@@ -1846,7 +1803,6 @@ impl App {
     }
 
     pub async fn tick(&mut self) {
-        self.tick_audio_prefetch();
         self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
@@ -2164,6 +2120,12 @@ impl App {
         Duration::from_secs(0)
     }
 
+    /// Returns (downloaded_bytes, total_bytes) for streaming buffer progress.
+    /// Returns None if not streaming or if total is unknown.
+    pub fn buffer_progress(&mut self) -> Option<(u64, u64)> {
+        self.audio_player.recv_progress()
+    }
+
     pub fn now_playing_artist_text(&self) -> String {
         self.now_playing
             .as_ref()
@@ -2262,7 +2224,6 @@ impl App {
     }
 
     pub async fn fullscreen_tick_playback(&mut self) {
-        self.tick_audio_prefetch();
         self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
@@ -3043,23 +3004,18 @@ impl App {
         self.maybe_schedule_now_playing_lyric_fetch();
         self.persist_playback_memory();
 
-        let request_id = self.audio_prefetch_next_id;
-        self.audio_prefetch_next_id = self.audio_prefetch_next_id.saturating_add(1);
-        self.audio_prefetch_pending = Some(PendingPlayRequest {
-            request_id,
-            index,
-            announce,
-        });
-        self.audio_prefetch_inflight_id = None;
-        self.audio_prefetch_last_attempt_at = None;
-        self.audio_preload_last_attempt_at = None;
-
-        match self
-            .audio_player
-            .play_cached_song(&track.song_id, self.config.audio_quality.as_api_level())
-        {
+        let quality = self.config.audio_quality.as_api_level();
+        let fail = move |err, app: &mut Self| {
+            app.now_playing_liked = false;
+            app.playback_state = PlaybackRuntimeState::Stopped;
+            app.set_runtime_status(format!(
+                "{}: {}",
+                app.lang_text("播放失败", "Playback failed"),
+                err
+            ));
+        };
+        match self.audio_player.play_cached_song(&track.song_id, quality) {
             Ok(true) => {
-                self.audio_prefetch_pending = None;
                 self.playback_state = PlaybackRuntimeState::Playing;
                 if announce {
                     self.set_runtime_status(format!(
@@ -3071,260 +3027,63 @@ impl App {
                 }
             }
             Ok(false) => {
-                // Do not keep old audio running; switch to target state and prefetch in background.
+                // Song not cached - start streaming playback while prefetching in background.
                 self.audio_player.stop();
-                self.playback_state = PlaybackRuntimeState::Stopped;
                 self.set_runtime_status(format!(
                     "{}: {} - {}",
                     self.lang_text("正在缓冲", "Buffering"),
                     enriched.title,
                     enriched.artist
                 ));
-                self.maybe_schedule_audio_prefetch(true);
-            }
-            Err(err) => {
-                self.now_playing_liked = false;
-                self.playback_state = PlaybackRuntimeState::Stopped;
-                self.set_runtime_status(format!(
-                    "{}: {}",
-                    self.lang_text("播放失败", "Playback failed"),
-                    err
-                ));
-            }
-        }
-    }
 
-    fn maybe_schedule_audio_prefetch(&mut self, force: bool) {
-        let Some(pending) = self.audio_prefetch_pending else {
-            return;
-        };
+                // Start streaming playback
+                let cache_path = self.audio_player.cached_song_path(&track.song_id, quality);
 
-        if self.audio_prefetch_inflight_id == Some(pending.request_id) {
-            return;
-        }
-
-        let Some(track) = self.playback_queue.get(pending.index) else {
-            self.audio_prefetch_pending = None;
-            return;
-        };
-
-        let quality_level = self.config.audio_quality.as_api_level().to_string();
-        let cache_path = self
-            .audio_player
-            .cached_song_path(&track.song_id, &quality_level);
-        if cache_path.is_file() {
-            return;
-        }
-
-        if self.audio_preload_target_song_id.as_deref() == Some(track.song_id.as_str())
-            && self.audio_preload_inflight_id.is_some()
-        {
-            return;
-        }
-
-        let now = Instant::now();
-        if !force {
-            if let Some(last) = self.audio_prefetch_last_attempt_at {
-                if now.duration_since(last) < Duration::from_millis(AUDIO_PREFETCH_RETRY_MS) {
-                    return;
-                }
-            }
-        }
-
-        let req = AudioPrefetchRequest {
-            request_id: pending.request_id,
-            song_id: track.song_id.clone(),
-            quality_level,
-            cache_path,
-            cookie: self
-                .api
-                .session_cookie()
-                .map(|value| value.to_string())
-                .or_else(|| self.session_cookie.clone()),
-        };
-
-        if self.audio_prefetch_tx.send(req).is_ok() {
-            self.audio_prefetch_inflight_id = Some(pending.request_id);
-            self.audio_prefetch_last_attempt_at = Some(now);
-        }
-    }
-
-    fn next_audio_preload_index(&self) -> Option<usize> {
-        if !self.config.audio_preload {
-            return None;
-        }
-        if self.playback_repeat_mode == PlaybackRepeatMode::LoopOne {
-            return None;
-        }
-        let len = self.playback_queue.len();
-        if len <= 1 {
-            return None;
-        }
-
-        let current = self.playback_index?.min(len.saturating_sub(1));
-        match self.playback_repeat_mode {
-            PlaybackRepeatMode::Sequence => {
-                if current + 1 < len {
-                    Some(current + 1)
-                } else {
-                    None
-                }
-            }
-            PlaybackRepeatMode::LoopAll => Some((current + 1) % len),
-            PlaybackRepeatMode::Shuffle => {
-                if current + 1 < len {
-                    Some(current + 1)
-                } else {
-                    None
-                }
-            }
-            PlaybackRepeatMode::LoopOne => None,
-        }
-    }
-
-    fn maybe_schedule_next_audio_preload(&mut self) {
-        if self.audio_prefetch_pending.is_some() {
-            return;
-        }
-
-        let Some(index) = self.next_audio_preload_index() else {
-            self.audio_preload_inflight_id = None;
-            self.audio_preload_target_song_id = None;
-            return;
-        };
-
-        let Some(track) = self.playback_queue.get(index) else {
-            return;
-        };
-        let quality_level = self.config.audio_quality.as_api_level().to_string();
-        let cache_path = self
-            .audio_player
-            .cached_song_path(&track.song_id, &quality_level);
-        if cache_path.is_file() {
-            self.audio_preload_inflight_id = None;
-            self.audio_preload_target_song_id = Some(track.song_id.clone());
-            return;
-        }
-
-        if self.audio_preload_target_song_id.as_deref() == Some(track.song_id.as_str())
-            && self.audio_preload_inflight_id.is_some()
-        {
-            return;
-        }
-
-        let now = Instant::now();
-        if let Some(last) = self.audio_preload_last_attempt_at {
-            if now.duration_since(last) < Duration::from_millis(AUDIO_PREFETCH_RETRY_MS) {
-                return;
-            }
-        }
-
-        let request_id = self.audio_prefetch_next_id;
-        self.audio_prefetch_next_id = self.audio_prefetch_next_id.saturating_add(1);
-        let req = AudioPrefetchRequest {
-            request_id,
-            song_id: track.song_id.clone(),
-            quality_level,
-            cache_path,
-            cookie: self
-                .api
-                .session_cookie()
-                .map(|value| value.to_string())
-                .or_else(|| self.session_cookie.clone()),
-        };
-
-        if self.audio_prefetch_tx.send(req).is_ok() {
-            self.audio_preload_inflight_id = Some(request_id);
-            self.audio_preload_target_song_id = Some(track.song_id.clone());
-            self.audio_preload_last_attempt_at = Some(now);
-        }
-    }
-
-    fn try_start_pending_playback(&mut self) {
-        let Some(pending) = self.audio_prefetch_pending else {
-            return;
-        };
-        let Some(track) = self.playback_queue.get(pending.index).cloned() else {
-            self.audio_prefetch_pending = None;
-            return;
-        };
-
-        match self
-            .audio_player
-            .play_cached_song(&track.song_id, self.config.audio_quality.as_api_level())
-        {
-            Ok(true) => {
-                self.audio_prefetch_pending = None;
-                self.playback_state = PlaybackRuntimeState::Playing;
-                if pending.announce {
-                    self.set_runtime_status(format!(
-                        "{}: {} - {}",
-                        self.lang_text("正在播放", "Now Playing"),
-                        track.title,
-                        track.artist
-                    ));
-                }
-            }
-            Ok(false) => {}
-            Err(err) => {
-                self.audio_prefetch_pending = None;
-                self.playback_state = PlaybackRuntimeState::Stopped;
-                self.set_runtime_status(format!(
-                    "{}: {}",
-                    self.lang_text("播放失败", "Playback failed"),
-                    err
-                ));
-            }
-        }
-    }
-
-    fn tick_audio_prefetch(&mut self) {
-        if self.audio_prefetch_pending.is_none()
-            && self.audio_prefetch_inflight_id.is_none()
-            && self.audio_preload_inflight_id.is_none()
-            && !self.config.audio_preload
-        {
-            return;
-        }
-
-        loop {
-            match self.audio_prefetch_rx.try_recv() {
-                Ok(result) => {
-                    if self.audio_prefetch_inflight_id == Some(result.request_id) {
-                        self.audio_prefetch_inflight_id = None;
+                match self
+                    .api
+                    .song_stream_url_with_quality(&track.song_id, quality)
+                    .await
+                {
+                    Ok(url) => {
+                        let (progress_tx, progress_rx) = watch::channel::<(u64, u64)>((0, 0));
+                        match StreamingReader::new(
+                            &self.api.http_client(),
+                            &url,
+                            cache_path.clone(),
+                            self.api.session_cookie(),
+                            progress_tx,
+                        )
+                        .await
+                        {
+                            Ok(reader) => {
+                                match self.audio_player.play_streaming(
+                                    reader,
+                                    &track.song_id,
+                                    cache_path,
+                                    progress_rx,
+                                ) {
+                                    Ok(()) => {
+                                        self.playback_state = PlaybackRuntimeState::Playing;
+                                        if announce {
+                                            self.set_runtime_status(format!(
+                                                "{}: {} - {}",
+                                                self.lang_text("正在播放", "Now Playing"),
+                                                enriched.title,
+                                                enriched.artist
+                                            ));
+                                        }
+                                    }
+                                    Err(err) => fail(err, self),
+                                }
+                            }
+                            Err(err) => fail(err, self),
+                        }
                     }
-
-                    if self.audio_preload_inflight_id == Some(result.request_id) {
-                        self.audio_preload_inflight_id = None;
-                        continue;
-                    }
-
-                    if self.audio_prefetch_pending.map(|p| p.request_id) != Some(result.request_id)
-                    {
-                        continue;
-                    }
-
-                    if result.success {
-                        self.try_start_pending_playback();
-                    } else if let Some(err) = result.error {
-                        self.set_runtime_status(format!(
-                            "{}: {}",
-                            self.lang_text("缓冲失败，正在重试", "Buffering failed, retrying"),
-                            err
-                        ));
-                    }
+                    Err(err) => fail(err, self),
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => break,
             }
+            Err(err) => fail(err, self),
         }
-
-        if self.audio_prefetch_pending.is_some() {
-            self.try_start_pending_playback();
-            self.maybe_schedule_audio_prefetch(false);
-        }
-
-        self.maybe_schedule_next_audio_preload();
     }
 
     fn cover_cache_path_for_url(&self, url: &str) -> Option<PathBuf> {
@@ -3361,7 +3120,7 @@ impl App {
         let _ = fs::write(path, bytes);
     }
 
-    async fn fetch_cover_with_disk_cache(&mut self, url: &str) -> Option<Vec<u8>> {
+    async fn fetch_cover_with_disk_cache(&self, url: &str) -> Option<Vec<u8>> {
         if let Some(bytes) = self.load_cover_from_disk_cache(url) {
             return Some(bytes);
         }
@@ -3724,7 +3483,7 @@ impl App {
                     .hot_songs
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
             AuthorTileKind::Album => (
                 self.lang_text("专辑", "Albums").to_string(),
@@ -3733,7 +3492,7 @@ impl App {
                     .albums
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
             AuthorTileKind::Ep => (
                 "EP".to_string(),
@@ -3742,7 +3501,7 @@ impl App {
                     .eps
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
             AuthorTileKind::Single => (
                 "Single".to_string(),
@@ -3751,7 +3510,7 @@ impl App {
                     .singles
                     .first()
                     .and_then(|track| track.cover_url.clone())
-                    .or_else(|| self.author.cover_url.clone()),
+                    .or_else(|| self.author.cover.url.clone()),
             ),
         };
 
@@ -3778,19 +3537,8 @@ impl App {
                 "Press Enter to open album or play song, Esc to return",
             )
             .to_string();
-        self.playlist.cover_url = section_cover.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_bytes = if let Some(url) = section_cover {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
+        section_cover.map(|x| self.playlist.cover.load(self.api.clone(), x));
         self.page = Page::Playlist;
     }
 
@@ -3830,19 +3578,9 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = section_snapshot;
-                if self.playlist.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.playlist.cover_url = fallback_cover_url;
-                            self.playlist.set_cover_bytes(bytes);
-                        }
-                    }
+                match (&self.playlist.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
+                    _ => (),
                 }
                 self.set_runtime_status(format!(
                     "{} {}",
@@ -3887,19 +3625,9 @@ impl App {
 
         match self.load_author_detail(&artist_id).await {
             Ok(()) => {
-                if self.author.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.author.cover_url = fallback_cover_url;
-                            self.author.set_cover_bytes(bytes);
-                        }
-                    }
+                match (&self.author.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.author.cover.load(self.api.clone(), url),
+                    _ => (),
                 }
                 self.playlist_section_return_snapshot = None;
                 self.page = Page::Author;
@@ -3949,19 +3677,9 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                if self.playlist.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.playlist.cover_url = fallback_cover_url;
-                            self.playlist.set_cover_bytes(bytes);
-                        }
-                    }
+                match (&self.playlist.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
+                    _ => (),
                 }
                 self.playlist_return_page = Page::Search;
                 self.page = Page::Playlist;
@@ -4010,19 +3728,9 @@ impl App {
         match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = None;
-                if self.playlist.cover_bytes.is_none() {
-                    if let Some(url) = fallback_cover_url.as_deref() {
-                        let bytes = self
-                            .api
-                            .fetch_cover_bytes(url)
-                            .await
-                            .ok()
-                            .filter(|content| !content.is_empty());
-                        if bytes.is_some() {
-                            self.playlist.cover_url = fallback_cover_url;
-                            self.playlist.set_cover_bytes(bytes);
-                        }
-                    }
+                match (&self.playlist.cover.image, fallback_cover_url) {
+                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
+                    _ => (),
                 }
                 self.playlist_return_page = Page::Search;
                 self.page = Page::Playlist;
@@ -4399,8 +4107,11 @@ impl App {
             }
             3 => {
                 if delta != 0 {
-                    self.config.kitty_graphics = !self.config.kitty_graphics;
-                    let _ = self.config.save();
+                    let next_protocol = self.config.graphics_protocol.cycle(delta);
+                    if next_protocol != self.config.graphics_protocol {
+                        self.config.graphics_protocol = next_protocol;
+                        let _ = self.config.save();
+                    }
                 }
             }
             6 => {
@@ -4481,10 +4192,6 @@ impl App {
                 self.set_audio_quality(next);
             }
             8 => {
-                self.config.audio_preload = !self.config.audio_preload;
-                let _ = self.config.save();
-            }
-            9 => {
                 self.config.playback_memory = !self.config.playback_memory;
                 let _ = self.config.save();
                 if self.config.playback_memory {
@@ -4885,10 +4592,10 @@ impl App {
             transparent_background: self.config.transparent_background,
             album_border: self.config.album_border,
             language: self.config.language,
+            graphics_protocol: self.config.graphics_protocol,
             page_lyrics: self.config.page_lyrics,
             audio_quality: self.config.audio_quality,
             eq_bands_db: self.config.eq_bands_db,
-            audio_preload: self.config.audio_preload,
             playback_memory: self.config.playback_memory,
             vip_audio_unlocked: self.vip_audio_unlocked,
             show_hints: self.config.show_hints,
@@ -4899,7 +4606,6 @@ impl App {
             bar_number: self.config.bar_number,
             bar_channels: self.config.bar_channels,
             bar_channel_reverse: self.config.bar_channel_reverse,
-            kitty_graphics: self.config.kitty_graphics,
         }
     }
 
@@ -4930,6 +4636,11 @@ impl App {
             changed = true;
         }
 
+        if self.config.graphics_protocol != sync.graphics_protocol {
+            self.config.graphics_protocol = sync.graphics_protocol;
+            changed = true;
+        }
+
         if self.config.page_lyrics != sync.page_lyrics {
             self.config.page_lyrics = sync.page_lyrics;
             changed = true;
@@ -4953,11 +4664,6 @@ impl App {
                 .set_eq(crate::tmplayer::app::state::EqSettings {
                     bands_db: sync.eq_bands_db,
                 });
-            changed = true;
-        }
-
-        if self.config.audio_preload != sync.audio_preload {
-            self.config.audio_preload = sync.audio_preload;
             changed = true;
         }
 
@@ -5012,11 +4718,6 @@ impl App {
             changed = true;
         }
 
-        if self.config.kitty_graphics != sync.kitty_graphics {
-            self.config.kitty_graphics = sync.kitty_graphics;
-            changed = true;
-        }
-
         if changed {
             let _ = self.config.save();
         }
@@ -5039,11 +4740,13 @@ impl App {
             return bootstrap;
         }
 
-        let mut playlist_cover = self.playlist.cover_bytes.clone();
+        // peek_shared_future(&self.playlist.cover_bytes).map(|x| Cow::Borrowed(x.as_slice()));
+        // Todo: fixme
+        let mut playlist_cover = None;
 
         if playlist_cover.is_none() {
-            if let Some(cover_url) = self.playlist.cover_url.clone() {
-                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await;
+            if let Some(cover_url) = self.playlist.cover.url.clone() {
+                playlist_cover = self.fetch_cover_with_disk_cache(&cover_url).await
             }
         }
 
@@ -5205,7 +4908,7 @@ impl App {
 
                     if playlist_cover.is_none() {
                         if let Some(cover_url) = first_track.cover_url.as_deref() {
-                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url).await;
+                            playlist_cover = self.fetch_cover_with_disk_cache(cover_url).await
                         }
                     }
 
@@ -5221,7 +4924,7 @@ impl App {
                                     song.pointer("/al/picUrl").and_then(|value| value.as_str())
                                 {
                                     playlist_cover =
-                                        self.fetch_cover_with_disk_cache(cover_url).await;
+                                        self.fetch_cover_with_disk_cache(cover_url).await
                                 }
                             }
                         }
@@ -5634,30 +5337,19 @@ impl App {
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
-    async fn fetch_playlist_first_song_cover(
-        &mut self,
-        playlist_id: &str,
-    ) -> Option<(String, Vec<u8>)> {
+    async fn fetch_playlist_first_song_cover(&mut self, playlist_id: &str) -> Option<String> {
         let response = self.api.playlist_detail(playlist_id).await.ok()?;
         if response_code(&response) != 200 {
             return None;
         }
 
-        let cover_url = response
+        response
             .body
             .pointer("/playlist/tracks")
             .and_then(|value| value.as_array())
             .and_then(|items| items.first())
-            .and_then(|track| first_non_empty(track, &["/al/picUrl", "/album/picUrl"]))?;
-
-        let cover_bytes = self
-            .api
-            .fetch_cover_bytes(&cover_url)
-            .await
-            .ok()
-            .filter(|bytes| !bytes.is_empty())?;
-
-        Some((cover_url, cover_bytes))
+            .and_then(|track| first_non_empty(track, &["/al/picUrl", "/album/picUrl"]))
+            .map(|s| s.to_string())
     }
 
     async fn load_home_recommendations(&mut self) -> Result<()> {
@@ -5669,12 +5361,7 @@ impl App {
                         .iter()
                         .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
                     {
-                        daily_tile.cover_url = Some(cover_url.clone());
-                        if let Ok(bytes) = self.api.fetch_cover_bytes(&cover_url).await {
-                            if !bytes.is_empty() {
-                                daily_tile.cover_bytes = Some(bytes);
-                            }
-                        }
+                        daily_tile.cover.load(self.api.clone(), cover_url);
                     }
                 }
             }
@@ -5701,26 +5388,20 @@ impl App {
                 continue;
             }
 
-            let mut tile =
-                HomeTile::from_recommendation(card.id, card.title, card.subtitle, card.cover_url);
+            let mut tile = HomeTile::from_recommendation(
+                &self.api,
+                card.id,
+                card.title,
+                card.subtitle,
+                card.cover_url,
+            );
 
             if pinned_title == Some("私人雷达") {
                 if let Some(playlist_id) = tile.id.clone() {
-                    if let Some((cover_url, cover_bytes)) =
+                    if let Some(cover_url) =
                         self.fetch_playlist_first_song_cover(&playlist_id).await
                     {
-                        tile.cover_url = Some(cover_url);
-                        tile.cover_bytes = Some(cover_bytes);
-                    }
-                }
-            }
-
-            if tile.cover_bytes.is_none() {
-                if let Some(url) = tile.cover_url.clone() {
-                    if let Ok(bytes) = self.api.fetch_cover_bytes(&url).await {
-                        if !bytes.is_empty() {
-                            tile.cover_bytes = Some(bytes);
-                        }
+                        tile.cover.load(self.api.clone(), cover_url);
                     }
                 }
             }
@@ -5729,6 +5410,7 @@ impl App {
         }
 
         self.home.set_tiles(prioritize_home_tiles(
+            &self.api,
             tiles,
             self.config.home_more_recommend,
         ));
@@ -5940,20 +5622,8 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
-        self.playlist.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_bytes = if let Some(url) = cover_url {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
-
+        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
         Ok(())
     }
 
@@ -5994,20 +5664,8 @@ impl App {
                 "Daily songs from Netease. Press Enter to play",
             )
             .to_string();
-        self.playlist.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_bytes = if let Some(url) = cover_url {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
-
+        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
         Ok(())
     }
 
@@ -6068,20 +5726,8 @@ impl App {
         self.playlist.title = title;
         self.playlist.artist = artist;
         self.playlist.description = description;
-        self.playlist.cover_url = cover_url.clone();
         self.playlist.set_tracks(tracks);
-
-        let cover_bytes = if let Some(url) = cover_url {
-            self.api
-                .fetch_cover_bytes(&url)
-                .await
-                .ok()
-                .filter(|bytes| !bytes.is_empty())
-        } else {
-            None
-        };
-        self.playlist.set_cover_bytes(cover_bytes);
-
+        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
         Ok(())
     }
 
@@ -6242,6 +5888,7 @@ impl App {
 
         let mut tiles = vec![
             AuthorTile::from_album(
+                &self.api,
                 self.lang_text("热门歌曲", "Hot Songs").to_string(),
                 format!("{} {}", hot_count, self.lang_text("首", "tracks")),
                 hot_songs
@@ -6251,6 +5898,7 @@ impl App {
                 AuthorTileKind::HotSong,
             ),
             AuthorTile::from_album(
+                &self.api,
                 self.lang_text("专辑", "Albums").to_string(),
                 format!("{} {}", album_count, self.lang_text("张", "items")),
                 albums
@@ -6260,6 +5908,7 @@ impl App {
                 AuthorTileKind::Album,
             ),
             AuthorTile::from_album(
+                &self.api,
                 "EP".to_string(),
                 format!("{} {}", ep_count, self.lang_text("张", "items")),
                 eps.first()
@@ -6268,6 +5917,7 @@ impl App {
                 AuthorTileKind::Ep,
             ),
             AuthorTile::from_album(
+                &self.api,
                 "Single".to_string(),
                 format!("{} {}", single_count, self.lang_text("张", "items")),
                 singles
@@ -6282,31 +5932,6 @@ impl App {
             tiles.push(AuthorTile::placeholder());
         }
 
-        for tile in &mut tiles {
-            let bytes = if let Some(url) = tile.cover_url.as_deref() {
-                self.api
-                    .fetch_cover_bytes(url)
-                    .await
-                    .ok()
-                    .filter(|content| !content.is_empty())
-            } else {
-                None
-            };
-            tile.cover_bytes = bytes;
-            tile.cover_ascii.clear();
-            tile.cover_ascii_size = (0, 0);
-        }
-
-        let cover_bytes = if let Some(url) = cover_url.as_deref() {
-            self.api
-                .fetch_cover_bytes(url)
-                .await
-                .ok()
-                .filter(|content| !content.is_empty())
-        } else {
-            None
-        };
-
         self.author.id = Some(artist_id.to_string());
         self.author.title = title;
         self.author.artist = match self.config.language {
@@ -6320,8 +5945,7 @@ impl App {
             ),
         };
         self.author.description = description;
-        self.author.cover_url = cover_url;
-        self.author.set_cover_bytes(cover_bytes);
+        cover_url.map(|x| self.author.cover.load(self.api.clone(), x));
         self.author.set_tiles(tiles);
         self.author.hot_songs = hot_songs;
         self.author.albums = albums;
@@ -6775,7 +6399,11 @@ fn normalize_home_pinned_title(title: &str) -> Option<&'static str> {
     None
 }
 
-fn prioritize_home_tiles(mut tiles: Vec<HomeTile>, show_more: bool) -> Vec<HomeTile> {
+fn prioritize_home_tiles(
+    api: &ApiState,
+    mut tiles: Vec<HomeTile>,
+    show_more: bool,
+) -> Vec<HomeTile> {
     let mut pinned = Vec::with_capacity(HOME_PINNED_TITLES.len());
 
     for target in HOME_PINNED_TITLES {
@@ -6794,6 +6422,7 @@ fn prioritize_home_tiles(mut tiles: Vec<HomeTile>, show_more: bool) -> Vec<HomeT
             pinned.push(HomeTile::placeholder_daily());
         } else {
             pinned.push(HomeTile::from_recommendation(
+                api,
                 None,
                 target.to_string(),
                 String::new(),

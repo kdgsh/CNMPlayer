@@ -145,6 +145,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         transparent_background: app.config.transparent_background,
         album_border: app.config.album_border,
         language: app.language,
+        graphics_protocol: app.config.graphics_protocol,
         page_lyrics: app.config.page_lyrics,
         audio_quality: match app.config.audio_quality {
             AudioQuality::Standard => crate::data::config::AudioQuality::Standard,
@@ -158,7 +159,6 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             AudioQuality::Jymaster => crate::data::config::AudioQuality::Jymaster,
         },
         eq_bands_db: app.config.eq_bands_db,
-        audio_preload: app.config.audio_preload,
         playback_memory: app.config.playback_memory,
         vip_audio_unlocked: app.vip_audio_unlocked,
         show_hints: app.config.show_hints,
@@ -184,7 +184,6 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             BarChannels::Mono => crate::data::config::BarChannels::Mono,
         },
         bar_channel_reverse: app.config.bar_channel_reverse,
-        kitty_graphics: app.config.kitty_graphics,
     }
 }
 
@@ -215,7 +214,6 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     .clamp_for_vip(app.vip_audio_unlocked);
     app.config.eq_bands_db = config.eq_bands_db;
     app.eq.bands_db = config.eq_bands_db;
-    app.config.audio_preload = config.audio_preload;
     app.config.playback_memory = config.playback_memory;
     app.config.show_hints = config.show_hints;
     app.config.home_more_recommend = config.home_more_recommend;
@@ -240,7 +238,6 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
         crate::data::config::BarChannels::Mono => BarChannels::Mono,
     };
     app.config.bar_channel_reverse = config.bar_channel_reverse;
-    app.config.kitty_graphics = config.kitty_graphics;
 }
 
 async fn save_and_sync_host_config(
@@ -552,7 +549,7 @@ pub async fn run(
     mut host_bridge: Option<&mut impl HostPlaybackBridge>,
 ) -> Result<crate::tmplayer::FullscreenExit> {
     enable_raw_mode()?;
-    let mut tui = Tui::new()?;
+    let mut tui = Tui::new(app)?;
     tui.enter()?;
 
     let mut mode_manager = ModeManager::new();
@@ -1198,10 +1195,6 @@ async fn handle_action(
                     save_and_sync_host_config(app, host_bridge).await;
                 }
                 8 => {
-                    app.config.audio_preload = !app.config.audio_preload;
-                    save_and_sync_host_config(app, host_bridge).await;
-                }
-                9 => {
                     app.config.playback_memory = !app.config.playback_memory;
                     save_and_sync_host_config(app, host_bridge).await;
                 }
@@ -1373,7 +1366,7 @@ async fn handle_action(
                     app.settings_selected -= 1;
                 }
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 10;
+                let count = 9;
                 if app.bar_settings_selected == 0 {
                     app.bar_settings_selected = count - 1;
                 } else {
@@ -1406,7 +1399,7 @@ async fn handle_action(
                 let count = 10;
                 app.settings_selected = (app.settings_selected + 1) % count;
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 10;
+                let count = 9;
                 app.bar_settings_selected = (app.bar_settings_selected + 1) % count;
             } else if app.overlay == Overlay::LocalAudioSettingsModal {
                 let count = 5;
@@ -1463,10 +1456,6 @@ async fn handle_action(
                         save_and_sync_host_config(app, host_bridge).await;
                     }
                     8 => {
-                        app.config.audio_preload = !app.config.audio_preload;
-                        save_and_sync_host_config(app, host_bridge).await;
-                    }
-                    9 => {
                         app.config.playback_memory = !app.config.playback_memory;
                         save_and_sync_host_config(app, host_bridge).await;
                     }
@@ -1524,10 +1513,6 @@ async fn handle_action(
                         save_and_sync_host_config(app, host_bridge).await;
                     }
                     8 => {
-                        app.config.audio_preload = !app.config.audio_preload;
-                        save_and_sync_host_config(app, host_bridge).await;
-                    }
-                    9 => {
                         app.config.playback_memory = !app.config.playback_memory;
                         save_and_sync_host_config(app, host_bridge).await;
                     }
@@ -1945,8 +1930,8 @@ async fn apply_settings_delta(
         }
         // Kitty graphics
         3 => {
-            if delta != 0 && app.kitty_graphics_supported {
-                app.config.kitty_graphics = !app.config.kitty_graphics;
+            if delta != 0 {
+                app.config.graphics_protocol = app.config.graphics_protocol.cycle(delta);
                 save_and_sync_host_config(app, host_bridge).await;
             }
         }
