@@ -136,9 +136,6 @@ pub async fn run_fullscreen(
 ) -> Result<FullscreenExit> {
     let _ = env_logger::builder().is_test(false).try_init();
 
-    // Avoid ALSA stderr noise from breaking full-screen TUI rendering.
-    utils::stderr_filter::install_alsa_stderr_filter();
-
     let config = tm_config_from_host(host_config);
     let theme = data::theme_loader::ThemeLoader::load(&host_config.theme)?;
 
