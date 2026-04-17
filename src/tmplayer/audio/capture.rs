@@ -1,8 +1,7 @@
 #![allow(dead_code)]
 
 use anyhow::Result;
-use rodio::cpal;
-use rodio::cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -81,19 +80,19 @@ impl AudioCapture {
 
         let stream = match config.sample_format() {
             cpal::SampleFormat::F32 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[f32], _| push_samples(&samples_cloned, &last_sample_cloned, data),
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::I16 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[i16], _| push_samples_i16(&samples_cloned, &last_sample_cloned, data),
                 err_fn,
                 None,
             )?,
             cpal::SampleFormat::U16 => device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[u16], _| push_samples_u16(&samples_cloned, &last_sample_cloned, data),
                 err_fn,
                 None,
@@ -334,7 +333,7 @@ fn dummy_stream() -> Result<(cpal::Stream, ())> {
 
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_output_stream(
-            &config.into(),
+            config.into(),
             move |out: &mut [f32], _| {
                 for s in out.iter_mut() {
                     *s = 0.0;
@@ -344,7 +343,7 @@ fn dummy_stream() -> Result<(cpal::Stream, ())> {
             None,
         )?,
         cpal::SampleFormat::I16 => device.build_output_stream(
-            &config.into(),
+            config.into(),
             move |out: &mut [i16], _| {
                 for s in out.iter_mut() {
                     *s = 0;
@@ -354,7 +353,7 @@ fn dummy_stream() -> Result<(cpal::Stream, ())> {
             None,
         )?,
         cpal::SampleFormat::U16 => device.build_output_stream(
-            &config.into(),
+            config.into(),
             move |out: &mut [u16], _| {
                 for s in out.iter_mut() {
                     *s = u16::MAX / 2;
@@ -364,7 +363,7 @@ fn dummy_stream() -> Result<(cpal::Stream, ())> {
             None,
         )?,
         _ => device.build_output_stream(
-            &config.into(),
+            config.into(),
             move |_out: &mut [f32], _| {},
             err_fn,
             None,
