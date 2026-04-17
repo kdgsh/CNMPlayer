@@ -604,11 +604,6 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         ),
         format!(
             "{}: {}",
-            lang_text(app, "音频预加载", "Audio Preload"),
-            lang_on_off(app, app.config.audio_preload)
-        ),
-        format!(
-            "{}: {}",
             lang_text(app, "播放记忆", "Playback Memory"),
             lang_on_off(app, app.config.playback_memory)
         ),

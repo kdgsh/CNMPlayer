@@ -48,9 +48,6 @@ pub struct Config {
     pub audio_quality: AudioQuality,
 
     #[serde(default)]
-    pub audio_preload: bool,
-
-    #[serde(default)]
     pub playback_memory: bool,
 
     #[serde(default = "default_show_hints")]
@@ -366,7 +363,6 @@ impl Default for Config {
             super_smooth_bar: false,
             bars_gap: false,
             audio_quality: default_audio_quality(),
-            audio_preload: false,
             playback_memory: false,
             show_hints: default_show_hints(),
             home_more_recommend: false,
@@ -437,7 +433,6 @@ impl Config {
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")
             || !raw.contains("audio_quality")
-            || !raw.contains("audio_preload")
             || !raw.contains("playback_memory")
             || !raw.contains("page_lyrics")
             || !raw.contains("show_hints")

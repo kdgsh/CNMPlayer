@@ -120,9 +120,6 @@ pub struct Config {
     pub audio_quality: AudioQuality,
 
     #[serde(default)]
-    pub audio_preload: bool,
-
-    #[serde(default)]
     pub playback_memory: bool,
 
     #[serde(default = "default_show_hints")]
@@ -514,7 +511,6 @@ impl Default for Config {
             language: default_language(),
             page_lyrics: default_page_lyrics(),
             audio_quality: default_audio_quality(),
-            audio_preload: false,
             playback_memory: false,
             show_hints: default_show_hints(),
             home_more_recommend: false,
@@ -580,7 +576,6 @@ impl Config {
             || !raw.contains("page_lyrics")
             || !raw.contains("eq_bands_db")
             || !raw.contains("audio_quality")
-            || !raw.contains("audio_preload")
             || !raw.contains("playback_memory")
             || !raw.contains("show_hints")
             || !raw.contains("home_more_recommend")

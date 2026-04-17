@@ -136,7 +136,7 @@ cargo build --release
 - 外观：`theme`、`language`、`transparent_background`、`show_hints`、`home_more_recommend`、`album_border`
 - 登录页：`default_opening_title`（支持 `\n` 换行）
 - 图像与可视化：`graphics_protocol`、`visualize`、`super_smooth_bar`、`bars_gap`、`bar_number`、`bar_channels`、`bar_channel_reverse`、`kitty_cover_scale_percent`
-- 播放行为：`audio_quality`、`audio_preload`、`playback_memory`、`resume_last_position`、`eq_bands_db`
+- 播放行为：`audio_quality`、`playback_memory`、`resume_last_position`、`eq_bands_db`
 - 歌词与识别：`page_lyrics`、`lyrics_cover_fetch`、`lyrics_cover_download`、`audio_fingerprint`、`acoustid_api_key`
 - 快捷键：`keybind_*`（详见下文，可在设置页重绑）
 - 缓存策略：`cache.path`、`cache.clean_strategy`、`cache.max_size_mb`、`cache.max_age_days`、`cache.clean_on_startup`

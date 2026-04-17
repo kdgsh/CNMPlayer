@@ -136,7 +136,7 @@ Important settings in `config/default.toml`:
 - Interface: `theme`, `language`, `transparent_background`, `show_hints`, `home_more_recommend`, `album_border`
 - Login banner: `default_opening_title` (supports `\n` line breaks)
 - Image and visualization: `graphics_protocol`, `visualize`, `super_smooth_bar`, `bars_gap`, `bar_number`, `bar_channels`, `bar_channel_reverse`, `kitty_cover_scale_percent`
-- Playback behavior: `audio_quality`, `audio_preload`, `playback_memory`, `resume_last_position`, `eq_bands_db`
+- Playback behavior: `audio_quality`, `playback_memory`, `resume_last_position`, `eq_bands_db`
 - Lyrics and recognition: `page_lyrics`, `lyrics_cover_fetch`, `lyrics_cover_download`, `audio_fingerprint`, `acoustid_api_key`
 - Keybinds: `keybind_*` (see below; can be rebound in Settings)
 - Cache policy: `cache.path`, `cache.clean_strategy`, `cache.max_size_mb`, `cache.max_age_days`, `cache.clean_on_startup`

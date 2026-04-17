@@ -194,11 +194,6 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         format!(
             "{}: {}",
-            l(app, "音频预加载", "Audio Preload"),
-            on_off(app, app.config.audio_preload)
-        ),
-        format!(
-            "{}: {}",
             l(app, "播放记忆", "Playback Memory"),
             on_off(app, app.config.playback_memory)
         ),

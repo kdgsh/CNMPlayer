@@ -55,7 +55,7 @@ const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 10;
-const SETTINGS_PLAYBACK_ITEMS: usize = 10;
+const SETTINGS_PLAYBACK_ITEMS: usize = 9;
 pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 17;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
@@ -4192,10 +4192,6 @@ impl App {
                 self.set_audio_quality(next);
             }
             8 => {
-                self.config.audio_preload = !self.config.audio_preload;
-                let _ = self.config.save();
-            }
-            9 => {
                 self.config.playback_memory = !self.config.playback_memory;
                 let _ = self.config.save();
                 if self.config.playback_memory {
@@ -4600,7 +4596,6 @@ impl App {
             page_lyrics: self.config.page_lyrics,
             audio_quality: self.config.audio_quality,
             eq_bands_db: self.config.eq_bands_db,
-            audio_preload: self.config.audio_preload,
             playback_memory: self.config.playback_memory,
             vip_audio_unlocked: self.vip_audio_unlocked,
             show_hints: self.config.show_hints,
@@ -4669,11 +4664,6 @@ impl App {
                 .set_eq(crate::tmplayer::app::state::EqSettings {
                     bands_db: sync.eq_bands_db,
                 });
-            changed = true;
-        }
-
-        if self.config.audio_preload != sync.audio_preload {
-            self.config.audio_preload = sync.audio_preload;
             changed = true;
         }
 
