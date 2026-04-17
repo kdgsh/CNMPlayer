@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 pub enum PlayMode {
     Idle,
     LocalPlayback,
-    SystemMonitor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

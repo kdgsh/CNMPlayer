@@ -562,7 +562,6 @@ pub async fn run(
     let system_volume = SystemVolume::try_new().ok();
 
     let mut last_spectrum = Instant::now();
-    let mut last_mpris = Instant::now();
     let mut last_host_config_sync = Instant::now()
         .checked_sub(Duration::from_millis(400))
         .unwrap_or_else(Instant::now);
@@ -659,54 +658,6 @@ pub async fn run(
         if app.config.visualize == VisualizeMode::Bars {
             let bars = desired_bar_count(app, &last_layout);
             ensure_bar_buffers(app, bars);
-        }
-
-        // mpris poll (only when explicitly in system monitor mode)
-        if app.player.mode == PlayMode::SystemMonitor
-            && frame_start.duration_since(last_mpris)
-                >= Duration::from_millis(app.config.mpris_poll_ms)
-        {
-            last_mpris = frame_start;
-            if let Ok(Some(snapshot)) = mode_manager.mpris.poll_snapshot() {
-                let before_track = app.player.track.clone();
-
-                app.player.track = snapshot.track;
-                app.player.position = snapshot.position;
-                app.player.playback = snapshot.playback;
-
-                if let Some(sysvol) = system_volume.as_ref() {
-                    if let Ok(v) = sysvol.get() {
-                        app.player.volume = v;
-                    } else {
-                        app.player.volume = snapshot.volume;
-                    }
-                } else {
-                    app.player.volume = snapshot.volume;
-                }
-
-                let changed_any = before_track.title != app.player.track.title
-                    || before_track.artist != app.player.track.artist
-                    || before_track.album != app.player.track.album
-                    || before_track.cover_hash != app.player.track.cover_hash;
-                if changed_any {
-                    app.queue_remote_fetch(None);
-                    state_changed = true;
-                }
-
-                // If user requested next/prev in SystemMonitor, animate when the track actually changes.
-                if let Some((from, dir, _at)) = app.pending_system_cover_anim.take() {
-                    let changed = before_track.title != app.player.track.title
-                        || before_track.artist != app.player.track.artist
-                        || before_track.album != app.player.track.album
-                        || before_track.cover_hash != app.player.track.cover_hash;
-                    if changed {
-                        let to = CoverSnapshot::from(&app.player.track);
-                        app.start_cover_anim(from, to, dir, frame_start);
-                        app.queue_remote_fetch(None);
-                        state_changed = true;
-                    }
-                }
-            }
         }
 
         // spectrum update
@@ -1210,8 +1161,6 @@ async fn handle_action(
                             if let Some(cur_path) = app.playlist.current_path().cloned() {
                                 app.queue_remote_fetch(Some(&cur_path));
                             }
-                        } else if app.player.mode == PlayMode::SystemMonitor {
-                            app.queue_remote_fetch(None);
                         }
                     }
                 }
@@ -1584,9 +1533,6 @@ async fn handle_action(
                         app.player.position = pos;
                     }
                 }
-                PlayMode::SystemMonitor => {
-                    let _ = mode_manager.mpris.toggle_play_pause();
-                }
                 PlayMode::Idle => {
                     app.player.playback = match app.player.playback {
                         PlaybackState::Playing => PlaybackState::Paused,
@@ -1629,11 +1575,6 @@ async fn handle_action(
                         }
                     }
                 }
-                PlayMode::SystemMonitor => {
-                    app.pending_system_cover_anim =
-                        Some((CoverSnapshot::from(&app.player.track), 1, Instant::now()));
-                    let _ = mode_manager.mpris.prev();
-                }
                 PlayMode::Idle => {
                     switch_idle_track(app, 1);
                 }
@@ -1673,11 +1614,6 @@ async fn handle_action(
                         }
                     }
                 }
-                PlayMode::SystemMonitor => {
-                    app.pending_system_cover_anim =
-                        Some((CoverSnapshot::from(&app.player.track), -1, Instant::now()));
-                    let _ = mode_manager.mpris.next();
-                }
                 PlayMode::Idle => {
                     switch_idle_track(app, -1);
                 }
@@ -1688,17 +1624,6 @@ async fn handle_action(
                 mode_manager
                     .local
                     .set_volume((mode_manager.local.volume() + 0.05).min(1.0));
-            }
-            PlayMode::SystemMonitor => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(0.05) {
-                        app.player.volume = v;
-                    } else {
-                        let _ = mode_manager.mpris.set_volume_delta(0.05);
-                    }
-                } else {
-                    let _ = mode_manager.mpris.set_volume_delta(0.05);
-                }
             }
             PlayMode::Idle => {
                 if let Some(sysvol) = system_volume {
@@ -1714,17 +1639,6 @@ async fn handle_action(
                     .local
                     .set_volume((mode_manager.local.volume() - 0.05).max(0.0));
             }
-            PlayMode::SystemMonitor => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(-0.05) {
-                        app.player.volume = v;
-                    } else {
-                        let _ = mode_manager.mpris.set_volume_delta(-0.05);
-                    }
-                } else {
-                    let _ = mode_manager.mpris.set_volume_delta(-0.05);
-                }
-            }
             PlayMode::Idle => {
                 if let Some(sysvol) = system_volume {
                     if let Ok(v) = sysvol.set_delta(-0.05) {
@@ -1736,21 +1650,6 @@ async fn handle_action(
         Action::SetVolume(v) => match app.player.mode {
             PlayMode::LocalPlayback => {
                 mode_manager.local.set_volume(v);
-            }
-            PlayMode::SystemMonitor => {
-                if let Some(sysvol) = system_volume {
-                    if sysvol.set(v).is_ok() {
-                        app.player.volume = v;
-                    } else {
-                        // delta setter exists; approximate absolute set
-                        let cur = app.player.volume;
-                        let _ = mode_manager.mpris.set_volume_delta(v - cur);
-                    }
-                } else {
-                    // delta setter exists; approximate absolute set
-                    let cur = app.player.volume;
-                    let _ = mode_manager.mpris.set_volume_delta(v - cur);
-                }
             }
             PlayMode::Idle => {
                 if let Some(sysvol) = system_volume {
@@ -1800,9 +1699,6 @@ async fn handle_action(
                         // Update UI immediately so the next user action (e.g. Space) doesn't look like a jump.
                         app.player.position = target;
                     }
-                }
-                PlayMode::SystemMonitor => {
-                    let _ = mode_manager.mpris.seek_to(target);
                 }
                 PlayMode::Idle => {
                     app.player.position = target;
@@ -1968,8 +1864,6 @@ fn apply_local_audio_settings_delta(app: &mut AppState, delta: i32) {
                     if let Some(cur_path) = app.playlist.current_path().cloned() {
                         app.queue_remote_fetch(Some(&cur_path));
                     }
-                } else if app.player.mode == PlayMode::SystemMonitor {
-                    app.queue_remote_fetch(None);
                 }
             }
         }
