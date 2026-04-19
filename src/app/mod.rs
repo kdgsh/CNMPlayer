@@ -1660,8 +1660,8 @@ impl App {
     }
 
     pub async fn new(config: Config, theme: Theme) -> Result<Self> {
+        let audio_player = AudioPlayer::new(&config)?;
         let saved_cookie = session::load_cookie().ok().flatten();
-        let audio_player = AudioPlayer::new(&config);
 
         let mut headers = header::HeaderMap::new();
         headers.insert(
@@ -3059,7 +3059,6 @@ impl App {
                                 match self.audio_player.play_streaming(
                                     reader,
                                     &track.song_id,
-                                    cache_path,
                                     progress_rx,
                                 ) {
                                     Ok(()) => {
