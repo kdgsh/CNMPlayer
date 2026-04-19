@@ -357,6 +357,9 @@ where
     }
 
     fn try_seek(&mut self, pos: Duration) -> std::result::Result<(), SeekError> {
+        for state in &mut self.states {
+            *state = BiquadState::default();
+        }
         self.inner.try_seek(pos)
     }
 }
