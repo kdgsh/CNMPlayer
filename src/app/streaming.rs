@@ -3,7 +3,7 @@
 //! Implements a Read + Seek trait that blocks when data isn't yet downloaded.
 
 use anyhow::{Context, Result, bail};
-use reqwest::Client;
+use reqwest::Response;
 use std::fs::{File, OpenOptions};
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -32,7 +32,7 @@ struct StreamingState {
     /// How many bytes have been written to the file
     downloaded: AtomicU64,
     /// Total content length (0 if unknown until headers parsed)
-    total: AtomicU64,
+    total: u64,
     /// Mutex + Condvar for efficient blocking waits
     condvar: Condvar,
     /// Mutex to serialize file operations
@@ -55,6 +55,15 @@ impl Drop for StreamingReader {
     }
 }
 
+impl StreamingState {
+    fn of(total: u64) -> Self {
+        StreamingState {
+            total,
+            ..Default::default()
+        }
+    }
+}
+
 impl StreamingReader {
     /// Create a new streaming reader, starting the background download.
     /// Progress updates are sent to `progress_tx` via a watch channel.
@@ -65,8 +74,6 @@ impl StreamingReader {
         cookie: Option<&str>,
         progress_tx: Sender<(u64, u64)>,
     ) -> Result<Self> {
-        let state = Arc::new(StreamingState::default());
-
         // Create temp file
         if let Some(parent) = cache_path.parent() {
             std::fs::create_dir_all(parent).context("create streaming cache dir")?;
@@ -80,14 +87,22 @@ impl StreamingReader {
             .open(&tmp_path)
             .context("create streaming temp file")?;
 
+        let mut request = http.get(url);
+        if let Some(cookie) = cookie {
+            request = request.header("Cookie", cookie);
+        }
+        let response = request.send().await?;
+        let total = response
+            .content_length()
+            .context("Music no content_length!")?;
+        let state = Arc::new(StreamingState::of(total));
+
         // Start background download
         let download = download_streaming(
-            http.clone(),
-            url.to_string(),
+            response,
             tmp_path.clone(),
             cache_path,
             state.clone(),
-            cookie.map(|s| s.to_string()),
             progress_tx,
         );
 
@@ -144,6 +159,10 @@ impl StreamingReader {
                 .0;
         }
     }
+
+    pub fn total(&self) -> u64 {
+        self.state.total
+    }
 }
 
 impl Read for StreamingReader {
@@ -172,7 +191,7 @@ impl Seek for StreamingReader {
                 loop {
                     let done = self.state.done.load(Ordering::SeqCst);
                     if done == 1 {
-                        let total = self.state.total.load(Ordering::SeqCst);
+                        let total = self.state.total;
                         break total.wrapping_add_signed(p);
                     }
                     if done == 2 {
@@ -231,23 +250,12 @@ impl Seek for StreamingReader {
 }
 
 async fn download_streaming(
-    http: Client,
-    url: String,
+    response: Response,
     tmp_path: PathBuf,
     cache_path: PathBuf,
     state: Arc<StreamingState>,
-    cookie: Option<String>,
     progress_tx: Sender<(u64, u64)>,
 ) -> Result<()> {
-    let mut request = http.get(url);
-    if let Some(cookie) = cookie {
-        request = request.header("Cookie", cookie);
-    }
-    let response = request.send().await.context("send streaming request")?;
-
-    let total = response.content_length().unwrap_or(0);
-    state.total.store(total, Ordering::SeqCst);
-
     let mut response = response
         .error_for_status()
         .context("streaming response status")?;
@@ -288,7 +296,7 @@ async fn download_streaming(
 
         downloaded = downloaded.wrapping_add(chunk.len() as u64);
         state.downloaded.store(downloaded, Ordering::SeqCst);
-        let _ = progress_tx.send((downloaded, state.total.load(Ordering::SeqCst)));
+        let _ = progress_tx.send((downloaded, state.total));
         state.condvar.notify_all();
     }
 

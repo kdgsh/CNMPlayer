@@ -4,8 +4,9 @@ use crate::data::config::{CacheCleanStrategy, Config};
 use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings};
 use anyhow::{Context, Result};
 use directories::BaseDirs;
+use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
@@ -82,10 +83,9 @@ impl AudioPlayer {
     }
 
     fn play_from_file(&mut self, song_id: &str, file_path: PathBuf) -> Result<()> {
-        let file = File::open(&file_path)
-            .with_context(|| format!("open cached audio failed: {}", file_path.display()))?;
-        let decoder = Decoder::new(BufReader::new(file))
-            .with_context(|| format!("decode cached audio failed: {}", file_path.display()))?;
+        let file = File::open(&file_path)?;
+        let builder = DecoderBuilder::new().with_byte_len(file.metadata()?.len());
+        let decoder = builder.with_data(BufReader::new(file)).build()?;
         let total_duration = decoder.total_duration();
         let source = EqSource::new(decoder, self.eq_params.clone());
 
@@ -105,8 +105,8 @@ impl AudioPlayer {
         song_id: &str,
         progress_rx: Receiver<(u64, u64)>,
     ) -> Result<()> {
-        let decoder = Decoder::new(reader)
-            .with_context(|| format!("decode streaming audio failed for {}", song_id))?;
+        let builder = DecoderBuilder::new().with_byte_len(reader.total());
+        let decoder = builder.with_data(BufReader::new(reader)).build()?;
         let total_duration = decoder.total_duration();
         let source = EqSource::new(decoder, self.eq_params.clone());
 
