@@ -5336,10 +5336,16 @@ impl App {
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
-    async fn fetch_playlist_first_song_cover(&mut self, playlist_id: &str) -> Option<String> {
+    async fn fetch_home_private_radar_cover(&mut self, playlist_id: &str) -> Option<String> {
         let response = self.api.playlist_detail(playlist_id).await.ok()?;
         if response_code(&response) != 200 {
             return None;
+        }
+
+        if let Some(playlist) = response.body.get("playlist") {
+            if let Some(cover_url) = first_non_empty(playlist, &["/coverImgUrl", "/picUrl"]) {
+                return Some(cover_url);
+            }
         }
 
         response
@@ -5397,8 +5403,7 @@ impl App {
 
             if pinned_title == Some("私人雷达") {
                 if let Some(playlist_id) = tile.id.clone() {
-                    if let Some(cover_url) =
-                        self.fetch_playlist_first_song_cover(&playlist_id).await
+                    if let Some(cover_url) = self.fetch_home_private_radar_cover(&playlist_id).await
                     {
                         tile.cover.load(self.api.clone(), cover_url);
                     }
