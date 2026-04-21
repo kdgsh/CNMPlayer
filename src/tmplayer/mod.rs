@@ -213,6 +213,8 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
         keybind_settings: host.keybind_settings.clone(),
         keybind_sidebar: host.keybind_sidebar.clone(),
         keybind_quit: host.keybind_quit.clone(),
+        keybind_page_up: host.keybind_page_up.clone(),
+        keybind_page_down: host.keybind_page_down.clone(),
         keybind_prev: host.keybind_prev.clone(),
         keybind_next: host.keybind_next.clone(),
         keybind_toggle_play_pause: host.keybind_toggle_play_pause.clone(),

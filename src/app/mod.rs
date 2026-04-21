@@ -56,7 +56,7 @@ const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 10;
 const SETTINGS_PLAYBACK_ITEMS: usize = 9;
-pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 17;
+pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 19;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
 const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
@@ -73,6 +73,8 @@ const DEFAULT_KEYBIND_FULLSCREEN: &str = "Ctrl+F";
 const DEFAULT_KEYBIND_SETTINGS: &str = "T";
 const DEFAULT_KEYBIND_SIDEBAR: &str = "P";
 const DEFAULT_KEYBIND_QUIT: &str = "Q";
+const DEFAULT_KEYBIND_PAGE_UP: &str = "pageUP";
+const DEFAULT_KEYBIND_PAGE_DOWN: &str = "pageDown";
 const DEFAULT_KEYBIND_PREV: &str = "Alt+Left";
 const DEFAULT_KEYBIND_NEXT: &str = "Alt+Right";
 const DEFAULT_KEYBIND_TOGGLE_PLAY_PAUSE: &str = "Alt+Space";
@@ -93,6 +95,8 @@ enum KeybindAction {
     Settings,
     Sidebar,
     Quit,
+    PageUp,
+    PageDown,
     Prev,
     Next,
     TogglePlayPause,
@@ -2484,6 +2488,8 @@ impl App {
             KeybindAction::Quit => {
                 self.should_quit = true;
             }
+            KeybindAction::PageUp => self.quick_page_up_hotkey().await,
+            KeybindAction::PageDown => self.quick_page_down_hotkey().await,
             KeybindAction::Prev => self.play_previous_hotkey().await,
             KeybindAction::Next => self.play_next_hotkey().await,
             KeybindAction::TogglePlayPause => self.toggle_play_pause_hotkey().await,
@@ -2589,6 +2595,8 @@ impl App {
             KeybindAction::Settings,
             KeybindAction::Sidebar,
             KeybindAction::Quit,
+            KeybindAction::PageUp,
+            KeybindAction::PageDown,
             KeybindAction::Prev,
             KeybindAction::Next,
             KeybindAction::TogglePlayPause,
@@ -2615,6 +2623,8 @@ impl App {
             KeybindAction::Settings => &self.config.keybind_settings,
             KeybindAction::Sidebar => &self.config.keybind_sidebar,
             KeybindAction::Quit => &self.config.keybind_quit,
+            KeybindAction::PageUp => &self.config.keybind_page_up,
+            KeybindAction::PageDown => &self.config.keybind_page_down,
             KeybindAction::Prev => &self.config.keybind_prev,
             KeybindAction::Next => &self.config.keybind_next,
             KeybindAction::TogglePlayPause => &self.config.keybind_toggle_play_pause,
@@ -2639,18 +2649,20 @@ impl App {
             2 => Some(&mut self.config.keybind_settings),
             3 => Some(&mut self.config.keybind_sidebar),
             4 => Some(&mut self.config.keybind_quit),
-            5 => Some(&mut self.config.keybind_prev),
-            6 => Some(&mut self.config.keybind_next),
-            7 => Some(&mut self.config.keybind_toggle_play_pause),
-            8 => Some(&mut self.config.keybind_fullscreen_prev),
-            9 => Some(&mut self.config.keybind_fullscreen_next),
-            10 => Some(&mut self.config.keybind_fullscreen_toggle_play_pause),
-            11 => Some(&mut self.config.keybind_fullscreen_toggle_mode),
-            12 => Some(&mut self.config.keybind_fullscreen_eq),
-            13 => Some(&mut self.config.keybind_fullscreen_eq_reset),
-            14 => Some(&mut self.config.keybind_toggle_like_fullscreen),
-            15 => Some(&mut self.config.keybind_toggle_mode),
-            16 => Some(&mut self.config.keybind_toggle_like_collapsed),
+            5 => Some(&mut self.config.keybind_page_up),
+            6 => Some(&mut self.config.keybind_page_down),
+            7 => Some(&mut self.config.keybind_prev),
+            8 => Some(&mut self.config.keybind_next),
+            9 => Some(&mut self.config.keybind_toggle_play_pause),
+            10 => Some(&mut self.config.keybind_fullscreen_prev),
+            11 => Some(&mut self.config.keybind_fullscreen_next),
+            12 => Some(&mut self.config.keybind_fullscreen_toggle_play_pause),
+            13 => Some(&mut self.config.keybind_fullscreen_toggle_mode),
+            14 => Some(&mut self.config.keybind_fullscreen_eq),
+            15 => Some(&mut self.config.keybind_fullscreen_eq_reset),
+            16 => Some(&mut self.config.keybind_toggle_like_fullscreen),
+            17 => Some(&mut self.config.keybind_toggle_mode),
+            18 => Some(&mut self.config.keybind_toggle_like_collapsed),
             _ => None,
         }
     }
@@ -2662,18 +2674,20 @@ impl App {
             2 => Some(self.config.keybind_settings.as_str()),
             3 => Some(self.config.keybind_sidebar.as_str()),
             4 => Some(self.config.keybind_quit.as_str()),
-            5 => Some(self.config.keybind_prev.as_str()),
-            6 => Some(self.config.keybind_next.as_str()),
-            7 => Some(self.config.keybind_toggle_play_pause.as_str()),
-            8 => Some(self.config.keybind_fullscreen_prev.as_str()),
-            9 => Some(self.config.keybind_fullscreen_next.as_str()),
-            10 => Some(self.config.keybind_fullscreen_toggle_play_pause.as_str()),
-            11 => Some(self.config.keybind_fullscreen_toggle_mode.as_str()),
-            12 => Some(self.config.keybind_fullscreen_eq.as_str()),
-            13 => Some(self.config.keybind_fullscreen_eq_reset.as_str()),
-            14 => Some(self.config.keybind_toggle_like_fullscreen.as_str()),
-            15 => Some(self.config.keybind_toggle_mode.as_str()),
-            16 => Some(self.config.keybind_toggle_like_collapsed.as_str()),
+            5 => Some(self.config.keybind_page_up.as_str()),
+            6 => Some(self.config.keybind_page_down.as_str()),
+            7 => Some(self.config.keybind_prev.as_str()),
+            8 => Some(self.config.keybind_next.as_str()),
+            9 => Some(self.config.keybind_toggle_play_pause.as_str()),
+            10 => Some(self.config.keybind_fullscreen_prev.as_str()),
+            11 => Some(self.config.keybind_fullscreen_next.as_str()),
+            12 => Some(self.config.keybind_fullscreen_toggle_play_pause.as_str()),
+            13 => Some(self.config.keybind_fullscreen_toggle_mode.as_str()),
+            14 => Some(self.config.keybind_fullscreen_eq.as_str()),
+            15 => Some(self.config.keybind_fullscreen_eq_reset.as_str()),
+            16 => Some(self.config.keybind_toggle_like_fullscreen.as_str()),
+            17 => Some(self.config.keybind_toggle_mode.as_str()),
+            18 => Some(self.config.keybind_toggle_like_collapsed.as_str()),
             _ => None,
         }
     }
@@ -2704,18 +2718,20 @@ impl App {
             2 => self.lang_text("设置弹窗", "Settings Modal"),
             3 => self.lang_text("侧边栏", "Sidebar"),
             4 => self.lang_text("退出应用", "Quit"),
-            5 => self.lang_text("上一首", "Previous"),
-            6 => self.lang_text("下一首", "Next"),
-            7 => self.lang_text("播放/暂停", "Play/Pause"),
-            8 => self.lang_text("全屏上一首", "Fullscreen Previous"),
-            9 => self.lang_text("全屏下一首", "Fullscreen Next"),
-            10 => self.lang_text("全屏暂停/播放", "Fullscreen Pause/Play"),
-            11 => self.lang_text("全屏模式切换", "Fullscreen Mode Switch"),
-            12 => self.lang_text("全屏页EQ", "Fullscreen EQ"),
-            13 => self.lang_text("全屏EQ重置", "Fullscreen EQ Reset"),
-            14 => self.lang_text("全屏收藏/取消收藏", "Fullscreen Like/Unlike"),
-            15 => self.lang_text("折叠栏模式切换", "Collapsed Mode Switch"),
-            16 => self.lang_text("折叠栏收藏/取消收藏", "Collapsed Like/Unlike"),
+            5 => self.lang_text("快速上翻页", "Quick Page Up"),
+            6 => self.lang_text("快速下翻页", "Quick Page Down"),
+            7 => self.lang_text("上一首", "Previous"),
+            8 => self.lang_text("下一首", "Next"),
+            9 => self.lang_text("播放/暂停", "Play/Pause"),
+            10 => self.lang_text("全屏上一首", "Fullscreen Previous"),
+            11 => self.lang_text("全屏下一首", "Fullscreen Next"),
+            12 => self.lang_text("全屏暂停/播放", "Fullscreen Pause/Play"),
+            13 => self.lang_text("全屏模式切换", "Fullscreen Mode Switch"),
+            14 => self.lang_text("全屏页EQ", "Fullscreen EQ"),
+            15 => self.lang_text("全屏EQ重置", "Fullscreen EQ Reset"),
+            16 => self.lang_text("全屏收藏/取消收藏", "Fullscreen Like/Unlike"),
+            17 => self.lang_text("折叠栏模式切换", "Collapsed Mode Switch"),
+            18 => self.lang_text("折叠栏收藏/取消收藏", "Collapsed Like/Unlike"),
             _ => self.lang_text("未知", "Unknown"),
         }
     }
@@ -2726,6 +2742,8 @@ impl App {
         self.config.keybind_settings = DEFAULT_KEYBIND_SETTINGS.to_string();
         self.config.keybind_sidebar = DEFAULT_KEYBIND_SIDEBAR.to_string();
         self.config.keybind_quit = DEFAULT_KEYBIND_QUIT.to_string();
+        self.config.keybind_page_up = DEFAULT_KEYBIND_PAGE_UP.to_string();
+        self.config.keybind_page_down = DEFAULT_KEYBIND_PAGE_DOWN.to_string();
         self.config.keybind_prev = DEFAULT_KEYBIND_PREV.to_string();
         self.config.keybind_next = DEFAULT_KEYBIND_NEXT.to_string();
         self.config.keybind_toggle_play_pause = DEFAULT_KEYBIND_TOGGLE_PLAY_PAUSE.to_string();
@@ -2751,18 +2769,20 @@ impl App {
             2 => KeybindAction::Settings,
             3 => KeybindAction::Sidebar,
             4 => KeybindAction::Quit,
-            5 => KeybindAction::Prev,
-            6 => KeybindAction::Next,
-            7 => KeybindAction::TogglePlayPause,
-            8 => KeybindAction::FullscreenPrev,
-            9 => KeybindAction::FullscreenNext,
-            10 => KeybindAction::FullscreenTogglePlayPause,
-            11 => KeybindAction::FullscreenToggleMode,
-            12 => KeybindAction::FullscreenEq,
-            13 => KeybindAction::FullscreenEqReset,
-            14 => KeybindAction::ToggleLikeFullscreen,
-            15 => KeybindAction::ToggleMode,
-            16 => KeybindAction::ToggleLikeCollapsed,
+            5 => KeybindAction::PageUp,
+            6 => KeybindAction::PageDown,
+            7 => KeybindAction::Prev,
+            8 => KeybindAction::Next,
+            9 => KeybindAction::TogglePlayPause,
+            10 => KeybindAction::FullscreenPrev,
+            11 => KeybindAction::FullscreenNext,
+            12 => KeybindAction::FullscreenTogglePlayPause,
+            13 => KeybindAction::FullscreenToggleMode,
+            14 => KeybindAction::FullscreenEq,
+            15 => KeybindAction::FullscreenEqReset,
+            16 => KeybindAction::ToggleLikeFullscreen,
+            17 => KeybindAction::ToggleMode,
+            18 => KeybindAction::ToggleLikeCollapsed,
             _ => KeybindAction::SearchBox,
         });
         format!("{}: {}", self.keybind_name_for_index(index), value)
@@ -2856,6 +2876,54 @@ impl App {
             }
         ));
         self.persist_playback_memory();
+    }
+
+    async fn quick_page_up_hotkey(&mut self) {
+        match self.page {
+            Page::Search => {
+                let step = self.search.visible_rows.max(1);
+                for _ in 0..step {
+                    if !self.search.focus_prev() {
+                        break;
+                    }
+                }
+            }
+            Page::Playlist => {
+                let step = self.playlist.visible_rows.max(1);
+                for _ in 0..step {
+                    if !self.playlist.focus_prev() {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn quick_page_down_hotkey(&mut self) {
+        match self.page {
+            Page::Search => {
+                let step = self.search.visible_rows.max(1);
+                for _ in 0..step {
+                    let before_idx = self.search.focused_idx;
+                    let before_len = self.search.results.len();
+                    self.advance_search_focus().await;
+                    if self.search.focused_idx == before_idx && self.search.results.len() == before_len
+                    {
+                        break;
+                    }
+                }
+            }
+            Page::Playlist => {
+                let step = self.playlist.visible_rows.max(1);
+                for _ in 0..step {
+                    if !self.playlist.focus_next() {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     async fn refresh_now_playing_like_state(&mut self) {
@@ -4237,9 +4305,15 @@ impl App {
             KeyCode::BackTab | KeyCode::Up => self.login.prev_focus(),
             KeyCode::Enter => self.submit_login_action().await,
             KeyCode::Backspace => self.login.pop_char(),
-            KeyCode::Char('q') | KeyCode::Char('Q') => {
+            KeyCode::Char(ch) if matches!(ch, 'q' | 'Q') => {
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    self.should_quit = true;
+                    let typing_username_or_password = self.login.method == LoginMethod::Username
+                        && self.login.focus_index <= 1;
+                    if typing_username_or_password {
+                        self.login.push_char(ch);
+                    } else {
+                        self.should_quit = true;
+                    }
                 }
             }
             KeyCode::Char(ch) => {

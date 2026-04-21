@@ -1057,6 +1057,14 @@ fn render_help_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppState) {
             app.config.keybind_quit.as_str(),
         ),
         (
+            lang_text(app, "快速上翻页（主程序）", "Quick Page Up (Host)"),
+            app.config.keybind_page_up.as_str(),
+        ),
+        (
+            lang_text(app, "快速下翻页（主程序）", "Quick Page Down (Host)"),
+            app.config.keybind_page_down.as_str(),
+        ),
+        (
             lang_text(app, "上一首", "Previous"),
             app.config.keybind_fullscreen_prev.as_str(),
         ),
