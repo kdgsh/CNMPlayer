@@ -1701,14 +1701,7 @@ async fn handle_action(
         Action::MouseClick { col, row } => {
             // map click to controls/progress/volume/playlist
             if let Some(a) = crate::tmplayer::ui::tui::hit_test(layout, app, col, row) {
-                Box::pin(handle_action(
-                    app,
-                    mode_manager,
-                    host_bridge,
-                    a,
-                    layout,
-                ))
-                .await?;
+                Box::pin(handle_action(app, mode_manager, host_bridge, a, layout)).await?;
             }
         }
         Action::None => {}

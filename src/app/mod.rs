@@ -2908,7 +2908,8 @@ impl App {
                     let before_idx = self.search.focused_idx;
                     let before_len = self.search.results.len();
                     self.advance_search_focus().await;
-                    if self.search.focused_idx == before_idx && self.search.results.len() == before_len
+                    if self.search.focused_idx == before_idx
+                        && self.search.results.len() == before_len
                     {
                         break;
                     }
@@ -4307,8 +4308,8 @@ impl App {
             KeyCode::Backspace => self.login.pop_char(),
             KeyCode::Char(ch) if matches!(ch, 'q' | 'Q') => {
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
-                    let typing_username_or_password = self.login.method == LoginMethod::Username
-                        && self.login.focus_index <= 1;
+                    let typing_username_or_password =
+                        self.login.method == LoginMethod::Username && self.login.focus_index <= 1;
                     if typing_username_or_password {
                         self.login.push_char(ch);
                     } else {
