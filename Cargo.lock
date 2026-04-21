@@ -570,7 +570,6 @@ checksum = "3f88a43d011fc4a6876cb7344703e297c71dda42494fee094d5f7c76bf13f746"
 name = "cnmplayer"
 version = "0.4.0"
 dependencies = [
- "alsa",
  "anyhow",
  "base64",
  "chromaprint",

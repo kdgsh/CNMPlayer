@@ -36,7 +36,6 @@ chromaprint = "0.2"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-alsa = "0.11"
 mpris-server = "0.9"
 
 [profile.release]

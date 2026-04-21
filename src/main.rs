@@ -53,6 +53,7 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
                 app::PlaybackRepeatMode::LoopOne => tmplayer::HostRepeatMode::LoopOne,
             },
             position: runtime.position,
+            volume: runtime.volume,
         }
     }
 
@@ -149,6 +150,10 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
 
     fn seek_to_ratio(&mut self, ratio: f32) {
         self.app.fullscreen_seek_to_ratio(ratio);
+    }
+
+    fn set_volume(&mut self, volume: f32) {
+        self.app.fullscreen_set_volume(volume);
     }
 
     fn toggle_repeat_mode(&mut self) {

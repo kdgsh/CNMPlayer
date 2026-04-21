@@ -27,6 +27,7 @@ pub enum AudioPlayerState {
 pub struct AudioPlayer {
     _device_sink: MixerDeviceSink,
     player: Player,
+    volume: f32,
     cache_dir: PathBuf,
     current_song_id: Option<String>,
     total_duration: Option<Duration>,
@@ -56,6 +57,7 @@ impl AudioPlayer {
         let player = Self {
             _device_sink: sink,
             player,
+            volume: 1.0,
             cache_dir,
             current_song_id: None,
             total_duration: None,
@@ -63,6 +65,8 @@ impl AudioPlayer {
             eq_params,
             progress_rx: None,
         };
+
+        player.player.set_volume(player.volume);
 
         Ok(player)
     }
@@ -91,6 +95,7 @@ impl AudioPlayer {
 
         self.player.stop();
         self.player.append(source);
+        self.player.set_volume(self.volume);
         self.player.play();
 
         self.current_song_id = Some(song_id.to_string());
@@ -112,6 +117,7 @@ impl AudioPlayer {
 
         self.player.stop();
         self.player.append(source);
+        self.player.set_volume(self.volume);
         self.player.play();
 
         self.current_song_id = Some(song_id.to_string());
@@ -155,6 +161,15 @@ impl AudioPlayer {
         self.progress_rx = None;
         self.current_song_id = None;
         self.total_duration = None;
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
+        self.player.set_volume(self.volume);
+    }
+
+    pub fn volume(&self) -> f32 {
+        self.volume
     }
 
     pub fn duration(&self) -> Option<Duration> {

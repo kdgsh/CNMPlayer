@@ -8,7 +8,6 @@ use crate::tmplayer::data::theme_loader::ThemeLoader;
 use crate::tmplayer::ui::theme::ThemeName;
 use crate::tmplayer::ui::tui::{Tui, UiLayout};
 use crate::tmplayer::utils::input::{Action, map_key, map_mouse};
-use crate::tmplayer::utils::system_volume::SystemVolume;
 use crate::tmplayer::{
     HostConfigSync, HostPlaybackBridge, HostPlaybackRuntimeSnapshot, HostPlaybackSnapshot,
     HostPlaybackState, HostRepeatMode,
@@ -496,6 +495,12 @@ fn apply_host_runtime_snapshot(app: &mut AppState, runtime: HostPlaybackRuntimeS
         changed = true;
     }
 
+    let runtime_volume = runtime.volume.clamp(0.0, 1.0);
+    if (app.player.volume - runtime_volume).abs() > f32::EPSILON {
+        app.player.volume = runtime_volume;
+        changed = true;
+    }
+
     if let Some(index) = runtime.current_index {
         if !app.playlist.items.is_empty() {
             let idx = index.min(app.playlist.len().saturating_sub(1));
@@ -559,8 +564,6 @@ pub async fn run(
     let mut cava: Option<CavaRunner> = None;
     let mut cava_cfg: Option<CavaConfig> = None;
 
-    let system_volume = SystemVolume::try_new().ok();
-
     let mut last_spectrum = Instant::now();
     let mut last_host_config_sync = Instant::now()
         .checked_sub(Duration::from_millis(400))
@@ -619,7 +622,6 @@ pub async fn run(
                     handle_action(
                         app,
                         &mut mode_manager,
-                        system_volume.as_ref(),
                         &mut host_bridge,
                         action,
                         &last_layout,
@@ -632,7 +634,6 @@ pub async fn run(
                     handle_action(
                         app,
                         &mut mode_manager,
-                        system_volume.as_ref(),
                         &mut host_bridge,
                         action,
                         &last_layout,
@@ -736,12 +737,6 @@ pub async fn run(
                     next
                 };
                 state_changed = true;
-            }
-        }
-
-        if let Some(sysvol) = system_volume.as_ref() {
-            if let Ok(v) = sysvol.get() {
-                app.player.volume = v;
             }
         }
 
@@ -894,7 +889,6 @@ fn switch_idle_track(app: &mut AppState, dir: i8) {
 async fn handle_action(
     app: &mut AppState,
     mode_manager: &mut ModeManager,
-    system_volume: Option<&SystemVolume>,
     host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
     action: Action,
     layout: &UiLayout,
@@ -1496,7 +1490,6 @@ async fn handle_action(
                             return Box::pin(handle_action(
                                 app,
                                 mode_manager,
-                                system_volume,
                                 host_bridge,
                                 Action::Confirm,
                                 layout,
@@ -1626,11 +1619,11 @@ async fn handle_action(
                     .set_volume((mode_manager.local.volume() + 0.05).min(1.0));
             }
             PlayMode::Idle => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(0.05) {
-                        app.player.volume = v;
-                    }
+                let next = (app.player.volume + 0.05).min(1.0);
+                if let Some(bridge) = host_bridge.as_mut() {
+                    (*bridge).set_volume(next);
                 }
+                app.player.volume = next;
             }
         },
         Action::VolumeDown => match app.player.mode {
@@ -1640,11 +1633,11 @@ async fn handle_action(
                     .set_volume((mode_manager.local.volume() - 0.05).max(0.0));
             }
             PlayMode::Idle => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(-0.05) {
-                        app.player.volume = v;
-                    }
+                let next = (app.player.volume - 0.05).max(0.0);
+                if let Some(bridge) = host_bridge.as_mut() {
+                    (*bridge).set_volume(next);
                 }
+                app.player.volume = next;
             }
         },
         Action::SetVolume(v) => match app.player.mode {
@@ -1652,11 +1645,11 @@ async fn handle_action(
                 mode_manager.local.set_volume(v);
             }
             PlayMode::Idle => {
-                if let Some(sysvol) = system_volume {
-                    if sysvol.set(v).is_ok() {
-                        app.player.volume = v;
-                    }
+                let next = v.clamp(0.0, 1.0);
+                if let Some(bridge) = host_bridge.as_mut() {
+                    (*bridge).set_volume(next);
                 }
+                app.player.volume = next;
             }
         },
         Action::ToggleRepeatMode => {
@@ -1711,7 +1704,6 @@ async fn handle_action(
                 Box::pin(handle_action(
                     app,
                     mode_manager,
-                    system_volume,
                     host_bridge,
                     a,
                     layout,

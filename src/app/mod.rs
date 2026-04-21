@@ -1512,6 +1512,7 @@ pub struct FullscreenRuntimeSnapshot {
     pub state: PlaybackRuntimeState,
     pub repeat_mode: PlaybackRepeatMode,
     pub position: Duration,
+    pub volume: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -2351,6 +2352,7 @@ impl App {
             state: self.playback_state,
             repeat_mode: self.playback_repeat_mode,
             position: self.audio_player.position(),
+            volume: self.audio_player.volume(),
         }
     }
 
@@ -2410,6 +2412,10 @@ impl App {
 
     pub fn fullscreen_seek_to_ratio(&mut self, ratio: f32) {
         self.seek_to_ratio(ratio);
+    }
+
+    pub fn fullscreen_set_volume(&mut self, volume: f32) {
+        self.audio_player.set_volume(volume);
     }
 
     pub fn fullscreen_toggle_repeat_mode(&mut self) {
