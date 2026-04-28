@@ -3105,7 +3105,7 @@ impl App {
         let path = self.audio_player.cached_song_path(id, quality);
 
         if is_nonempty_file(&path) {
-            return match self.audio_player.play_from_file(id, &path) {
+            return match self.audio_player.play_from_file(&path) {
                 Ok(_) => ok(self),
                 Err(err) => fail(err, self),
             };
@@ -3132,15 +3132,10 @@ impl App {
                 )
                 .await
                 {
-                    Ok(reader) => {
-                        match self
-                            .audio_player
-                            .play_streaming(reader, &track.song_id, progress_rx)
-                        {
-                            Ok(()) => ok(self),
-                            Err(err) => fail(err, self),
-                        }
-                    }
+                    Ok(reader) => match self.audio_player.play_streaming(reader, progress_rx) {
+                        Ok(()) => ok(self),
+                        Err(err) => fail(err, self),
+                    },
                     Err(err) => fail(err, self),
                 }
             }

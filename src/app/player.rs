@@ -27,11 +27,8 @@ pub enum AudioPlayerState {
 pub struct AudioPlayer {
     _device_sink: MixerDeviceSink,
     player: Player,
-    volume: f32,
     cache_dir: PathBuf,
-    current_song_id: Option<String>,
     total_duration: Option<Duration>,
-    eq: EqSettings,
     eq_params: Arc<EqParams>,
     progress_rx: Option<Receiver<(u64, u64)>>,
 }
@@ -44,10 +41,9 @@ impl AudioPlayer {
         let cache_dir = cache_root.join("audio");
         let eq = EqSettings {
             bands_db: config.eq_bands_db,
-        }
-        .clamp();
+        };
         let eq_params = Arc::new(EqParams::new());
-        eq_params.set_from(eq);
+        eq_params.set_from(eq.clamp());
 
         if config.cache.clean_on_startup {
             let _ = cleanup_cache_dir(&cache_dir, &config.cache);
@@ -57,16 +53,11 @@ impl AudioPlayer {
         let player = Self {
             _device_sink: sink,
             player,
-            volume: 1.0,
             cache_dir,
-            current_song_id: None,
             total_duration: None,
-            eq,
             eq_params,
             progress_rx: None,
         };
-
-        player.player.set_volume(player.volume);
 
         Ok(player)
     }
@@ -77,7 +68,7 @@ impl AudioPlayer {
         self.cache_dir.join(name)
     }
 
-    pub fn play_from_file(&mut self, song_id: &str, file_path: &PathBuf) -> Result<()> {
+    pub fn play_from_file(&mut self, file_path: &PathBuf) -> Result<()> {
         let file = File::open(file_path)?;
         let builder = DecoderBuilder::new().with_byte_len(file.metadata()?.len());
         let decoder = builder.with_data(BufReader::new(file)).build()?;
@@ -86,10 +77,8 @@ impl AudioPlayer {
 
         self.player.stop();
         self.player.append(source);
-        self.player.set_volume(self.volume);
         self.player.play();
 
-        self.current_song_id = Some(song_id.to_string());
         self.total_duration = total_duration;
         self.progress_rx = None;
         Ok(())
@@ -98,7 +87,6 @@ impl AudioPlayer {
     pub fn play_streaming(
         &mut self,
         reader: StreamingReader,
-        song_id: &str,
         progress_rx: Receiver<(u64, u64)>,
     ) -> Result<()> {
         let builder = DecoderBuilder::new().with_byte_len(reader.total());
@@ -108,18 +96,15 @@ impl AudioPlayer {
 
         self.player.stop();
         self.player.append(source);
-        self.player.set_volume(self.volume);
         self.player.play();
 
-        self.current_song_id = Some(song_id.to_string());
         self.total_duration = total_duration;
         self.progress_rx = Some(progress_rx);
         Ok(())
     }
 
     pub fn set_eq(&mut self, eq: EqSettings) -> Result<()> {
-        self.eq = eq.clamp();
-        self.eq_params.set_from(self.eq);
+        self.eq_params.set_from(eq.clamp());
         Ok(())
     }
 
@@ -150,17 +135,16 @@ impl AudioPlayer {
     pub fn stop(&mut self) {
         self.player.stop();
         self.progress_rx = None;
-        self.current_song_id = None;
         self.total_duration = None;
     }
 
     pub fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.0);
-        self.player.set_volume(self.volume);
+        let volume = volume.clamp(0.0, 1.0);
+        self.player.set_volume(volume);
     }
 
     pub fn volume(&self) -> f32 {
-        self.volume
+        self.player.volume()
     }
 
     pub fn duration(&self) -> Option<Duration> {
