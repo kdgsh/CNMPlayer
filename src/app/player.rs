@@ -71,23 +71,14 @@ impl AudioPlayer {
         Ok(player)
     }
 
-    pub fn play_cached_song(&mut self, song_id: &str, quality_level: &str) -> Result<bool> {
-        let file_path = self.cached_song_path(song_id, quality_level);
-        if !is_nonempty_file(&file_path) {
-            return Ok(false);
-        }
-        self.play_from_file(song_id, file_path)?;
-        Ok(true)
-    }
-
     pub fn cached_song_path(&self, song_id: &str, quality_level: &str) -> PathBuf {
         let quality = sanitize_cache_key(quality_level);
-        self.cache_dir
-            .join(format!("{}__{}.audio", song_id, quality))
+        let name = format!("{song_id}__{quality}.audio");
+        self.cache_dir.join(name)
     }
 
-    fn play_from_file(&mut self, song_id: &str, file_path: PathBuf) -> Result<()> {
-        let file = File::open(&file_path)?;
+    pub fn play_from_file(&mut self, song_id: &str, file_path: &PathBuf) -> Result<()> {
+        let file = File::open(file_path)?;
         let builder = DecoderBuilder::new().with_byte_len(file.metadata()?.len());
         let decoder = builder.with_data(BufReader::new(file)).build()?;
         let total_duration = decoder.total_duration();
@@ -379,7 +370,7 @@ where
     }
 }
 
-fn is_nonempty_file(path: &Path) -> bool {
+pub fn is_nonempty_file(path: &Path) -> bool {
     if !path.is_file() {
         return false;
     }

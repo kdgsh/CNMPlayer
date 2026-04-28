@@ -3,6 +3,7 @@ mod mpris_bridge;
 pub(crate) mod player;
 pub(crate) mod streaming;
 
+use crate::app::player::is_nonempty_file;
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
 use crate::data::config::{Config, GraphicsProtocol};
 use crate::data::playback_session;
@@ -3080,76 +3081,63 @@ impl App {
         self.persist_playback_memory();
 
         let quality = self.config.audio_quality.as_api_level();
-        let fail = move |err, app: &mut Self| {
+        let fail = |err, app: &mut Self| {
             app.now_playing_liked = false;
             app.playback_state = PlaybackRuntimeState::Stopped;
             app.set_runtime_status(format!(
-                "{}: {}",
+                "{}: {err}",
                 app.lang_text("播放失败", "Playback failed"),
-                err
             ));
         };
-        match self.audio_player.play_cached_song(&track.song_id, quality) {
-            Ok(true) => {
-                self.playback_state = PlaybackRuntimeState::Playing;
-                if announce {
-                    self.set_runtime_status(format!(
-                        "{}: {} - {}",
-                        self.lang_text("正在播放", "Now Playing"),
-                        enriched.title,
-                        enriched.artist
-                    ));
-                }
-            }
-            Ok(false) => {
-                // Song not cached - start streaming playback while prefetching in background.
-                self.audio_player.stop();
-                self.set_runtime_status(format!(
+        let ok = |app: &mut Self| {
+            app.playback_state = PlaybackRuntimeState::Playing;
+            if announce {
+                app.set_runtime_status(format!(
                     "{}: {} - {}",
-                    self.lang_text("正在缓冲", "Buffering"),
+                    app.lang_text("正在播放", "Now Playing"),
                     enriched.title,
                     enriched.artist
                 ));
+            };
+        };
 
-                // Start streaming playback
-                let cache_path = self.audio_player.cached_song_path(&track.song_id, quality);
+        let id = &track.song_id;
+        let path = self.audio_player.cached_song_path(id, quality);
 
-                match self
-                    .api
-                    .song_stream_url_with_quality(&track.song_id, quality)
-                    .await
+        if is_nonempty_file(&path) {
+            return match self.audio_player.play_from_file(id, &path) {
+                Ok(_) => ok(self),
+                Err(err) => fail(err, self),
+            };
+        }
+
+        // Song not cached - start streaming playback while prefetching in background.
+        self.audio_player.stop();
+        self.set_runtime_status(format!(
+            "{}: {} - {}",
+            self.lang_text("正在缓冲", "Buffering"),
+            enriched.title,
+            enriched.artist
+        ));
+
+        match self.api.song_stream_url_with_quality(id, quality).await {
+            Ok(url) => {
+                let (progress_tx, progress_rx) = watch::channel::<(u64, u64)>((0, 0));
+                match StreamingReader::new(
+                    &self.api.http_client(),
+                    &url,
+                    path.clone(),
+                    self.api.session_cookie(),
+                    progress_tx,
+                )
+                .await
                 {
-                    Ok(url) => {
-                        let (progress_tx, progress_rx) = watch::channel::<(u64, u64)>((0, 0));
-                        match StreamingReader::new(
-                            &self.api.http_client(),
-                            &url,
-                            cache_path.clone(),
-                            self.api.session_cookie(),
-                            progress_tx,
-                        )
-                        .await
+                    Ok(reader) => {
+                        match self
+                            .audio_player
+                            .play_streaming(reader, &track.song_id, progress_rx)
                         {
-                            Ok(reader) => {
-                                match self.audio_player.play_streaming(
-                                    reader,
-                                    &track.song_id,
-                                    progress_rx,
-                                ) {
-                                    Ok(()) => {
-                                        self.playback_state = PlaybackRuntimeState::Playing;
-                                        if announce {
-                                            self.set_runtime_status(format!(
-                                                "{}: {} - {}",
-                                                self.lang_text("正在播放", "Now Playing"),
-                                                enriched.title,
-                                                enriched.artist
-                                            ));
-                                        }
-                                    }
-                                    Err(err) => fail(err, self),
-                                }
-                            }
+                            Ok(()) => ok(self),
                             Err(err) => fail(err, self),
                         }
                     }
