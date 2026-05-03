@@ -218,7 +218,7 @@ where
     rx
 }
 
-async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+fn input_event() -> Receiver<impl AsyncFn(&mut App)> {
     let event = EventStream::new().filter_map(async |x| {
         let x = x.ok()?;
         if !matches!(x, Event::Key(_) | Event::Mouse(_) | Event::Resize(_, _)) {
@@ -233,20 +233,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         };
         Some(d)
     });
-    let mut event = hot(event);
+    hot(event)
+}
+
+async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+    let mut input = input_event();
     let mut needs_redraw = true;
-    let mut active_graphics_protocol = app.config.graphics_protocol;
     let mut last_draw_at = Instant::now()
         .checked_sub(Duration::from_millis(250))
         .unwrap_or_else(Instant::now);
 
     loop {
         app.tick().await;
-
-        if app.config.graphics_protocol != active_graphics_protocol {
-            active_graphics_protocol = app.config.graphics_protocol;
-            needs_redraw = true;
-        }
 
         if app.consume_fullscreen_launch_request() {
             let bootstrap = app.build_fullscreen_bootstrap().await;
@@ -283,7 +281,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         };
 
         select! {
-            Some(f) = event.recv() => {
+            Some(f) = input.recv() => {
                 f(app).await;
                 needs_redraw = true;
             }
