@@ -67,7 +67,6 @@ const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
 const COVER_CACHE_SUBDIR: &str = "cover";
 const COVER_FETCH_RETRY_MS: u64 = 1500;
 const LYRICS_FETCH_RETRY_MS: u64 = 1500;
-const SIDEBAR_SLIDE_STEP_CELLS: f32 = 4.0;
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
 const DEFAULT_KEYBIND_FULLSCREEN: &str = "Ctrl+F";
@@ -1830,23 +1829,6 @@ impl App {
             self.qr_last_poll_at = Some(now);
             self.check_qr_status_and_login().await;
         }
-    }
-
-    pub fn main_should_continuous_redraw(&self) -> bool {
-        if self.page == Page::Loading {
-            return true;
-        }
-
-        if matches!(self.overlay, Some(Overlay::SearchBox)) || self.search_box_anim_height > 0 {
-            return true;
-        }
-
-        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
-        if (self.home_sidebar.anim_progress - target).abs() > 0.001 {
-            return true;
-        }
-
-        false
     }
 
     pub async fn handle_key(&mut self, key: KeyEvent) {
@@ -4342,15 +4324,7 @@ impl App {
 
     fn tick_home_sidebar_animation(&mut self) {
         let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
-        // Keep home sidebar speed in sync with TMPlayer sidebar (4 cells per frame).
-        let span = self.home_sidebar_anim_span_cells.max(1) as f32;
-        let step = (SIDEBAR_SLIDE_STEP_CELLS / span).clamp(0.01, 1.0);
-
-        if self.home_sidebar.anim_progress < target {
-            self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress + step).min(target);
-        } else if self.home_sidebar.anim_progress > target {
-            self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress - step).max(target);
-        }
+        self.home_sidebar.anim_progress = target;
     }
 
     fn begin_startup_loading(&mut self) {
