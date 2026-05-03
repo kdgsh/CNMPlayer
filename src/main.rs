@@ -6,7 +6,9 @@ mod ui;
 
 use anyhow::{Result, bail};
 use app::App;
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -241,8 +243,14 @@ where
 fn input_event() -> Receiver<impl AsyncFn(&mut App)> {
     let event = EventStream::new().filter_map(async |x| {
         let x = x.ok()?;
-        if !matches!(x, Event::Key(_) | Event::Mouse(_) | Event::Resize(_, _)) {
-            return None;
+        match x {
+            Event::Key(_) | Event::Resize(_, _) => (),
+            Event::Mouse(e)
+                if matches!(
+                    e.kind,
+                    MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                ) => {}
+            _ => return None,
         }
         let d = async move |app: &mut App| {
             match x {
