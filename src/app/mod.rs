@@ -4,7 +4,7 @@ pub(crate) mod player;
 pub(crate) mod streaming;
 
 use crate::app::player::is_nonempty_file;
-use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
+use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
 use crate::data::config::{Config, GraphicsProtocol};
 use crate::data::playback_session;
 use crate::data::session;
@@ -1776,7 +1776,7 @@ impl App {
             app.graphics_picker.set_protocol_type(protocol);
         }
 
-        app.ensure_main_cava();
+        app.sync_cava();
 
         if let Some(cookie) = saved_cookie {
             match app.api.validate_cookie(&cookie).await {
@@ -1810,7 +1810,7 @@ impl App {
         self.tick_lyric_fetch();
         self.apply_mpris_control_events().await;
         self.sync_mpris_exposure();
-        self.tick_main_cava();
+        self.sync_cava();
         self.tick_search_box_animation();
         self.tick_home_sidebar_animation();
         self.tick_startup_loading();
@@ -2122,24 +2122,24 @@ impl App {
         out
     }
 
-    fn ensure_main_cava(&mut self) {
-        if !crate::tmplayer::audio::cava::is_available() {
+    fn sync_cava(&mut self) {
+        let available = crate::tmplayer::audio::cava::is_available();
+        let enable = self.config.visualize != VisualizeMode::Off;
+        if !available || !enable {
             self.cava = None;
             return;
         }
 
-        if self.cava.is_some() {
-            return;
+        if self.cava.is_none() {
+            let cfg = CavaConfig {
+                framerate_hz: self.config.spectrum_hz.clamp(1, 30),
+                bars: 20,
+                channels: CavaChannels::Mono,
+                reverse: false,
+            };
+
+            self.cava = MiniCavaState::try_new(cfg).ok();
         }
-
-        let cfg = CavaConfig {
-            framerate_hz: self.config.spectrum_hz.clamp(1, 30),
-            bars: 20,
-            channels: CavaChannels::Mono,
-            reverse: false,
-        };
-
-        self.cava = MiniCavaState::try_new(cfg).ok();
     }
 
     pub fn suspend_main_cava_for_fullscreen(&mut self) {
@@ -2147,11 +2147,7 @@ impl App {
     }
 
     pub fn resume_main_cava_after_fullscreen(&mut self) {
-        self.ensure_main_cava();
-    }
-
-    fn tick_main_cava(&mut self) {
-        self.ensure_main_cava();
+        self.sync_cava();
     }
 
     fn seek_to_ratio(&mut self, ratio: f32) {
