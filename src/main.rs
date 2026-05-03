@@ -6,13 +6,14 @@ mod ui;
 
 use anyhow::Result;
 use app::App;
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use data::config::Config;
 use data::theme_loader::ThemeLoader;
+use futures::{Stream, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
@@ -20,7 +21,10 @@ use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
 use rustls::crypto::ring;
 use std::io::{self, Stdout};
+use std::pin::pin;
 use std::time::{Duration, Instant};
+use tokio::select;
+use tokio::sync::mpsc::{self, Receiver};
 use tokio::time::sleep;
 
 struct AppFullscreenBridge<'a> {
@@ -197,7 +201,39 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
+pub fn hot<T, S>(source: S) -> Receiver<T>
+where
+    T: Send + 'static,
+    S: Stream<Item = T> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel(4);
+    tokio::spawn(async move {
+        let mut stream = pin!(source);
+        while let Some(item) = stream.next().await {
+            if tx.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+    rx
+}
+
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
+    let event = EventStream::new().filter_map(async |x| {
+        let x = x.ok()?;
+        if !matches!(x, Event::Key(_) | Event::Mouse(_) | Event::Resize(_, _)) {
+            return None;
+        }
+        let d = async move |app: &mut App| {
+            match x {
+                Event::Key(key) => app.handle_key(key).await,
+                Event::Mouse(mouse) => app.handle_mouse(mouse).await,
+                _ => {}
+            };
+        };
+        Some(d)
+    });
+    let mut event = hot(event);
     let mut needs_redraw = true;
     let mut active_graphics_protocol = app.config.graphics_protocol;
     let mut last_draw_at = Instant::now()
@@ -246,21 +282,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             Duration::from_millis(160)
         };
 
-        if event::poll(wait_timeout)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    app.handle_key(key).await;
-                    needs_redraw = true;
-                }
-                Event::Mouse(mouse) => {
-                    app.handle_mouse(mouse).await;
-                    needs_redraw = true;
-                }
-                Event::Resize(_, _) => {
-                    needs_redraw = true;
-                }
-                _ => {}
+        select! {
+            Some(f) = event.recv() => {
+                f(app).await;
+                needs_redraw = true;
             }
+            _ = sleep(wait_timeout) => {}
         }
     }
 
