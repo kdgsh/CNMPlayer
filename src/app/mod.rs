@@ -1811,7 +1811,6 @@ impl App {
         self.sync_mpris_exposure();
         self.sync_cava();
         self.tick_search_box_animation();
-        self.tick_home_sidebar_animation();
         self.tick_startup_loading();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
@@ -2429,10 +2428,14 @@ impl App {
 
         if self.home_sidebar.expanded {
             self.home_sidebar.expanded = false;
+            let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
+            self.home_sidebar.anim_progress = target;
             return;
         }
 
         self.home_sidebar.expanded = true;
+        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
+        self.home_sidebar.anim_progress = target;
 
         if !self.home_sidebar.created_playlists.is_empty()
             || !self.home_sidebar.collected_playlists.is_empty()
@@ -2492,6 +2495,8 @@ impl App {
                 self.playlist_return_page = Page::Home;
                 self.playlist_section_return_snapshot = None;
                 self.home_sidebar.expanded = false;
+                let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
+                self.home_sidebar.anim_progress = target;
                 self.page = Page::Playlist;
                 self.home.status_line = format!("{} {}", self.lang_text("已打开", "Opened"), title);
             }
@@ -4244,6 +4249,8 @@ impl App {
             match key.code {
                 KeyCode::Esc => {
                     self.home_sidebar.expanded = false;
+                    let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
+                    self.home_sidebar.anim_progress = target;
                 }
                 KeyCode::Up | KeyCode::BackTab => self.home_sidebar.focus_prev(),
                 KeyCode::Down | KeyCode::Tab => self.home_sidebar.focus_next(),
@@ -4320,11 +4327,6 @@ impl App {
         } else {
             self.search_box_anim_height = 0;
         }
-    }
-
-    fn tick_home_sidebar_animation(&mut self) {
-        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
-        self.home_sidebar.anim_progress = target;
     }
 
     fn begin_startup_loading(&mut self) {
