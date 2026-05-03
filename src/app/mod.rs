@@ -12,7 +12,7 @@ use crate::data::theme_loader::ThemeLoader;
 use crate::render::cover_renderer::render_cover_ascii;
 use crate::render::graphics_overlay::cover_viewport;
 use crate::tmplayer::app::state::LyricLine;
-use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, CavaRunner};
+use crate::tmplayer::audio::cava::{CavaChannels, CavaConfig, MiniCavaState};
 use crate::tmplayer::playback::metadata::{parse_lrc, parse_plain_lyrics};
 use crate::ui::theme::Theme;
 use anyhow::{Result, anyhow};
@@ -1639,9 +1639,7 @@ pub struct App {
     startup_loading_complete_requested: bool,
     last_global_hotkey_at: Option<Instant>,
     last_content_click: Option<(Instant, Page, usize)>,
-    main_cava: Option<CavaRunner>,
-    main_cava_bars: [f32; 20],
-    main_cava_last_tick: Instant,
+    pub cava: Option<MiniCavaState>,
     cover_cache_dir: PathBuf,
     cover_fetch_tx: UnboundedSender<CoverFetchRequest>,
     cover_fetch_rx: Receiver<CoverFetchResult>,
@@ -1749,9 +1747,7 @@ impl App {
             startup_loading_complete_requested: false,
             last_global_hotkey_at: None,
             last_content_click: None,
-            main_cava: None,
-            main_cava_bars: [0.0; 20],
-            main_cava_last_tick: Instant::now(),
+            cava: None,
             cover_cache_dir,
             cover_fetch_tx,
             cover_fetch_rx,
@@ -1841,14 +1837,6 @@ impl App {
             return true;
         }
 
-        if self.playback_state == PlaybackRuntimeState::Playing {
-            return true;
-        }
-
-        if self.playback_state == PlaybackRuntimeState::Paused && self.main_has_spectrum_tail() {
-            return true;
-        }
-
         if matches!(self.overlay, Some(Overlay::SearchBox)) || self.search_box_anim_height > 0 {
             return true;
         }
@@ -1859,28 +1847,6 @@ impl App {
         }
 
         false
-    }
-
-    pub fn main_active_fps(&self) -> u32 {
-        let base = self.config.ui_fps.clamp(10, 60);
-        if self.playback_state == PlaybackRuntimeState::Playing {
-            return self.config.spectrum_hz.clamp(base, 60);
-        }
-
-        if self.playback_state == PlaybackRuntimeState::Paused && self.main_has_spectrum_tail() {
-            return self.config.spectrum_hz.clamp(base, 60);
-        }
-
-        base
-    }
-
-    pub fn main_idle_fps(&self) -> u32 {
-        self.config.ui_fps.clamp(4, 12)
-    }
-
-    fn main_has_spectrum_tail(&self) -> bool {
-        const TAIL_EPS: f32 = 0.003;
-        self.main_cava_bars.iter().any(|&v| v > TAIL_EPS)
     }
 
     pub async fn handle_key(&mut self, key: KeyEvent) {
@@ -2139,11 +2105,16 @@ impl App {
             .unwrap_or_default()
     }
 
-    pub fn main_spectrum_braille(&self) -> String {
+    pub fn cava_bars(&self) -> [f32; 20] {
+        self.cava.as_ref().map(|x| x.bars()).unwrap_or_default()
+    }
+
+    pub fn main_spectrum_braille(&mut self) -> String {
         let mut out = String::with_capacity(10);
         for i in 0..10 {
-            let left = self.main_cava_bars[i * 2].clamp(0.0, 1.0);
-            let right = self.main_cava_bars[i * 2 + 1].clamp(0.0, 1.0);
+            let bar = self.cava_bars();
+            let left = bar[i * 2].clamp(0.0, 1.0);
+            let right = bar[i * 2 + 1].clamp(0.0, 1.0);
             let left_h = (left * 4.0).round() as u8;
             let right_h = (right * 4.0).round() as u8;
             out.push(braille_from_two_bars(left_h.min(4), right_h.min(4)));
@@ -2153,28 +2124,26 @@ impl App {
 
     fn ensure_main_cava(&mut self) {
         if !crate::tmplayer::audio::cava::is_available() {
-            self.main_cava = None;
-            self.main_cava_bars.fill(0.0);
+            self.cava = None;
             return;
         }
 
-        if self.main_cava.is_some() {
+        if self.cava.is_some() {
             return;
         }
 
         let cfg = CavaConfig {
-            framerate_hz: self.config.spectrum_hz.max(20),
-            bars: self.main_cava_bars.len(),
+            framerate_hz: self.config.spectrum_hz.clamp(1, 30),
+            bars: 20,
             channels: CavaChannels::Mono,
             reverse: false,
         };
 
-        self.main_cava = CavaRunner::start(cfg).ok();
+        self.cava = MiniCavaState::try_new(cfg).ok();
     }
 
     pub fn suspend_main_cava_for_fullscreen(&mut self) {
-        self.main_cava = None;
-        self.main_cava_bars.fill(0.0);
+        self.cava = None;
     }
 
     pub fn resume_main_cava_after_fullscreen(&mut self) {
@@ -2182,38 +2151,7 @@ impl App {
     }
 
     fn tick_main_cava(&mut self) {
-        if !crate::tmplayer::audio::cava::is_available() {
-            self.main_cava = None;
-            self.main_cava_bars.fill(0.0);
-            return;
-        }
-
-        let now = Instant::now();
-        let interval = Duration::from_millis((1000 / self.config.spectrum_hz.max(1)) as u64);
-        if now.duration_since(self.main_cava_last_tick) < interval {
-            return;
-        }
-        self.main_cava_last_tick = now;
-
-        if self.main_cava.is_none() {
-            self.ensure_main_cava();
-        }
-
-        let Some(cava) = self.main_cava.as_ref() else {
-            self.main_cava_bars.fill(0.0);
-            return;
-        };
-
-        let bars = cava.latest_bars();
-        self.main_cava_bars.fill(0.0);
-        for (idx, value) in bars
-            .iter()
-            .copied()
-            .take(self.main_cava_bars.len())
-            .enumerate()
-        {
-            self.main_cava_bars[idx] = value.clamp(0.0, 1.0);
-        }
+        self.ensure_main_cava();
     }
 
     fn seek_to_ratio(&mut self, ratio: f32) {

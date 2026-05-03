@@ -1,3 +1,4 @@
+use crate::state;
 use anyhow::{Context, Result};
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -6,13 +7,42 @@ use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::sync::watch::Receiver;
+use tokio::time::interval;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::IntervalStream;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CavaChannels {
     Stereo,
     Mono,
+}
+
+pub struct MiniCavaState {
+    pub event: Receiver<[f32; 20]>,
+}
+
+impl MiniCavaState {
+    pub fn try_new(cfg: CavaConfig) -> Result<Self> {
+        let freq = cfg.framerate_hz;
+        let runner = CavaRunner::start(cfg)?;
+        let interval = interval(Duration::from_millis((1000 / freq).into()));
+        let stream = IntervalStream::new(interval).map(move |_| {
+            let vec = runner.latest_bars();
+            let mut arr = [0.0; 20];
+            let len = vec.len().min(20);
+            arr[..len].copy_from_slice(&vec[..len]);
+            arr
+        });
+        let event = state(stream);
+        Ok(Self { event })
+    }
+
+    pub fn bars(&self) -> [f32; 20] {
+        *self.event.borrow()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

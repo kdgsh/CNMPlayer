@@ -503,7 +503,7 @@ impl Default for Config {
         Self {
             theme: "frappe".to_string(),
             ui_fps: 30,
-            spectrum_hz: 60,
+            spectrum_hz: 30,
             mpris_poll_ms: 100,
             visualize: default_visualize(),
             eq_bands_db: default_eq_bands_db(),
@@ -572,7 +572,7 @@ impl Config {
             cfg.ui_fps = 30;
         }
         if cfg.spectrum_hz == 0 {
-            cfg.spectrum_hz = 60;
+            cfg.spectrum_hz = 30;
         }
 
         let mut forced_visualize_off = false;

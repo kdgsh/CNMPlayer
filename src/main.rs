@@ -4,7 +4,7 @@ mod render;
 mod tmplayer;
 mod ui;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use app::App;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream};
 use crossterm::execute;
@@ -13,7 +13,8 @@ use crossterm::terminal::{
 };
 use data::config::Config;
 use data::theme_loader::ThemeLoader;
-use futures::{Stream, StreamExt};
+use futures::future::pending;
+use futures::{FutureExt, Stream, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
@@ -22,9 +23,10 @@ use ratatui::widgets::{Block, Borders, Clear};
 use rustls::crypto::ring;
 use std::io::{self, Stdout};
 use std::pin::pin;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::watch::{self, Receiver as WatchReceiver};
 use tokio::time::sleep;
 
 struct AppFullscreenBridge<'a> {
@@ -201,7 +203,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-pub fn hot<T, S>(source: S) -> Receiver<T>
+pub fn shared<T, S>(source: S) -> Receiver<T>
 where
     T: Send + 'static,
     S: Stream<Item = T> + Send + 'static,
@@ -215,6 +217,24 @@ where
             }
         }
     });
+    rx
+}
+
+pub fn state<T, S>(mut source: S) -> WatchReceiver<T>
+where
+    T: Default + Send + Sync + 'static,
+    S: Stream<Item = T> + Send + Unpin + 'static,
+{
+    let (tx, rx) = watch::channel(T::default());
+
+    tokio::spawn(async move {
+        while let Some(item) = source.next().await {
+            if tx.send(item).is_err() {
+                break;
+            }
+        }
+    });
+
     rx
 }
 
@@ -233,15 +253,11 @@ fn input_event() -> Receiver<impl AsyncFn(&mut App)> {
         };
         Some(d)
     });
-    hot(event)
+    shared(event)
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
     let mut input = input_event();
-    let mut needs_redraw = true;
-    let mut last_draw_at = Instant::now()
-        .checked_sub(Duration::from_millis(250))
-        .unwrap_or_else(Instant::now);
 
     loop {
         app.tick().await;
@@ -249,47 +265,34 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         if app.consume_fullscreen_launch_request() {
             let bootstrap = app.build_fullscreen_bootstrap().await;
             launch_tmplayer_fullscreen(terminal, app, bootstrap).await?;
-            needs_redraw = true;
             continue;
         }
 
-        let animating = app.main_should_continuous_redraw();
-        let target_fps = if animating {
-            app.main_active_fps()
-        } else {
-            app.main_idle_fps()
-        };
-        let frame_dt = Duration::from_millis((1000_u64 / u64::from(target_fps.max(1))).max(8));
-
-        if needs_redraw || last_draw_at.elapsed() >= frame_dt {
+        let mut redraw = |app: &mut App| {
+            if app.should_quit {
+                app.persist_playback_memory_on_exit();
+                bail!("App Quited");
+            }
             terminal.draw(|frame| {
                 ui::draw(frame, app);
                 ui::draw_settings(frame, app);
             })?;
-            last_draw_at = Instant::now();
-            needs_redraw = false;
-            if app.should_quit {
-                app.persist_playback_memory_on_exit();
-                break;
-            }
-        }
-
-        let wait_timeout = if animating {
-            frame_dt.saturating_sub(last_draw_at.elapsed())
-        } else {
-            Duration::from_millis(160)
+            Ok(())
         };
 
         select! {
             Some(f) = input.recv() => {
                 f(app).await;
-                needs_redraw = true;
+                redraw(app)?;
             }
-            _ = sleep(wait_timeout) => {}
+            _ = app.cava.as_mut().map_or_else(
+                || pending().left_future(),
+                |x| x.event.changed().right_future(),
+            ) => {
+                redraw(app)?;
+            }
         }
     }
-
-    Ok(())
 }
 
 async fn launch_tmplayer_fullscreen(
