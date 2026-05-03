@@ -299,6 +299,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             ) => {
                 redraw(app)?;
             }
+            _ = sleep(Duration::from_secs(1)) => {
+                redraw(app)?;
+            }
         }
     }
 }
