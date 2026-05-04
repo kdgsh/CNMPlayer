@@ -27,8 +27,7 @@ use std::io::{self, Stdout};
 use std::pin::pin;
 use std::time::Duration;
 use tokio::select;
-use tokio::sync::mpsc::{self, Receiver};
-use tokio::sync::watch::{self, Receiver as WatchReceiver};
+use tokio::sync::watch::{self, Receiver as WReceiver};
 use tokio::time::sleep;
 
 struct AppFullscreenBridge<'a> {
@@ -205,24 +204,7 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-pub fn shared<T, S>(source: S) -> Receiver<T>
-where
-    T: Send + 'static,
-    S: Stream<Item = T> + Send + 'static,
-{
-    let (tx, rx) = mpsc::channel(4);
-    tokio::spawn(async move {
-        let mut stream = pin!(source);
-        while let Some(item) = stream.next().await {
-            if tx.send(item).await.is_err() {
-                break;
-            }
-        }
-    });
-    rx
-}
-
-pub fn state<T, S>(mut source: S) -> WatchReceiver<T>
+pub fn state<T, S>(mut source: S) -> WReceiver<T>
 where
     T: Default + Send + Sync + 'static,
     S: Stream<Item = T> + Send + Unpin + 'static,
@@ -240,8 +222,8 @@ where
     rx
 }
 
-fn input_event() -> Receiver<impl AsyncFn(&mut App)> {
-    let event = EventStream::new().filter_map(async |x| {
+fn input_event() -> impl Stream<Item = impl AsyncFn(&mut App)> {
+    EventStream::new().filter_map(async |x| {
         let x = x.ok()?;
         match x {
             Event::Key(_) | Event::Resize(_, _) => (),
@@ -258,14 +240,15 @@ fn input_event() -> Receiver<impl AsyncFn(&mut App)> {
                 Event::Mouse(mouse) => app.handle_mouse(mouse).await,
                 _ => {}
             };
+            app.sync_on_change();
         };
         Some(d)
-    });
-    shared(event)
+    })
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
-    let mut input = input_event();
+    let input = input_event();
+    let mut input = pin!(input);
 
     loop {
         app.tick().await;
@@ -289,7 +272,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         };
 
         select! {
-            Some(f) = input.recv() => {
+            Some(f) = input.next() => {
                 f(app).await;
                 redraw(app)?;
             }

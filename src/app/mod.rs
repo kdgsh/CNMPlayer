@@ -1809,7 +1809,6 @@ impl App {
         self.tick_lyric_fetch();
         self.apply_mpris_control_events().await;
         self.sync_mpris_exposure();
-        self.sync_cava();
         self.tick_search_box_animation();
         self.tick_startup_loading();
 
@@ -2101,6 +2100,10 @@ impl App {
             out.push(braille_from_two_bars(left_h.min(4), right_h.min(4)));
         }
         out
+    }
+
+    pub fn sync_on_change(&mut self) {
+        self.sync_cava();
     }
 
     fn sync_cava(&mut self) {
