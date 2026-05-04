@@ -4,7 +4,7 @@ mod render;
 mod tmplayer;
 mod ui;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use app::App;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, MouseEventKind,
@@ -259,32 +259,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             continue;
         }
 
-        let mut redraw = |app: &mut App| {
-            if app.should_quit {
-                app.persist_playback_memory_on_exit();
-                bail!("App Quited");
-            }
-            terminal.draw(|frame| {
-                ui::draw(frame, app);
-                ui::draw_settings(frame, app);
-            })?;
-            Ok(())
-        };
+        if app.should_quit {
+            app.persist_playback_memory_on_exit();
+            break Ok(());
+        }
+        terminal.draw(|frame| {
+            ui::draw(frame, app);
+            ui::draw_settings(frame, app);
+        })?;
 
         select! {
-            Some(f) = input.next() => {
-                f(app).await;
-                redraw(app)?;
-            }
-            _ = app.cava.as_mut().map_or_else(
-                || pending().left_future(),
-                |x| x.event.changed().right_future(),
-            ) => {
-                redraw(app)?;
-            }
-            _ = sleep(Duration::from_secs(1)) => {
-                redraw(app)?;
-            }
+            Some(f) = input.next() => f(app).await,
+            _ = app.cava.as_mut().map_or_else(|| pending().left_future(),|x| x.event.changed().right_future()) => (),
+            _ = sleep(Duration::from_secs(1)) => ()
         }
     }
 }
