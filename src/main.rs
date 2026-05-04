@@ -247,8 +247,7 @@ fn input_event() -> impl Stream<Item = impl AsyncFn(&mut App)> {
 }
 
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
-    let input = input_event();
-    let mut input = pin!(input);
+    let mut input = pin!(input_event());
 
     loop {
         app.tick().await;
@@ -269,7 +268,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
         })?;
 
         select! {
-            Some(f) = input.next() => f(app).await,
+            biased; Some(f) = input.next() => f(app).await,
             _ = app.cava.as_mut().map_or_else(|| pending().left_future(),|x| x.event.changed().right_future()) => (),
             _ = sleep(Duration::from_secs(1)) => ()
         }
