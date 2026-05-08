@@ -7,6 +7,7 @@ use directories::BaseDirs;
 use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use see::sync::Receiver;
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
@@ -15,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, SystemTime};
-use tokio::sync::watch::Receiver;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioPlayerState {
@@ -84,13 +84,14 @@ impl AudioPlayer {
         Ok(())
     }
 
-    pub fn play_streaming(
+    pub async fn play_streaming(
         &mut self,
         reader: StreamingReader,
         progress_rx: Receiver<(u64, u64)>,
     ) -> Result<()> {
         let builder = DecoderBuilder::new().with_byte_len(reader.total());
-        let decoder = builder.with_data(BufReader::new(reader)).build()?;
+        let f = move || builder.with_data(BufReader::new(reader)).build();
+        let decoder = compio::runtime::spawn_blocking(f).await.unwrap()?;
         let total_duration = decoder.total_duration();
         let source = EqSource::new(decoder, self.eq_params.clone());
 

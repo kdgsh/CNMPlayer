@@ -4,8 +4,11 @@ mod render;
 mod tmplayer;
 mod ui;
 
+use crate::tmplayer::audio::cava::MiniCavaState;
 use anyhow::Result;
 use app::App;
+use compio::runtime::spawn;
+use compio::time::sleep;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, EventStream, MouseEventKind,
 };
@@ -15,20 +18,17 @@ use crossterm::terminal::{
 };
 use data::config::Config;
 use data::theme_loader::ThemeLoader;
-use futures::future::pending;
-use futures::{FutureExt, Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt, select_biased};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Clear};
-use rustls::crypto::ring;
+use see::unsync::Receiver;
+use std::future::pending;
 use std::io::{self, Stdout};
 use std::pin::pin;
 use std::time::Duration;
-use tokio::select;
-use tokio::sync::watch::{self, Receiver as WReceiver};
-use tokio::time::sleep;
 
 struct AppFullscreenBridge<'a> {
     app: &'a mut App,
@@ -172,9 +172,8 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
     }
 }
 
-#[tokio::main]
+#[compio::main]
 async fn main() -> Result<()> {
-    ring::default_provider().install_default().unwrap();
     let config = Config::load_or_default()?;
     let theme = ThemeLoader::load(&config.theme).unwrap_or_default();
     let mut app = App::new(config, theme).await?;
@@ -204,14 +203,18 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
     Ok(())
 }
 
-pub fn state<T, S>(mut source: S) -> WReceiver<T>
-where
-    T: Default + Send + Sync + 'static,
-    S: Stream<Item = T> + Send + Unpin + 'static,
-{
-    let (tx, rx) = watch::channel(T::default());
+pub fn launch<F: Future + 'static>(future: F) {
+    spawn(future).detach();
+}
 
-    tokio::spawn(async move {
+pub fn state<T, S>(source: S) -> Receiver<T>
+where
+    T: Default + 'static,
+    S: Stream<Item = T> + 'static,
+{
+    let (tx, rx) = see::unsync::channel(T::default());
+    launch(async move {
+        let mut source = pin!(source);
         while let Some(item) = source.next().await {
             if tx.send(item).is_err() {
                 break;
@@ -267,11 +270,21 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut Ap
             ui::draw_settings(frame, app);
         })?;
 
-        select! {
-            biased; Some(f) = input.next() => f(app).await,
-            _ = app.cava.as_mut().map_or_else(|| pending().left_future(),|x| x.event.changed().right_future()) => (),
-            _ = sleep(Duration::from_secs(1)) => ()
+        select_biased! {
+            f = input.next().fuse() => if let Some(f) = f { f(app).await },
+            _ = wait_cava_event(&mut app.cava).fuse() => (),
+            _ = sleep(Duration::from_secs(1)).fuse() => (),
         }
+    }
+}
+
+async fn wait_cava_event(cava: &mut Option<MiniCavaState>) {
+    match cava {
+        Some(cava) => {
+            let _ = cava.event.changed().await;
+            cava.event.mark_unchanged();
+        }
+        None => pending().await,
     }
 }
 
