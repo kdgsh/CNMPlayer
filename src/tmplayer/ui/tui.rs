@@ -222,29 +222,6 @@ impl Tui {
                 }
             }
 
-            // folder input overlay (simple one-line prompt)
-            if app.overlay == Overlay::FolderInput {
-                let prompt = format!(
-                    "{}: {}",
-                    lang_text(app, "文件夹", "Folder"),
-                    app.folder_input.buf
-                );
-                let area = Rect {
-                    x: size.x,
-                    y: size.y + size.height.saturating_sub(2),
-                    width: size.width,
-                    height: 1,
-                };
-                f.render_widget(
-                    ratatui::widgets::Paragraph::new(prompt).style(
-                        Style::default()
-                            .fg(app.theme.color_text())
-                            .bg(app.theme.color_surface()),
-                    ),
-                    area,
-                );
-            }
-
             // toast
             if let Some((msg, _)) = &app.toast {
                 let area = Rect {

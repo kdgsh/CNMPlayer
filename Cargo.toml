@@ -19,7 +19,7 @@ futures = "0.3"
 ncm-api = { path = "./ncm-api-rs" }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-cyper = { git = "https://github.com/compio-rs/cyper", default-features = false, features = ["json", "cookies", "stream", "rustls"] }
+cyper = { git = "https://github.com/compio-rs/cyper", default-features = false, features = ["json", "cookies", "stream", "native-tls"] }
 compio = { git = "https://github.com/compio-rs/compio", features = ["macros"] }
 http = "1.4"
 see = { git = "https://github.com/compio-rs/see" }
@@ -28,7 +28,6 @@ rodio = { git = "https://github.com/RustAudio/rodio", default-features = false, 
 cpal = { git = "https://github.com/RustAudio/cpal", features = ["pipewire"] }
 lofty = "0.24"
 base64 = "0.22"
-ureq = { version = "3", features = ["json"] }
 chromaprint = "0.2"
 
 # 标准 较高 极高 mp3
