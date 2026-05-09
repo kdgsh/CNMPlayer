@@ -76,7 +76,7 @@ Install the build dependencies provided by your distribution. On Debian/Ubuntu, 
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-dev libchromaprint-dev
+sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-dev
 ```
 
 ### Spectrum Visualization (`cava`)

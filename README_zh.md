@@ -76,7 +76,7 @@ CNMPlayer（Customized Netease Music Player）是一个运行在终端中的网�
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-dev libchromaprint-dev
+sudo apt install -y build-essential cmake pkg-config libasound2-dev libdbus-1-dev
 ```
 
 ### 频谱可视化（`cava`）
