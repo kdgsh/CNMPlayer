@@ -4,12 +4,14 @@
 
 use crate::app::api::error_for_status;
 use anyhow::{Context, Result, bail};
+use compio::fs::rename;
+use compio::io::{AsyncWrite, AsyncWriteExt};
 use compio::runtime::{JoinHandle, spawn};
 use cyper::Response;
 use futures::StreamExt;
 use see::sync::Sender;
-use std::fs::{File, OpenOptions};
-use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{Cursor, Error, ErrorKind, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -78,13 +80,13 @@ impl StreamingReader {
             std::fs::create_dir_all(parent).context("create streaming cache dir")?;
         }
         let tmp_path = cache_path.with_extension("part");
+
+        use std::fs::OpenOptions;
         let file = OpenOptions::new()
             .create(true)
-            .write(true)
             .read(true)
             .truncate(true)
-            .open(&tmp_path)
-            .context("create streaming temp file")?;
+            .open(&tmp_path)?;
 
         let mut request = http.get(url)?;
         if let Some(cookie) = cookie {
@@ -258,37 +260,33 @@ async fn download_streaming(
     let response = error_for_status(response)?;
 
     // Open file with append mode
-    let mut file = {
+    let file = {
         let _guard = state.file_lock.lock().unwrap();
-        OpenOptions::new()
-            .write(true)
-            .append(true)
-            .open(&tmp_path)
-            .context("open streaming temp file for write")?
+        use compio::fs::OpenOptions;
+        OpenOptions::new().write(true).open(&tmp_path).await?
     };
+    let mut cursor = Cursor::new(&file);
 
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
 
     loop {
         let chunk = match stream.next().await {
-            Some(Ok(chunk)) => chunk,
-            None => break,
             Some(Err(e)) => bail!(e),
+            Some(Ok(chunk)) if !chunk.is_empty() => chunk,
+            _ => break,
         };
 
-        if chunk.is_empty() {
-            break;
-        }
+        let len = chunk.len();
 
         // Must hold lock when writing to ensure atomic append and proper read visibility
         {
             let _guard = state.file_lock.lock().unwrap();
-            file.write_all(&chunk).context("write streaming chunk")?;
-            file.flush().context("flush streaming chunk")?;
+            cursor.write_all(chunk).await.0?;
+            cursor.flush().await?
         }
 
-        downloaded = downloaded.wrapping_add(chunk.len() as u64);
+        downloaded = downloaded.wrapping_add(len as u64);
         state.downloaded.store(downloaded, Ordering::SeqCst);
         let _ = progress_tx.send((downloaded, state.total));
         state.condvar.notify_all();
@@ -297,8 +295,8 @@ async fn download_streaming(
     // Rename to final cache path (do this with lock held to ensure no readers in middle of read)
     {
         let _guard = state.file_lock.lock().unwrap();
-        drop(file);
-        std::fs::rename(&tmp_path, cache_path).context("rename streaming temp file")?;
+        file.close().await?;
+        rename(&tmp_path, cache_path).await?;
     }
 
     state.done.store(1, Ordering::SeqCst);

@@ -996,7 +996,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.18.0"
-source = "git+https://github.com/RustAudio/cpal#bce156d8a3ea5999f763bb831342fb2f6ed23db1"
+source = "git+https://github.com/RustAudio/cpal#33e05ec94b5670c6f02080acf3fd6d8ac21e37cd"
 dependencies = [
  "alsa",
  "audio_thread_priority",
@@ -1860,9 +1860,9 @@ checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
 name = "hybrid-array"
-version = "0.4.11"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08d46837a0ed51fe95bd3b05de33cd64a1ee88fc797477ca48446872504507c5"
+checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
 dependencies = [
  "typenum",
 ]
