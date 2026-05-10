@@ -1673,7 +1673,7 @@ impl App {
             header::REFERER,
             header::HeaderValue::from_static("https://music.163.com/"),
         );
-        let http_client = Client::builder().default_headers(headers).build();
+        let http_client = Client::builder().default_headers(headers).build()?;
         let cache_root = resolve_cache_root(&config);
         let cover_cache_dir = cache_root.join(COVER_CACHE_SUBDIR);
         let mpris_bridge = MprisBridge::new(&cache_root, &config.cache);

@@ -20,7 +20,7 @@ impl ApiClient {
             duration, encoded_fp
         );
 
-        let client = cyper::Client::new();
+        let client = cyper::Client::new()?;
         let res = client.get(&url)?.send().await?;
         let body: serde_json::Value = res.json().await?;
 
