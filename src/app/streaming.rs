@@ -85,6 +85,7 @@ impl StreamingReader {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
+            .write(true)
             .truncate(true)
             .open(&tmp_path)?;
 
@@ -286,7 +287,7 @@ async fn download_streaming(
             cursor.flush().await?
         }
 
-        downloaded = downloaded.wrapping_add(len as u64);
+        downloaded += len as u64;
         state.downloaded.store(downloaded, Ordering::SeqCst);
         let _ = progress_tx.send((downloaded, state.total));
         state.condvar.notify_all();
