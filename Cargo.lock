@@ -626,7 +626,6 @@ dependencies = [
  "futures",
  "http",
  "image",
- "libc",
  "log",
  "mpris-server",
  "ncm-api",
@@ -675,7 +674,7 @@ dependencies = [
 [[package]]
 name = "compio"
 version = "0.19.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -692,7 +691,7 @@ dependencies = [
 [[package]]
 name = "compio-buf"
 version = "0.8.2-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "arrayvec",
  "bytes",
@@ -702,7 +701,7 @@ dependencies = [
 [[package]]
 name = "compio-driver"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if",
@@ -731,7 +730,7 @@ dependencies = [
 [[package]]
 name = "compio-executor"
 version = "0.1.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "cfg-if",
  "compio-log",
@@ -744,7 +743,7 @@ dependencies = [
 [[package]]
 name = "compio-fs"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "cfg-if",
  "cfg_aliases",
@@ -763,7 +762,7 @@ dependencies = [
 [[package]]
 name = "compio-io"
 version = "0.10.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -778,7 +777,7 @@ dependencies = [
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "tracing",
 ]
@@ -786,7 +785,7 @@ dependencies = [
 [[package]]
 name = "compio-macros"
 version = "0.1.2"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -797,7 +796,7 @@ dependencies = [
 [[package]]
 name = "compio-net"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -818,7 +817,7 @@ dependencies = [
 [[package]]
 name = "compio-runtime"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -849,7 +848,7 @@ dependencies = [
 [[package]]
 name = "compio-tls"
 version = "0.10.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "compio-buf",
  "compio-io",
@@ -861,7 +860,7 @@ dependencies = [
 [[package]]
 name = "compio-ws"
 version = "0.4.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#7690f8e6e8dfa33ab2ff157b0cdd1a52c1947659"
+source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
 dependencies = [
  "async-tungstenite",
  "compio-buf",
@@ -996,7 +995,7 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.18.0"
-source = "git+https://github.com/RustAudio/cpal#33e05ec94b5670c6f02080acf3fd6d8ac21e37cd"
+source = "git+https://github.com/RustAudio/cpal#2c7acf8ed42b6523f319145a8be256c446df5939"
 dependencies = [
  "alsa",
  "audio_thread_priority",
@@ -1175,7 +1174,7 @@ dependencies = [
 [[package]]
 name = "cyper"
 version = "0.9.0-rc.2"
-source = "git+https://github.com/compio-rs/cyper#68758911cbadb4a70f647781b38e0d2a920f47ff"
+source = "git+https://github.com/compio-rs/cyper#070bbf8e8d3d1ca9389433f0410cb3dad696704a"
 dependencies = [
  "async-stream",
  "base64",
@@ -1204,7 +1203,7 @@ dependencies = [
 [[package]]
 name = "cyper-core"
 version = "0.9.0-rc.2"
-source = "git+https://github.com/compio-rs/cyper#68758911cbadb4a70f647781b38e0d2a920f47ff"
+source = "git+https://github.com/compio-rs/cyper#070bbf8e8d3d1ca9389433f0410cb3dad696704a"
 dependencies = [
  "compio",
  "futures-util",
@@ -3367,9 +3366,9 @@ dependencies = [
 
 [[package]]
 name = "ratatui-image"
-version = "10.0.8"
+version = "11.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a10dbbf11c4f3cf810ec227010d1ba0a4ce515f0d3b319920e30dd4cbc99d211"
+checksum = "535e2a5f434ea3308977e6664b4386c3d663951a222e338cb7480d8742fe7773"
 dependencies = [
  "base64-simd",
  "icy_sixel",
@@ -3378,6 +3377,7 @@ dependencies = [
  "rand 0.8.6",
  "ratatui",
  "rustix 0.38.44",
+ "self_cell",
  "thiserror 1.0.69",
  "windows 0.58.0",
 ]
@@ -3499,7 +3499,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rodio"
 version = "0.22.2"
-source = "git+https://github.com/RustAudio/rodio#1f927962ab9018ec391972a3a3690c8ae1970218"
+source = "git+https://github.com/RustAudio/rodio#0557a30a655b42016ddd961d0f69c5566f6e3f1e"
 dependencies = [
  "cpal",
  "dasp_sample",
@@ -3653,6 +3653,12 @@ dependencies = [
  "scopeguard",
  "thiserror 2.0.18",
 ]
+
+[[package]]
+name = "self_cell"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b12e76d157a900eb52e81bc6e9f3069344290341720e9178cde2407113ac8d89"
 
 [[package]]
 name = "semver"
