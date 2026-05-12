@@ -136,8 +136,6 @@ pub async fn run_fullscreen(
     bootstrap: FullscreenBootstrap,
     host_bridge: Option<&mut impl HostPlaybackBridge>,
 ) -> Result<FullscreenExit> {
-    let _ = env_logger::builder().is_test(false).try_init();
-
     let config = tm_config_from_host(host_config);
     let theme = data::theme_loader::ThemeLoader::load(&host_config.theme)?;
 

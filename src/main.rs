@@ -7,6 +7,7 @@ mod ui;
 use crate::tmplayer::audio::cava::MiniCavaState;
 use anyhow::Result;
 use app::App;
+use compio::fs::{create_dir_all, remove_file};
 use compio::runtime::spawn;
 use compio::time::sleep;
 use crossterm::event::{
@@ -18,6 +19,8 @@ use crossterm::terminal::{
 };
 use data::config::Config;
 use data::theme_loader::ThemeLoader;
+use directories::BaseDirs;
+use ftail::Ftail;
 use futures::{FutureExt, Stream, StreamExt, select_biased};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -28,6 +31,7 @@ use see::unsync::Receiver;
 use std::future::pending;
 use std::io::{self, Stdout};
 use std::pin::pin;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 struct AppFullscreenBridge<'a> {
@@ -172,8 +176,20 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
     }
 }
 
+static BASE_DIR: LazyLock<BaseDirs> = LazyLock::new(|| BaseDirs::new().unwrap());
+
+async fn init_logger() -> Result<()> {
+    let cache_dir = BASE_DIR.cache_dir().join("cnmplayer");
+    create_dir_all(&cache_dir).await?;
+    let log_file = cache_dir.join("Player.log");
+    let _ = remove_file(&log_file).await;
+    let ftail = Ftail::new().single_file_env_level(&log_file, false);
+    Ok(ftail.init()?)
+}
+
 #[compio::main]
 async fn main() -> Result<()> {
+    init_logger().await?;
     let config = Config::load_or_default()?;
     let theme = ThemeLoader::load(&config.theme).unwrap_or_default();
     let mut app = App::new(config, theme).await?;
