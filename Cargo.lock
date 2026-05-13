@@ -624,7 +624,7 @@ dependencies = [
 [[package]]
 name = "compio"
 version = "0.19.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -641,7 +641,7 @@ dependencies = [
 [[package]]
 name = "compio-buf"
 version = "0.8.2-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "arrayvec",
  "bytes",
@@ -651,7 +651,7 @@ dependencies = [
 [[package]]
 name = "compio-driver"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if",
@@ -680,7 +680,7 @@ dependencies = [
 [[package]]
 name = "compio-executor"
 version = "0.1.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "cfg-if",
  "compio-log",
@@ -693,7 +693,7 @@ dependencies = [
 [[package]]
 name = "compio-fs"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "cfg-if",
  "cfg_aliases",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "compio-io"
 version = "0.10.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -727,7 +727,7 @@ dependencies = [
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "tracing",
 ]
@@ -735,7 +735,7 @@ dependencies = [
 [[package]]
 name = "compio-macros"
 version = "0.1.2"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -746,7 +746,7 @@ dependencies = [
 [[package]]
 name = "compio-net"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -767,7 +767,7 @@ dependencies = [
 [[package]]
 name = "compio-runtime"
 version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "cfg-if",
  "compio-buf",
@@ -798,7 +798,7 @@ dependencies = [
 [[package]]
 name = "compio-tls"
 version = "0.10.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "compio-buf",
  "compio-io",
@@ -810,7 +810,7 @@ dependencies = [
 [[package]]
 name = "compio-ws"
 version = "0.4.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#b06ff34caaa24c516821fe16da50191834524660"
+source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
 dependencies = [
  "async-tungstenite",
  "compio-buf",
@@ -1124,7 +1124,7 @@ dependencies = [
 [[package]]
 name = "cyper"
 version = "0.9.0-rc.2"
-source = "git+https://github.com/compio-rs/cyper#070bbf8e8d3d1ca9389433f0410cb3dad696704a"
+source = "git+https://github.com/compio-rs/cyper#60b6f90f66c5b9fe20b4f7baf77192609a72abb0"
 dependencies = [
  "async-stream",
  "base64",
@@ -1153,7 +1153,7 @@ dependencies = [
 [[package]]
 name = "cyper-core"
 version = "0.9.0-rc.2"
-source = "git+https://github.com/compio-rs/cyper#070bbf8e8d3d1ca9389433f0410cb3dad696704a"
+source = "git+https://github.com/compio-rs/cyper#60b6f90f66c5b9fe20b4f7baf77192609a72abb0"
 dependencies = [
  "compio",
  "futures-util",

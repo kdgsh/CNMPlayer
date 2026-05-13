@@ -30,6 +30,7 @@ use ratatui::widgets::{Block, Borders, Clear};
 use see::unsync::Receiver;
 use std::future::pending;
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -176,12 +177,30 @@ impl tmplayer::HostPlaybackBridge for AppFullscreenBridge<'_> {
     }
 }
 
-static BASE_DIR: LazyLock<BaseDirs> = LazyLock::new(|| BaseDirs::new().unwrap());
+pub struct Storage {
+    cache: PathBuf,
+    config: PathBuf,
+}
+
+fn try_get_storage() -> Option<Storage> {
+    let app = "cnmplayer";
+    let base = BaseDirs::new()?;
+    let cache = base.cache_dir().join(&app);
+    let config = base.config_dir().join(&app);
+    let storage = Storage { cache, config };
+    Some(storage)
+}
+
+fn stroage_or_abort() -> Storage {
+    let msg = "Failed to initialize workdir, abort!";
+    try_get_storage().expect(&msg)
+}
+
+pub static STORAGE: LazyLock<Storage> = LazyLock::new(|| stroage_or_abort());
 
 async fn init_logger() -> Result<()> {
-    let cache_dir = BASE_DIR.cache_dir().join("cnmplayer");
-    create_dir_all(&cache_dir).await?;
-    let log_file = cache_dir.join("Player.log");
+    create_dir_all(&STORAGE.cache).await?;
+    let log_file = STORAGE.cache.join("Player.log");
     let _ = remove_file(&log_file).await;
     let ftail = Ftail::new().single_file_env_level(&log_file, false);
     Ok(ftail.init()?)

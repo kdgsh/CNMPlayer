@@ -1,13 +1,13 @@
+use crate::STORAGE;
 use crate::app::streaming::StreamingReader;
-use crate::data::assets;
 use crate::data::config::{CacheCleanStrategy, Config};
 use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings};
 use anyhow::{Context, Result};
-use directories::BaseDirs;
 use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use see::sync::Receiver;
+use std::borrow::Cow;
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
@@ -378,7 +378,7 @@ fn sanitize_cache_key(raw: &str) -> String {
     }
 }
 
-pub(crate) fn resolve_cache_root(config: &Config) -> PathBuf {
+pub(crate) fn resolve_cache_root(config: &Config) -> Cow<'static, PathBuf> {
     if let Some(custom) = config
         .cache
         .path
@@ -386,14 +386,10 @@ pub(crate) fn resolve_cache_root(config: &Config) -> PathBuf {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return PathBuf::from(custom);
+        return Cow::Owned(PathBuf::from(custom));
     }
 
-    system_cache_root().unwrap_or_else(|| assets::resolve_asset_path(Path::new("cache")))
-}
-
-fn system_cache_root() -> Option<PathBuf> {
-    BaseDirs::new().map(|dirs| dirs.cache_dir().join("cnmplayer"))
+    Cow::Borrowed(&STORAGE.cache)
 }
 
 #[derive(Debug, Clone)]
