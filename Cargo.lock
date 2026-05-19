@@ -269,20 +269,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
-name = "audio_thread_priority"
-version = "0.35.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b1b4a0adbf971420cca66a75361a1190f34a6762d66361e5cde03dda35d1ed3"
-dependencies = [
- "cfg-if",
- "dbus",
- "libc",
- "log",
- "mach2 0.4.3",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -623,8 +609,8 @@ dependencies = [
 
 [[package]]
 name = "compio"
-version = "0.19.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.19.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "compio-buf",
  "compio-driver",
@@ -641,7 +627,7 @@ dependencies = [
 [[package]]
 name = "compio-buf"
 version = "0.8.2-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "arrayvec",
  "bytes",
@@ -650,11 +636,10 @@ dependencies = [
 
 [[package]]
 name = "compio-driver"
-version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.12.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "bitflags 2.11.1",
- "cfg-if",
  "cfg_aliases",
  "compio-buf",
  "compio-log",
@@ -679,10 +664,9 @@ dependencies = [
 
 [[package]]
 name = "compio-executor"
-version = "0.1.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.1.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
- "cfg-if",
  "compio-log",
  "compio-send-wrapper",
  "crossbeam-queue",
@@ -692,10 +676,9 @@ dependencies = [
 
 [[package]]
 name = "compio-fs"
-version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.12.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
- "cfg-if",
  "cfg_aliases",
  "compio-buf",
  "compio-driver",
@@ -711,10 +694,9 @@ dependencies = [
 
 [[package]]
 name = "compio-io"
-version = "0.10.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.10.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
- "cfg-if",
  "compio-buf",
  "futures-util",
  "libc",
@@ -727,7 +709,7 @@ dependencies = [
 [[package]]
 name = "compio-log"
 version = "0.1.0"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "tracing",
 ]
@@ -735,7 +717,7 @@ dependencies = [
 [[package]]
 name = "compio-macros"
 version = "0.1.2"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -745,10 +727,9 @@ dependencies = [
 
 [[package]]
 name = "compio-net"
-version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.12.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
- "cfg-if",
  "compio-buf",
  "compio-driver",
  "compio-io",
@@ -766,10 +747,9 @@ dependencies = [
 
 [[package]]
 name = "compio-runtime"
-version = "0.12.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.12.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
- "cfg-if",
  "compio-buf",
  "compio-driver",
  "compio-executor",
@@ -797,8 +777,8 @@ dependencies = [
 
 [[package]]
 name = "compio-tls"
-version = "0.10.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.10.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "compio-buf",
  "compio-io",
@@ -809,8 +789,8 @@ dependencies = [
 
 [[package]]
 name = "compio-ws"
-version = "0.4.0-rc.1"
-source = "git+https://github.com/compio-rs/compio#1063a02d72c7deebd48879df57359c63e6c8605a"
+version = "0.4.0-rc.2"
+source = "git+https://github.com/compio-rs/compio#1edb78cfb81993d2064cd96b4f0ddcb1f465e274"
 dependencies = [
  "async-tungstenite",
  "compio-buf",
@@ -945,17 +925,16 @@ dependencies = [
 [[package]]
 name = "cpal"
 version = "0.18.0"
-source = "git+https://github.com/RustAudio/cpal#2c7acf8ed42b6523f319145a8be256c446df5939"
+source = "git+https://github.com/RustAudio/cpal#c3afb40df0b3aa7386ac42b4aa221a7b1ba3ce40"
 dependencies = [
  "alsa",
- "audio_thread_priority",
  "block2",
  "coreaudio-rs",
  "dasp_sample",
  "jni",
  "js-sys",
  "libc",
- "mach2 0.6.0",
+ "mach2",
  "ndk",
  "ndk-context",
  "num-derive",
@@ -1123,8 +1102,8 @@ dependencies = [
 
 [[package]]
 name = "cyper"
-version = "0.9.0-rc.2"
-source = "git+https://github.com/compio-rs/cyper#60b6f90f66c5b9fe20b4f7baf77192609a72abb0"
+version = "0.9.0-rc.3"
+source = "git+https://github.com/compio-rs/cyper#4c9819e4c60c31b638b55e744e198645e50e6422"
 dependencies = [
  "async-stream",
  "base64",
@@ -1152,8 +1131,8 @@ dependencies = [
 
 [[package]]
 name = "cyper-core"
-version = "0.9.0-rc.2"
-source = "git+https://github.com/compio-rs/cyper#60b6f90f66c5b9fe20b4f7baf77192609a72abb0"
+version = "0.9.0-rc.3"
+source = "git+https://github.com/compio-rs/cyper#4c9819e4c60c31b638b55e744e198645e50e6422"
 dependencies = [
  "compio",
  "futures-util",
@@ -1206,16 +1185,6 @@ name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
-
-[[package]]
-name = "dbus"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48b5f0f36f1eebe901b0e6bee369a77ed3396334bf3f09abd46454a576f71819"
-dependencies = [
- "libc",
- "libdbus-sys",
-]
 
 [[package]]
 name = "der"
@@ -2184,15 +2153,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "libdbus-sys"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "328c4789d42200f1eeec05bd86c9c13c7f091d2ba9a6ea35acdf51f31bc0f043"
-dependencies = [
- "pkg-config",
-]
-
-[[package]]
 name = "libloading"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2322,15 +2282,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f66e8d5d03f609abc3a39e6f08e4164ebf1447a732906d39eb9b99b7919ef39"
 dependencies = [
  "hashbrown 0.16.1",
-]
-
-[[package]]
-name = "mach2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
-dependencies = [
- "libc",
 ]
 
 [[package]]
@@ -2557,9 +2508,9 @@ dependencies = [
 
 [[package]]
 name = "num-conv"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6673768db2d862beb9b39a78fdcb1a69439615d5794a1be50caa9bc92c81967"
+checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
 name = "num-derive"
@@ -2741,9 +2692,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "openssl"
-version = "0.10.79"
+version = "0.10.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf0b434746ee2832f4f0baf10137e1cabb18cbe6912c69e2e33263c45250f542"
+checksum = "a45fa2aa886c42762255da344f0a0d313e254066c46aad76f300c3d3da62d967"
 dependencies = [
  "bitflags 2.11.1",
  "cfg-if",
@@ -2772,9 +2723,9 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.115"
+version = "0.9.116"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158fe5b292746440aa6e7a7e690e55aeb72d41505e2804c23c6973ad0e9c9781"
+checksum = "f28a22dc7140cda5f096e5e7724a6962ca81a7f8bfd2979f9b18c11af56318c4"
 dependencies = [
  "cc",
  "libc",
@@ -4890,9 +4841,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
+checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
 ]
