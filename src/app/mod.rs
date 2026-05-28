@@ -1,6 +1,7 @@
 mod api;
 mod mpris_bridge;
 pub(crate) mod player;
+pub mod source;
 pub(crate) mod streaming;
 
 use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
@@ -1573,6 +1574,10 @@ async fn loop_lyric_fetch(
             api.set_cookie(cookie.to_string());
         }
 
+        if let Ok(Some(raw_lrc)) = api.fetch_lyric_raw(&req.song_id).await {
+            return parse_lrc(&raw_lrc).or_else(|| parse_plain_lyrics(&raw_lrc));
+        }
+
         let lyric = api.lyric(&req.song_id).await.ok()?;
         let lrc = lyric.body.pointer("/lrc/lyric")?.as_str()?;
         parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc))
@@ -1689,7 +1694,7 @@ impl App {
         let worker = loop_cover_fetch(cover_fetch_req_rx, cover_fetch_res_tx, http_client.clone());
         tokio::spawn(worker);
 
-        let api = ApiState::new(saved_cookie.clone(), http_client.clone())?;
+        let api = ApiState::new(saved_cookie.clone(), http_client.clone(), &config.source)?;
 
         let (lyric_fetch_tx, lyric_fetch_req_rx) = unbounded_channel();
         let (lyric_fetch_res_tx, lyric_fetch_rx) = mpsc::channel::<LyricFetchResult>();
