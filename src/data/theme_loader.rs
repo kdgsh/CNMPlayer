@@ -1,4 +1,5 @@
 use crate::data::assets;
+use crate::data::system_theme;
 use crate::ui::theme::{Theme, ThemeName, ThemePalette, detect_color_capability};
 use anyhow::Result;
 use serde::Deserialize;
@@ -24,8 +25,26 @@ impl ThemeLoader {
         let _ = assets::ensure_assets_ready();
         let name = ThemeName::from_str_or_system(name);
 
+        if name == ThemeName::System {
+            let c = system_theme::detect_system_palette();
+            return Ok(Theme {
+                name,
+                capability: detect_color_capability(),
+                palette: ThemePalette {
+                    text: c.text,
+                    subtext: c.subtext,
+                    base: c.base,
+                    surface: c.surface,
+                    buff: c.buff,
+                    accent: c.accent,
+                    accent2: c.accent2,
+                    accent3: c.accent3,
+                },
+            });
+        }
+
         let rel = match name {
-            ThemeName::System => PathBuf::from("themes/system.toml"),
+            ThemeName::System => unreachable!(),
             ThemeName::Latte => PathBuf::from("themes/catppuccin_latte.toml"),
             ThemeName::Frappe => PathBuf::from("themes/catppuccin_frappe.toml"),
             ThemeName::Macchiato => PathBuf::from("themes/catppuccin_macchiato.toml"),
