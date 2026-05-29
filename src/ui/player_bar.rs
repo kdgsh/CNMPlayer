@@ -175,11 +175,11 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         height: 1,
     });
 
-    if progress_w > 0 {
+    if progress_w >= 4 {
+        let inner = progress_w.saturating_sub(2);
         let ratio = progress_ratio(position, duration);
-        let filled = ((ratio * progress_w as f32).round() as u16).min(progress_w);
+        let filled = ((ratio * inner as f32).round() as u16).min(inner);
 
-        // Get buffer progress if streaming
         let buffer_ratio = app.buffer_progress().and_then(|(downloaded, total)| {
             if total > 0 {
                 Some((downloaded as f32 / total as f32).min(1.0))
@@ -188,59 +188,28 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
             }
         });
         let buffer_filled = buffer_ratio
-            .map(|r| ((r * progress_w as f32).round() as u16).min(progress_w))
-            .unwrap_or(0);
+            .map(|r| ((r * inner as f32).round() as u16).min(inner))
+            .unwrap_or(inner);
 
-        let mut spans = Vec::new();
-
-        if buffer_filled == 0 {
-            // No buffer data (cached/unknown progress): accent3 for played, buff for remaining
-            if filled > 0 {
-                spans.push(Span::styled(
-                    "▁".repeat(filled as usize),
-                    Style::default()
-                        .fg(app.theme.color_accent3())
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-            let remaining = progress_w.saturating_sub(filled);
-            if remaining > 0 {
-                spans.push(Span::styled(
-                    "▁".repeat(remaining as usize),
-                    Style::default().fg(app.theme.color_buff()),
-                ));
-            }
-        } else {
-            // accent3 for played, buff for buffered-not-played, surface for not-buffered
-            let accent_len = filled.min(buffer_filled);
-            if accent_len > 0 {
-                spans.push(Span::styled(
-                    "▁".repeat(accent_len as usize),
-                    Style::default()
-                        .fg(app.theme.color_accent3())
-                        .add_modifier(Modifier::BOLD),
-                ));
-            }
-
-            let buffered_not_played = buffer_filled.saturating_sub(filled);
-            if buffered_not_played > 0 {
-                spans.push(Span::styled(
-                    "▁".repeat(buffered_not_played as usize),
-                    Style::default().fg(app.theme.color_buff()),
-                ));
-            }
-
-            let unbuffered = progress_w.saturating_sub(buffer_filled);
-            if unbuffered > 0 {
-                spans.push(Span::styled(
-                    "▁".repeat(unbuffered as usize),
-                    Style::default().fg(app.theme.color_surface()),
-                ));
+        let mut bar = String::with_capacity(inner as usize);
+        for i in 0..inner {
+            if i < filled {
+                bar.push('█');
+            } else if i < buffer_filled {
+                bar.push('░');
+            } else {
+                bar.push(' ');
             }
         }
 
+        let line = Line::from(vec![
+            Span::styled("[", Style::default().fg(app.theme.color_subtext())),
+            Span::styled(bar, Style::default().fg(app.theme.color_accent())),
+            Span::styled("]", Style::default().fg(app.theme.color_subtext())),
+        ]);
+
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
+            Paragraph::new(line).alignment(Alignment::Left),
             progress_rect,
         );
 

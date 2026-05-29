@@ -2,7 +2,7 @@ use crate::data::config::GraphicsProtocol;
 use crate::tmplayer::app::state::{AppState, CoverSnapshot, Overlay, PlayMode};
 use crate::tmplayer::render::cover_cache::CoverKey;
 use crate::tmplayer::ui::borders::SOLID_BORDER;
-use crate::tmplayer::ui::components::{control_buttons, progress_bar, volume_bar};
+use crate::tmplayer::ui::components::{control_buttons, progress_bar /* volume_bar */};
 use crate::tmplayer::utils::timefmt;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -397,7 +397,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         }
 
         progress_bar::render(f, l.progress, app, pos, dur);
-        volume_bar::render(f, l.volume, app, app.player.volume);
+        // volume_bar::render(f, l.volume, app, app.player.volume);
 
         if l.volume_label.height > 0 {
             let v_label = format!("Vol {}%", (app.player.volume * 100.0).round() as i32);
