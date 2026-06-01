@@ -19,20 +19,16 @@ ncm-api = { path = "./ncm-api-rs" }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 cyper = { git = "https://github.com/compio-rs/cyper", default-features = false, features = ["json", "cookies", "stream", "native-tls", "http2"] }
-compio = { git = "https://github.com/compio-rs/compio", features = ["macros"] }
+compio = { version = "0.19.0", features = ["macros"] }
 http = "1.4"
 see = { git = "https://github.com/compio-rs/see" }
 unicode-width = "0.2"
-rodio = { git = "https://github.com/RustAudio/rodio", default-features = false, features = ["playback", "symphonia"] }
-cpal = { git = "https://github.com/RustAudio/cpal", features = ["pipewire"] }
+rodio = { git = "https://github.com/RustAudio/rodio", default-features = false, features = ["playback", "symphonia", "pipewire"] }
 
 # 标准 较高 极高 mp3
 # 无损 Hi-Res 高清环绕声 flac !VIP
 # 沉浸环绕声 杜比全景声 超清母带 flac !SVIP
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac"] }
-
-[patch.crates-io]
-compio = { git = "https://github.com/compio-rs/compio" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.10"
