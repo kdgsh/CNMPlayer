@@ -3,6 +3,7 @@ use crate::app::streaming::StreamingReader;
 use crate::data::config::{CacheCleanStrategy, Config};
 use crate::tmplayer::app::state::{EQ_BANDS, EQ_FREQS_HZ, EqSettings};
 use anyhow::{Context, Result};
+use rodio::cpal::Error;
 use rodio::decoder::DecoderBuilder;
 use rodio::source::SeekError;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
@@ -13,8 +14,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,19 +25,55 @@ pub enum AudioPlayerState {
     Stopped,
 }
 
+type MaybeError = Arc<Mutex<Option<Error>>>;
+
 pub struct AudioPlayer {
     _device_sink: MixerDeviceSink,
     player: Player,
+    error: MaybeError,
     cache_dir: PathBuf,
     total_duration: Option<Duration>,
     eq_params: Arc<EqParams>,
     progress_rx: Option<Receiver<(u64, u64)>>,
 }
 
+fn error_cb(error: MaybeError) -> impl Fn(Error) {
+    move |e| {
+        let mut error = error.lock().unwrap();
+        *error = Some(e)
+    }
+}
+
+fn build_player(error: MaybeError) -> Result<(Player, MixerDeviceSink)> {
+    let builder = DeviceSinkBuilder::from_default_device()?;
+    let sink = builder.with_error_callback(error_cb(error)).open_stream()?;
+    let player = Player::connect_new(sink.mixer());
+    Ok((player, sink))
+}
+
 impl AudioPlayer {
+    fn rebuild_on_error(&mut self) -> Result<()> {
+        let mut error = self.error.lock().unwrap();
+        if error.is_some() {
+            let (player, sink) = build_player(self.error.clone())?;
+            self._device_sink = sink;
+            self.player = player;
+            *error = None;
+        };
+        Ok(())
+    }
+
+    fn clear_and_play(&mut self, src: impl Source + Send + 'static) -> Result<()> {
+        self.rebuild_on_error()?;
+        self.player.stop();
+        self.player.append(src);
+        self.player.play();
+        Ok(())
+    }
+
     pub fn new(config: &Config) -> Result<Self> {
-        let sink = DeviceSinkBuilder::open_default_sink()?;
-        let player = Player::connect_new(sink.mixer());
+        let error = Arc::new(Mutex::new(None));
+        let (player, sink) = build_player(error.clone())?;
         let cache_root = resolve_cache_root(config);
         let cache_dir = cache_root.join("audio");
         let eq = EqSettings {
@@ -53,6 +90,7 @@ impl AudioPlayer {
         let player = Self {
             _device_sink: sink,
             player,
+            error,
             cache_dir,
             total_duration: None,
             eq_params,
@@ -74,11 +112,7 @@ impl AudioPlayer {
         let decoder = builder.with_data(BufReader::new(file)).build()?;
         let total_duration = decoder.total_duration();
         let source = EqSource::new(decoder, self.eq_params.clone());
-
-        self.player.stop();
-        self.player.append(source);
-        self.player.play();
-
+        self.clear_and_play(source)?;
         self.total_duration = total_duration;
         self.progress_rx = None;
         Ok(())
@@ -94,11 +128,7 @@ impl AudioPlayer {
         let decoder = compio::runtime::spawn_blocking(f).await.unwrap()?;
         let total_duration = decoder.total_duration();
         let source = EqSource::new(decoder, self.eq_params.clone());
-
-        self.player.stop();
-        self.player.append(source);
-        self.player.play();
-
+        self.clear_and_play(source)?;
         self.total_duration = total_duration;
         self.progress_rx = Some(progress_rx);
         Ok(())
