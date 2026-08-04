@@ -2,7 +2,7 @@ use crate::data::config::GraphicsProtocol;
 use crate::tmplayer::app::state::{AppState, CoverSnapshot, Overlay, PlayMode};
 use crate::tmplayer::render::cover_cache::CoverKey;
 use crate::tmplayer::ui::borders::SOLID_BORDER;
-use crate::tmplayer::ui::components::{control_buttons, progress_bar /* volume_bar */};
+use crate::tmplayer::ui::components::{control_buttons, progress_bar};
 use crate::tmplayer::utils::timefmt;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -19,9 +19,7 @@ pub struct InfoPanelLayout {
     pub cover: Rect,
     pub meta: Rect,
     pub progress: Rect,
-    pub volume: Rect,
     pub controls: Rect,
-    pub volume_label: Rect,
     pub time_line: Rect,
 }
 
@@ -33,21 +31,18 @@ pub fn layout(area: Rect) -> InfoPanelLayout {
     });
 
     // Required rows in priority order (must survive resize as long as possible):
-    // 1) metadata (3 lines) 2) progress 3) volume 4) controls
+    // 1) metadata (3 lines) 2) progress 3) controls
     const META_H: u16 = 3;
     const PROGRESS_H: u16 = 1;
-    const VOLUME_H: u16 = 1;
     const CONTROLS_H: u16 = 1;
-    const CORE_H: u16 = META_H + PROGRESS_H + VOLUME_H + CONTROLS_H;
+    const CORE_H: u16 = META_H + PROGRESS_H + CONTROLS_H;
 
     // Secondary rows can be dropped before affecting core rows.
     let show_time_line = inner.height >= CORE_H.saturating_add(1);
-    let show_volume_label = inner.height >= CORE_H.saturating_add(2);
     let time_h = if show_time_line { 1 } else { 0 };
-    let volume_label_h = if show_volume_label { 1 } else { 0 };
 
     // Remaining height is for cover + an optional gap below cover.
-    let used_without_cover = CORE_H.saturating_add(time_h).saturating_add(volume_label_h);
+    let used_without_cover = CORE_H.saturating_add(time_h);
     let mut cover_h = inner.height.saturating_sub(used_without_cover);
     let use_cover_gap = cover_h > 1;
     if use_cover_gap {
@@ -109,22 +104,6 @@ pub fn layout(area: Rect) -> InfoPanelLayout {
     };
     y = y.saturating_add(PROGRESS_H);
 
-    let volume = Rect {
-        x: inner.x,
-        y,
-        width: inner.width,
-        height: VOLUME_H,
-    };
-    y = y.saturating_add(VOLUME_H);
-
-    let volume_label = Rect {
-        x: inner.x,
-        y,
-        width: inner.width,
-        height: volume_label_h,
-    };
-    y = y.saturating_add(volume_label_h);
-
     let controls = Rect {
         x: inner.x,
         y,
@@ -137,9 +116,7 @@ pub fn layout(area: Rect) -> InfoPanelLayout {
         cover,
         meta,
         progress,
-        volume,
         controls,
-        volume_label,
         time_line,
     }
 }
@@ -321,10 +298,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         }
     }
 
-    // metadata + controls/progress/volume: prioritized content for small windows.
+    // metadata + controls/progress: prioritized content for small windows.
     if l.meta.height >= 1
         && l.progress.height >= 1
-        && l.volume.height >= 1
         && l.controls.height >= 1
     {
         let title = app.player.track.title.as_str();
@@ -397,17 +373,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
         }
 
         progress_bar::render(f, l.progress, app, pos, dur);
-        // volume_bar::render(f, l.volume, app, app.player.volume);
-
-        if l.volume_label.height > 0 {
-            let v_label = format!("Vol {}%", (app.player.volume * 100.0).round() as i32);
-            f.render_widget(
-                Paragraph::new(v_label)
-                    .style(sub_style)
-                    .alignment(Alignment::Left),
-                l.volume_label,
-            );
-        }
 
         control_buttons::render(f, l.controls, app);
 

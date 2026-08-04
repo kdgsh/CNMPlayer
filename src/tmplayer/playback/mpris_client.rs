@@ -12,7 +12,6 @@ mod imp {
     pub struct MprisSnapshot {
         pub track: TrackMetadata,
         pub position: Duration,
-        pub volume: f32,
         pub playback: PlaybackState,
     }
 
@@ -74,12 +73,10 @@ mod imp {
             }
 
             let position = player.get_position().unwrap_or(Duration::from_secs(0));
-            let volume = (player.get_volume().unwrap_or(0.0) as f32).clamp(0.0, 1.0);
 
             Ok(Some(MprisSnapshot {
                 track,
                 position,
-                volume,
                 playback,
             }))
         }
@@ -126,15 +123,6 @@ mod imp {
             }
             Ok(())
         }
-
-        pub fn set_volume_delta(&mut self, delta: f32) -> Result<()> {
-            if let Ok(p) = self.finder.find_active() {
-                let v = p.get_volume().unwrap_or(0.0) as f32;
-                let nv = (v + delta).clamp(0.0, 1.0);
-                let _ = p.set_volume(nv as f64);
-            }
-            Ok(())
-        }
     }
 
     fn hash_bytes(bytes: &[u8]) -> u64 {
@@ -164,7 +152,6 @@ mod imp {
     pub struct MprisSnapshot {
         pub track: TrackMetadata,
         pub position: Duration,
-        pub volume: f32,
         pub playback: PlaybackState,
     }
 
@@ -196,10 +183,6 @@ mod imp {
         }
 
         pub fn seek_to(&mut self, _pos: Duration) -> Result<()> {
-            Ok(())
-        }
-
-        pub fn set_volume_delta(&mut self, _delta: f32) -> Result<()> {
             Ok(())
         }
     }

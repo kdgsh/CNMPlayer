@@ -8,9 +8,6 @@ pub enum Action {
     TogglePlayPause,
     Prev,
     Next,
-    VolumeUp,
-    VolumeDown,
-    SetVolume(f32),
     ToggleRepeatMode,
     ToggleFavorite,
     TogglePlaylist,
@@ -255,8 +252,6 @@ pub fn map_key(ev: KeyEvent, overlay: Overlay, config: &Config) -> Action {
         KeyCode::Enter => Action::Confirm,
         KeyCode::Left => Action::Prev,
         KeyCode::Right => Action::Next,
-        KeyCode::Up => Action::VolumeUp,
-        KeyCode::Down => Action::VolumeDown,
         KeyCode::Char(' ') => Action::TogglePlayPause,
         _ => Action::None,
     }

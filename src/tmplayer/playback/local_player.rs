@@ -343,8 +343,6 @@ pub struct LocalPlayer {
     current_path: Option<PathBuf>,
     duration: Option<Duration>,
 
-    volume: f32,
-
     eq: EqSettings,
     eq_params: Arc<EqParams>,
 
@@ -374,7 +372,6 @@ impl LocalPlayer {
             player,
             current_path: None,
             duration: None,
-            volume: 0.0,
 
             eq: EqSettings::default(),
             eq_params,
@@ -599,9 +596,6 @@ impl LocalPlayer {
         self.paused_acc = Duration::from_secs(0);
         self.started_at = Some(Instant::now());
 
-        // apply volume
-        self.player.set_volume(self.volume);
-
         self.viz_samples.clear();
         let src = SymphoniaSource::open(path, Duration::from_secs(0), Some(meta.duration))?;
         // ensure params reflect current state
@@ -634,15 +628,6 @@ impl LocalPlayer {
             self.pause()?;
         }
         Ok(())
-    }
-
-    pub fn set_volume(&mut self, v: f32) {
-        self.volume = v.clamp(0.0, 1.0);
-        self.player.set_volume(self.volume);
-    }
-
-    pub fn volume(&self) -> f32 {
-        self.volume
     }
 
     pub fn playback_state(&self) -> PlaybackState {
@@ -729,7 +714,6 @@ impl LocalPlayer {
 
         // Replace source without rebuilding the output sink (prevents UI stalls on some systems).
         self.player.clear();
-        self.player.set_volume(self.volume);
 
         self.viz_samples.clear();
         let src = SymphoniaSource::open(&path, pos, self.duration)?;

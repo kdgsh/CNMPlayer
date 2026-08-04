@@ -8,7 +8,6 @@ use crate::tmplayer::data::theme_loader::ThemeLoader;
 use crate::tmplayer::ui::theme::ThemeName;
 use crate::tmplayer::ui::tui::{Tui, UiLayout};
 use crate::tmplayer::utils::input::{Action, map_key, map_mouse};
-use crate::tmplayer::utils::system_volume::SystemVolume;
 use crate::tmplayer::{
     HostConfigSync, HostPlaybackBridge, HostPlaybackRuntimeSnapshot, HostPlaybackSnapshot,
     HostPlaybackState, HostRepeatMode,
@@ -63,7 +62,6 @@ fn open_local_folder(
     app.playlist = res.playlist;
     app.playlist_view = app.playlist.clone();
     app.player.track = res.track;
-    app.player.volume = mode_manager.local.volume();
     app.player.playback = mode_manager.local.playback_state();
 
     // Apply persisted EQ to the local player when entering local mode.
@@ -561,8 +559,6 @@ pub async fn run(
     let mut cava: Option<CavaRunner> = None;
     let mut cava_cfg: Option<CavaConfig> = None;
 
-    let system_volume = SystemVolume::try_new().ok();
-
     let mut last_spectrum = Instant::now();
     let mut last_mpris = Instant::now();
     let mut last_host_config_sync = Instant::now()
@@ -622,7 +618,6 @@ pub async fn run(
                     handle_action(
                         app,
                         &mut mode_manager,
-                        system_volume.as_ref(),
                         &mut host_bridge,
                         action,
                         &last_layout,
@@ -635,7 +630,6 @@ pub async fn run(
                     handle_action(
                         app,
                         &mut mode_manager,
-                        system_volume.as_ref(),
                         &mut host_bridge,
                         action,
                         &last_layout,
@@ -675,16 +669,6 @@ pub async fn run(
                 app.player.track = snapshot.track;
                 app.player.position = snapshot.position;
                 app.player.playback = snapshot.playback;
-
-                if let Some(sysvol) = system_volume.as_ref() {
-                    if let Ok(v) = sysvol.get() {
-                        app.player.volume = v;
-                    } else {
-                        app.player.volume = snapshot.volume;
-                    }
-                } else {
-                    app.player.volume = snapshot.volume;
-                }
 
                 let changed_any = before_track.title != app.player.track.title
                     || before_track.artist != app.player.track.artist
@@ -773,7 +757,6 @@ pub async fn run(
             if let Some(dur) = mode_manager.local.duration() {
                 app.player.track.duration = dur;
             }
-            app.player.volume = mode_manager.local.volume();
             app.player.playback = mode_manager.local.playback_state();
         }
 
@@ -787,12 +770,6 @@ pub async fn run(
                     next
                 };
                 state_changed = true;
-            }
-        }
-
-        if let Some(sysvol) = system_volume.as_ref() {
-            if let Ok(v) = sysvol.get() {
-                app.player.volume = v;
             }
         }
 
@@ -945,7 +922,6 @@ fn switch_idle_track(app: &mut AppState, dir: i8) {
 async fn handle_action(
     app: &mut AppState,
     mode_manager: &mut ModeManager,
-    system_volume: Option<&SystemVolume>,
     host_bridge: &mut Option<&mut impl HostPlaybackBridge>,
     action: Action,
     layout: &UiLayout,
@@ -1549,7 +1525,6 @@ async fn handle_action(
                             return Box::pin(handle_action(
                                 app,
                                 mode_manager,
-                                system_volume,
                                 host_bridge,
                                 Action::Confirm,
                                 layout,
@@ -1685,83 +1660,6 @@ async fn handle_action(
                 }
             }
         }
-        Action::VolumeUp => match app.player.mode {
-            PlayMode::LocalPlayback => {
-                mode_manager
-                    .local
-                    .set_volume((mode_manager.local.volume() + 0.05).min(1.0));
-            }
-            PlayMode::SystemMonitor => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(0.05) {
-                        app.player.volume = v;
-                    } else {
-                        let _ = mode_manager.mpris.set_volume_delta(0.05);
-                    }
-                } else {
-                    let _ = mode_manager.mpris.set_volume_delta(0.05);
-                }
-            }
-            PlayMode::Idle => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(0.05) {
-                        app.player.volume = v;
-                    }
-                }
-            }
-        },
-        Action::VolumeDown => match app.player.mode {
-            PlayMode::LocalPlayback => {
-                mode_manager
-                    .local
-                    .set_volume((mode_manager.local.volume() - 0.05).max(0.0));
-            }
-            PlayMode::SystemMonitor => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(-0.05) {
-                        app.player.volume = v;
-                    } else {
-                        let _ = mode_manager.mpris.set_volume_delta(-0.05);
-                    }
-                } else {
-                    let _ = mode_manager.mpris.set_volume_delta(-0.05);
-                }
-            }
-            PlayMode::Idle => {
-                if let Some(sysvol) = system_volume {
-                    if let Ok(v) = sysvol.set_delta(-0.05) {
-                        app.player.volume = v;
-                    }
-                }
-            }
-        },
-        Action::SetVolume(v) => match app.player.mode {
-            PlayMode::LocalPlayback => {
-                mode_manager.local.set_volume(v);
-            }
-            PlayMode::SystemMonitor => {
-                if let Some(sysvol) = system_volume {
-                    if sysvol.set(v).is_ok() {
-                        app.player.volume = v;
-                    } else {
-                        // delta setter exists; approximate absolute set
-                        let cur = app.player.volume;
-                        let _ = mode_manager.mpris.set_volume_delta(v - cur);
-                    }
-                } else {
-                    // delta setter exists; approximate absolute set
-                    let cur = app.player.volume;
-                    let _ = mode_manager.mpris.set_volume_delta(v - cur);
-                }
-            }
-            PlayMode::Idle => {
-                if let Some(sysvol) = system_volume {
-                    if sysvol.set(v).is_ok() {
-                        app.player.volume = v;
-                    }
-                }
-            }
-        },
         Action::ToggleRepeatMode => {
             if let Some(bridge) = host_bridge.as_mut() {
                 (*bridge).toggle_repeat_mode();
@@ -1812,12 +1710,11 @@ async fn handle_action(
             }
         }
         Action::MouseClick { col, row } => {
-            // map click to controls/progress/volume/playlist
+            // map click to controls/progress/playlist
             if let Some(a) = crate::tmplayer::ui::tui::hit_test(layout, app, col, row) {
                 Box::pin(handle_action(
                     app,
                     mode_manager,
-                    system_volume,
                     host_bridge,
                     a,
                     layout,
