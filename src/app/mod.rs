@@ -4193,7 +4193,7 @@ impl App {
                 let next = self
                     .config
                     .audio_quality
-                    .cycle(delta, self.vip_audio_unlocked);
+                    .cycle(delta, self.quality_unlocked());
                 self.set_audio_quality(next);
             }
             8 => {
@@ -4603,6 +4603,7 @@ impl App {
             eq_bands_db: self.config.eq_bands_db,
             playback_memory: self.config.playback_memory,
             vip_audio_unlocked: self.vip_audio_unlocked,
+            source_is_custom: self.api.source_is_custom(),
             show_hints: self.config.show_hints,
             home_more_recommend: self.config.home_more_recommend,
             visualize: self.config.visualize,
@@ -4656,7 +4657,7 @@ impl App {
             changed = true;
         }
 
-        let clamped_quality = sync.audio_quality.clamp_for_vip(self.vip_audio_unlocked);
+        let clamped_quality = sync.audio_quality.clamp_for_vip(self.quality_unlocked());
         if self.config.audio_quality != clamped_quality {
             self.config.audio_quality = clamped_quality;
             changed = true;
@@ -5060,11 +5061,16 @@ impl App {
     }
 
     fn set_audio_quality(&mut self, quality: AudioQuality) {
-        let clamped = quality.clamp_for_vip(self.vip_audio_unlocked);
+        let clamped = quality.clamp_for_vip(self.quality_unlocked());
         if self.config.audio_quality != clamped {
             self.config.audio_quality = clamped;
             let _ = self.config.save();
         }
+    }
+
+    /// 使用自定义音源时，无损/hires 质量不受网易云账号 VIP 限制。
+    fn quality_unlocked(&self) -> bool {
+        self.vip_audio_unlocked || self.api.source_is_custom()
     }
 
     pub fn current_page_lyric_lines(&self) -> (String, String) {
@@ -5113,7 +5119,7 @@ impl App {
         let _ = session::clear_cookie();
         self.clear_playback_memory();
         self.vip_audio_unlocked = false;
-        self.config.audio_quality = self.config.audio_quality.clamp_for_vip(false);
+        self.config.audio_quality = self.config.audio_quality.clamp_for_vip(self.quality_unlocked());
 
         self.login = LoginState::default();
         self.search = SearchState::default();
