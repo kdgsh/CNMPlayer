@@ -54,7 +54,7 @@ use streaming::StreamingReader;
 const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
-const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
+const TOPBAR_USER_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 10;
 const SETTINGS_PLAYBACK_ITEMS: usize = 9;
 pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 17;
@@ -67,7 +67,6 @@ const RESERVED_RESET_KEYBIND: &str = "Ctrl+Alt+R";
 const COVER_CACHE_SUBDIR: &str = "cover";
 const COVER_FETCH_RETRY_MS: u64 = 1500;
 const LYRICS_FETCH_RETRY_MS: u64 = 1500;
-const SIDEBAR_SLIDE_STEP_CELLS: f32 = 4.0;
 
 const DEFAULT_KEYBIND_SEARCH_BOX: &str = "Ctrl+S";
 const DEFAULT_KEYBIND_FULLSCREEN: &str = "Ctrl+F";
@@ -343,107 +342,198 @@ fn make_ascii_future(bytes: Arc<DynamicImage>, width: u16, height: u16) -> Ascii
     shot_and_share(fut)
 }
 
-pub struct HomeTile {
-    pub id: Option<String>,
-    pub title: String,
-    pub subtitle: String,
-    pub cover: CoverFetchState,
-}
-
-impl HomeTile {
-    fn placeholder_daily() -> Self {
-        Self {
-            id: Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string()),
-            title: "每日推荐".to_string(),
-            subtitle: String::new(),
-            cover: CoverFetchState::default(),
-        }
-    }
-
-    fn from_recommendation(
-        api: &ApiState,
-        id: Option<String>,
-        title: String,
-        subtitle: String,
-        cover_url: Option<String>,
-    ) -> Self {
-        let mut cover = CoverFetchState::default();
-        cover_url.map(|x| cover.load(api.clone(), x));
-        Self {
-            id,
-            title,
-            subtitle,
-            cover,
-        }
-    }
-}
-
 pub struct HomeState {
-    pub focused_idx: usize,
-    pub columns: usize,
-    pub tiles: Vec<HomeTile>,
     pub status_line: String,
-    pub scroll_row_offset: usize,
-    pub visible_rows: usize,
 }
 
 impl Default for HomeState {
     fn default() -> Self {
         Self {
-            focused_idx: 0,
-            columns: 1,
-            tiles: vec![HomeTile::placeholder_daily()],
-            status_line: "方向键/Tab 切换，Enter 进入".to_string(),
-            scroll_row_offset: 0,
-            visible_rows: 1,
+            status_line: "←/→ 切换分类，↑/↓ 选择，Enter 打开".to_string(),
         }
     }
 }
 
-impl HomeState {
-    fn total_virtual_rows(&self) -> usize {
-        if self.tiles.is_empty() {
-            return 0;
+const HOME_DAILY_RECOMMEND_TILE_ID: &str = "__cnm_daily_recommend_songs__";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopBarTab {
+    UserPlaylists,
+    Toplists,
+    Recommend,
+}
+
+impl TopBarTab {
+    pub fn index(self) -> usize {
+        match self {
+            TopBarTab::UserPlaylists => 0,
+            TopBarTab::Toplists => 1,
+            TopBarTab::Recommend => 2,
         }
-
-        let columns = self.columns.max(1);
-        let last_virtual = home_tile_real_to_virtual_index(self.tiles.len() - 1, columns);
-        last_virtual / columns + 1
     }
 
-    fn max_scroll_row_offset(&self) -> usize {
-        self.total_virtual_rows()
-            .saturating_sub(self.visible_rows.max(1))
+    pub fn all() -> [TopBarTab; 3] {
+        [
+            TopBarTab::UserPlaylists,
+            TopBarTab::Toplists,
+            TopBarTab::Recommend,
+        ]
     }
 
-    fn clamp_scroll_row_offset(&mut self) {
-        self.scroll_row_offset = self.scroll_row_offset.min(self.max_scroll_row_offset());
-    }
-
-    fn ensure_focus_visible(&mut self) {
-        if self.tiles.is_empty() {
-            self.focused_idx = 0;
-            self.scroll_row_offset = 0;
-            return;
-        }
-
-        self.focused_idx = self.focused_idx.min(self.tiles.len() - 1);
-        let columns = self.columns.max(1);
-        let focused_row = home_tile_real_to_virtual_index(self.focused_idx, columns) / columns;
-        let visible_rows = self.visible_rows.max(1);
-
-        if focused_row < self.scroll_row_offset {
-            self.scroll_row_offset = focused_row;
-        } else {
-            let bottom_row = self
-                .scroll_row_offset
-                .saturating_add(visible_rows.saturating_sub(1));
-            if focused_row > bottom_row {
-                self.scroll_row_offset = focused_row.saturating_add(1).saturating_sub(visible_rows);
+    pub fn label(&self, zh: bool) -> &'static str {
+        match self {
+            TopBarTab::UserPlaylists => {
+                if zh {
+                    "用户歌单"
+                } else {
+                    "Playlists"
+                }
+            }
+            TopBarTab::Toplists => {
+                if zh {
+                    "排行榜"
+                } else {
+                    "Toplists"
+                }
+            }
+            TopBarTab::Recommend => {
+                if zh {
+                    "推荐歌单"
+                } else {
+                    "Recommend"
+                }
             }
         }
+    }
+}
 
-        self.clamp_scroll_row_offset();
+const RECOMMEND_CATEGORIES: [&str; 14] = [
+    "推荐", "全部", "华语", "欧美", "日语", "韩语", "粤语", "摇滚", "民谣", "电子", "说唱", "轻音乐", "流行", "ACG",
+];
+
+#[derive(Clone)]
+pub struct TopBarPlaylist {
+    pub id: Option<String>,
+    pub is_daily: bool,
+    pub title: String,
+    pub cover_url: Option<String>,
+    pub cover: CoverFetchState,
+}
+
+impl TopBarPlaylist {
+    fn new(
+        id: Option<String>,
+        is_daily: bool,
+        title: String,
+        cover_url: Option<String>,
+    ) -> Self {
+        Self {
+            id,
+            is_daily,
+            title,
+            cover_url,
+            cover: CoverFetchState::default(),
+        }
+    }
+}
+
+pub struct TopBarState {
+    pub active_tab: TopBarTab,
+    pub lists: [Vec<TopBarPlaylist>; 3],
+    pub grid_focused: [usize; 3],
+    pub grid_scroll: [usize; 3],
+    pub columns: usize,
+    pub visible_rows: usize,
+    pub loaded: [bool; 3],
+    pub loading: bool,
+    pub status_line: String,
+    pub user_id: Option<String>,
+    pub liked_playlist_id: Option<String>,
+    pub user_name: String,
+    pub recommend_categories: Vec<&'static str>,
+    pub recommend_cat_index: usize,
+    pub recommend_cat_focus: bool,
+    pub recommend_lists: Vec<Vec<TopBarPlaylist>>,
+    pub recommend_loaded: Vec<bool>,
+    pub recommend_focused: Vec<usize>,
+    pub recommend_scroll: Vec<usize>,
+}
+
+impl Default for TopBarState {
+    fn default() -> Self {
+        let cats: Vec<&'static str> = RECOMMEND_CATEGORIES.to_vec();
+        Self {
+            active_tab: TopBarTab::UserPlaylists,
+            lists: [Vec::new(), Vec::new(), Vec::new()],
+            grid_focused: [0, 0, 0],
+            grid_scroll: [0, 0, 0],
+            columns: 1,
+            visible_rows: 1,
+            loaded: [false, false, false],
+            loading: false,
+            status_line: String::new(),
+            user_id: None,
+            liked_playlist_id: None,
+            user_name: String::new(),
+            recommend_categories: cats.clone(),
+            recommend_cat_index: 0,
+            recommend_cat_focus: false,
+            recommend_lists: cats.iter().map(|_| Vec::new()).collect(),
+            recommend_loaded: cats.iter().map(|_| false).collect(),
+            recommend_focused: cats.iter().map(|_| 0).collect(),
+            recommend_scroll: cats.iter().map(|_| 0).collect(),
+        }
+    }
+}
+
+impl TopBarState {
+    fn is_recommend(&self) -> bool {
+        self.active_tab == TopBarTab::Recommend
+    }
+
+    fn current_focus_mut(&mut self) -> &mut usize {
+        if self.is_recommend() {
+            &mut self.recommend_focused[self.recommend_cat_index]
+        } else {
+            &mut self.grid_focused[self.active_tab.index()]
+        }
+    }
+
+    fn current_scroll_mut(&mut self) -> &mut usize {
+        if self.is_recommend() {
+            &mut self.recommend_scroll[self.recommend_cat_index]
+        } else {
+            &mut self.grid_scroll[self.active_tab.index()]
+        }
+    }
+
+    pub fn tab_len(&self) -> usize {
+        if self.is_recommend() {
+            self.recommend_lists
+                .get(self.recommend_cat_index)
+                .map(Vec::len)
+                .unwrap_or(0)
+        } else {
+            self.lists[self.active_tab.index()].len()
+        }
+    }
+
+    pub fn tab_focused(&self) -> usize {
+        if self.is_recommend() {
+            self.recommend_focused
+                .get(self.recommend_cat_index)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            self.grid_focused[self.active_tab.index()]
+        }
+    }
+
+    pub fn set_current_focus(&mut self, index: usize) {
+        let len = self.tab_len();
+        let target = if len == 0 { 0 } else { index.min(len - 1) };
+        *self.current_focus_mut() = target;
+        self.ensure_focus_visible();
     }
 
     pub fn set_columns(&mut self, columns: usize) {
@@ -457,36 +547,80 @@ impl HomeState {
     }
 
     pub fn effective_scroll_row_offset(&self) -> usize {
-        self.scroll_row_offset.min(self.max_scroll_row_offset())
+        let len = self.tab_len();
+        let cols = self.columns.max(1);
+        let total_rows = len.saturating_sub(1) / cols + 1;
+        let scroll = if self.is_recommend() {
+            self.recommend_scroll
+                .get(self.recommend_cat_index)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            self.grid_scroll[self.active_tab.index()]
+        };
+        scroll.min(total_rows.saturating_sub(self.visible_rows.max(1)))
     }
 
-    pub fn set_tiles(&mut self, mut tiles: Vec<HomeTile>) {
-        if tiles.is_empty() {
-            tiles.push(HomeTile::placeholder_daily());
+    pub fn ensure_focus_visible(&mut self) {
+        let cols = self.columns.max(1);
+        let rows = self.visible_rows.max(1);
+        let len = self.tab_len();
+        let focus = self.tab_focused();
+        let focus = focus.min(len.saturating_sub(1));
+        *self.current_focus_mut() = focus;
+        if len == 0 {
+            *self.current_scroll_mut() = 0;
+            return;
         }
-        self.tiles = tiles;
-        self.focused_idx = 0;
-        self.scroll_row_offset = 0;
+
+        let focused_row = focus / cols;
+        let scroll = *self.current_scroll_mut();
+
+        let new_scroll = if focused_row < scroll {
+            focused_row
+        } else {
+            let bottom = scroll.saturating_add(rows.saturating_sub(1));
+            if focused_row > bottom {
+                focused_row.saturating_add(1).saturating_sub(rows)
+            } else {
+                scroll
+            }
+        };
+        let total_rows = len.saturating_sub(1) / cols + 1;
+        *self.current_scroll_mut() = new_scroll.min(total_rows.saturating_sub(rows));
+    }
+
+    pub fn is_tab_loaded(&self, tab: TopBarTab) -> bool {
+        self.loaded[tab.index()]
+    }
+
+    pub fn mark_tab_loaded(&mut self, tab: TopBarTab) {
+        self.loaded[tab.index()] = true;
+    }
+
+    pub fn switch_tab(&mut self, tab: TopBarTab) {
+        self.active_tab = tab;
+        self.recommend_cat_focus = false;
         self.ensure_focus_visible();
     }
 
     pub fn focus_next(&mut self) {
-        if self.tiles.is_empty() {
+        let len = self.tab_len();
+        if len == 0 {
             return;
         }
-        self.focused_idx = (self.focused_idx + 1) % self.tiles.len();
+        let focus = *self.current_focus_mut();
+        *self.current_focus_mut() = (focus + 1) % len;
         self.ensure_focus_visible();
     }
 
     pub fn focus_prev(&mut self) {
-        if self.tiles.is_empty() {
+        let len = self.tab_len();
+        if len == 0 {
             return;
         }
-        self.focused_idx = if self.focused_idx == 0 {
-            self.tiles.len() - 1
-        } else {
-            self.focused_idx - 1
-        };
+        let focus = *self.current_focus_mut();
+        *self.current_focus_mut() = if focus == 0 { len - 1 } else { focus - 1 };
         self.ensure_focus_visible();
     }
 
@@ -499,316 +633,101 @@ impl HomeState {
     }
 
     pub fn focus_up(&mut self) {
-        if self.tiles.is_empty() {
-            return;
-        }
-
-        let step = self.columns.max(1);
-        let focused_virtual = home_tile_real_to_virtual_index(self.focused_idx, step);
-        if focused_virtual < step {
-            return;
-        }
-
-        let focused_row = focused_virtual / step;
-        let target_virtual = focused_virtual - step;
-        if let Some(target) =
-            home_tile_virtual_to_real_index(target_virtual, step, self.tiles.len())
-        {
-            let is_top_edge = focused_row == self.scroll_row_offset;
-            self.focused_idx = target;
-            if is_top_edge && self.scroll_row_offset > 0 {
-                self.scroll_row_offset -= 1;
+        let cols = self.columns.max(1);
+        if self.is_recommend() && !self.recommend_cat_focus {
+            if self.tab_focused() < cols {
+                self.recommend_cat_focus = true;
+                return;
             }
-            self.ensure_focus_visible();
         }
+        let focus = *self.current_focus_mut();
+        if focus < cols {
+            return;
+        }
+        *self.current_focus_mut() = focus - cols;
+        self.ensure_focus_visible();
     }
 
     pub fn focus_down(&mut self) {
-        if self.tiles.is_empty() {
-            return;
-        }
-
-        let step = self.columns.max(1);
-        let focused_virtual = home_tile_real_to_virtual_index(self.focused_idx, step);
-        let focused_row = focused_virtual / step;
-        let target_virtual = focused_virtual.saturating_add(step);
-
-        if let Some(target) =
-            home_tile_virtual_to_real_index(target_virtual, step, self.tiles.len())
-        {
-            let bottom_edge_row = self
-                .scroll_row_offset
-                .saturating_add(self.visible_rows.max(1).saturating_sub(1));
-            let is_bottom_edge = focused_row >= bottom_edge_row;
-            self.focused_idx = target;
-            if is_bottom_edge {
-                self.scroll_row_offset = self
-                    .scroll_row_offset
-                    .saturating_add(1)
-                    .min(self.max_scroll_row_offset());
-            }
-            self.ensure_focus_visible();
-        }
-    }
-}
-
-const HOME_DAILY_RECOMMEND_TILE_ID: &str = "__cnm_daily_recommend_songs__";
-const HOME_PINNED_TITLES: [&str; 3] = ["每日推荐", "私人雷达", "欧美私人雷达"];
-
-fn home_tile_real_to_virtual_index(index: usize, columns: usize) -> usize {
-    let cols = columns.max(1);
-    if cols <= 3 || index < 3 {
-        index
-    } else {
-        index.saturating_add(cols - 3)
-    }
-}
-
-fn home_tile_virtual_to_real_index(
-    virtual_index: usize,
-    columns: usize,
-    tile_len: usize,
-) -> Option<usize> {
-    let cols = columns.max(1);
-
-    if cols <= 3 {
-        return (virtual_index < tile_len).then_some(virtual_index);
-    }
-
-    if virtual_index < 3 {
-        return (virtual_index < tile_len).then_some(virtual_index);
-    }
-
-    if virtual_index < cols {
-        return None;
-    }
-
-    let real_index = virtual_index.saturating_sub(cols - 3);
-    (real_index < tile_len).then_some(real_index)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HomeSidebarSection {
-    Created,
-    Collected,
-}
-
-#[derive(Debug, Clone)]
-pub struct HomeSidebarPlaylist {
-    pub id: Option<String>,
-    pub title: String,
-    pub creator: String,
-    pub track_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct HomeSidebarHit {
-    pub section: HomeSidebarSection,
-    pub index: usize,
-}
-
-pub struct HomeSidebarState {
-    pub expanded: bool,
-    pub loading: bool,
-    pub user_id: Option<String>,
-    pub liked_playlist_id: Option<String>,
-    pub user_name: String,
-    pub created_playlists: Vec<HomeSidebarPlaylist>,
-    pub collected_playlists: Vec<HomeSidebarPlaylist>,
-    pub focused_section: HomeSidebarSection,
-    pub focused_index: usize,
-    pub created_focused_index: usize,
-    pub collected_focused_index: usize,
-    pub created_scroll_offset: usize,
-    pub collected_scroll_offset: usize,
-    pub anim_progress: f32,
-    pub status_line: String,
-}
-
-impl Default for HomeSidebarState {
-    fn default() -> Self {
-        Self {
-            expanded: false,
-            loading: false,
-            user_id: None,
-            liked_playlist_id: None,
-            user_name: String::new(),
-            created_playlists: Vec::new(),
-            collected_playlists: Vec::new(),
-            focused_section: HomeSidebarSection::Created,
-            focused_index: 0,
-            created_focused_index: 0,
-            collected_focused_index: 0,
-            created_scroll_offset: 0,
-            collected_scroll_offset: 0,
-            anim_progress: 0.0,
-            status_line: String::new(),
-        }
-    }
-}
-
-impl HomeSidebarState {
-    fn section_memory(&self, section: HomeSidebarSection) -> usize {
-        match section {
-            HomeSidebarSection::Created => self.created_focused_index,
-            HomeSidebarSection::Collected => self.collected_focused_index,
-        }
-    }
-
-    fn set_section_memory(&mut self, section: HomeSidebarSection, index: usize) {
-        match section {
-            HomeSidebarSection::Created => {
-                self.created_focused_index = index;
-            }
-            HomeSidebarSection::Collected => {
-                self.collected_focused_index = index;
-            }
-        }
-    }
-
-    pub fn section_scroll_offset(&self, section: HomeSidebarSection) -> usize {
-        match section {
-            HomeSidebarSection::Created => self.created_scroll_offset,
-            HomeSidebarSection::Collected => self.collected_scroll_offset,
-        }
-    }
-
-    pub fn set_section_scroll_offset(&mut self, section: HomeSidebarSection, offset: usize) {
-        match section {
-            HomeSidebarSection::Created => {
-                self.created_scroll_offset = offset;
-            }
-            HomeSidebarSection::Collected => {
-                self.collected_scroll_offset = offset;
-            }
-        }
-    }
-
-    fn sync_memory_from_current(&mut self) {
-        self.set_section_memory(self.focused_section, self.focused_index);
-    }
-
-    fn section_len(&self, section: HomeSidebarSection) -> usize {
-        match section {
-            HomeSidebarSection::Created => self.created_playlists.len(),
-            HomeSidebarSection::Collected => self.collected_playlists.len(),
-        }
-    }
-
-    pub fn clamp_focus(&mut self) {
-        let created_len = self.created_playlists.len();
-        let collected_len = self.collected_playlists.len();
-
-        self.created_focused_index = if created_len == 0 {
-            0
-        } else {
-            self.created_focused_index
-                .min(created_len.saturating_sub(1))
-        };
-        self.collected_focused_index = if collected_len == 0 {
-            0
-        } else {
-            self.collected_focused_index
-                .min(collected_len.saturating_sub(1))
-        };
-
-        if created_len == 0 && collected_len == 0 {
-            self.focused_section = HomeSidebarSection::Created;
-            self.focused_index = 0;
-            return;
-        }
-
-        match self.focused_section {
-            HomeSidebarSection::Created if created_len == 0 => {
-                self.focused_section = HomeSidebarSection::Collected;
-            }
-            HomeSidebarSection::Collected if collected_len == 0 => {
-                self.focused_section = HomeSidebarSection::Created;
-            }
-            _ => {}
-        }
-
-        self.focused_index = self.section_memory(self.focused_section);
-
-        let created_max_start = created_len.saturating_sub(1);
-        let collected_max_start = collected_len.saturating_sub(1);
-        self.created_scroll_offset = self.created_scroll_offset.min(created_max_start);
-        self.collected_scroll_offset = self.collected_scroll_offset.min(collected_max_start);
-    }
-
-    pub fn reset_focus(&mut self) {
-        self.created_focused_index = 0;
-        self.collected_focused_index = 0;
-        self.created_scroll_offset = 0;
-        self.collected_scroll_offset = 0;
-        self.focused_section = if !self.created_playlists.is_empty() {
-            HomeSidebarSection::Created
-        } else if !self.collected_playlists.is_empty() {
-            HomeSidebarSection::Collected
-        } else {
-            HomeSidebarSection::Created
-        };
-        self.focused_index = 0;
-        self.clamp_focus();
-    }
-
-    pub fn focus_next(&mut self) {
-        let len = self.section_len(self.focused_section);
+        let len = self.tab_len();
         if len == 0 {
             return;
         }
-        self.focused_index = (self.focused_index + 1) % len;
-        self.sync_memory_from_current();
+        let cols = self.columns.max(1);
+        let focus = *self.current_focus_mut();
+        let next = focus.saturating_add(cols);
+        if next >= len {
+            return;
+        }
+        *self.current_focus_mut() = next;
+        self.ensure_focus_visible();
     }
 
-    pub fn focus_prev(&mut self) {
-        let len = self.section_len(self.focused_section);
+    pub fn page_up(&mut self) {
+        let cols = self.columns.max(1);
+        let rows = self.visible_rows.max(1);
+        let focus = *self.current_focus_mut();
+        *self.current_focus_mut() = focus.saturating_sub(cols * rows);
+        self.ensure_focus_visible();
+    }
+
+    pub fn page_down(&mut self) {
+        let len = self.tab_len();
         if len == 0 {
             return;
         }
-        self.focused_index = if self.focused_index == 0 {
-            len - 1
+        let cols = self.columns.max(1);
+        let rows = self.visible_rows.max(1);
+        let focus = *self.current_focus_mut();
+        *self.current_focus_mut() = (focus + cols * rows).min(len - 1);
+        self.ensure_focus_visible();
+    }
+
+    pub fn focused_playlist(&self) -> Option<&TopBarPlaylist> {
+        if self.is_recommend() {
+            self.recommend_lists
+                .get(self.recommend_cat_index)
+                .and_then(|list| list.get(self.recommend_focused[self.recommend_cat_index]))
         } else {
-            self.focused_index - 1
-        };
-        self.sync_memory_from_current();
-    }
-
-    pub fn switch_section_prev(&mut self) {
-        self.sync_memory_from_current();
-        self.focused_section = match self.focused_section {
-            HomeSidebarSection::Created => HomeSidebarSection::Collected,
-            HomeSidebarSection::Collected => HomeSidebarSection::Created,
-        };
-        self.clamp_focus();
-    }
-
-    pub fn switch_section_next(&mut self) {
-        self.sync_memory_from_current();
-        self.focused_section = match self.focused_section {
-            HomeSidebarSection::Created => HomeSidebarSection::Collected,
-            HomeSidebarSection::Collected => HomeSidebarSection::Created,
-        };
-        self.clamp_focus();
-    }
-
-    pub fn set_focus(&mut self, section: HomeSidebarSection, index: usize) {
-        self.sync_memory_from_current();
-        self.focused_section = section;
-        self.focused_index = index;
-        self.sync_memory_from_current();
-        self.clamp_focus();
-    }
-
-    pub fn focused_playlist(&self) -> Option<&HomeSidebarPlaylist> {
-        match self.focused_section {
-            HomeSidebarSection::Created => self.created_playlists.get(self.focused_index),
-            HomeSidebarSection::Collected => self.collected_playlists.get(self.focused_index),
+            let idx = self.active_tab.index();
+            self.lists[idx].get(self.grid_focused[idx])
         }
     }
 
-    pub fn is_visible(&self) -> bool {
-        self.expanded || self.anim_progress > 0.0
+    pub fn item_at(&self, index: usize) -> Option<&TopBarPlaylist> {
+        if self.is_recommend() {
+            self.recommend_lists
+                .get(self.recommend_cat_index)
+                .and_then(|list| list.get(index))
+        } else {
+            self.lists[self.active_tab.index()].get(index)
+        }
+    }
+
+    pub fn cover_at_mut(&mut self, index: usize) -> Option<&mut CoverFetchState> {
+        if self.is_recommend() {
+            self.recommend_lists
+                .get_mut(self.recommend_cat_index)
+                .and_then(|list| list.get_mut(index))
+                .map(|item| &mut item.cover)
+        } else {
+            self.lists
+                .get_mut(self.active_tab.index())
+                .and_then(|list| list.get_mut(index))
+                .map(|item| &mut item.cover)
+        }
+    }
+
+    pub fn recommend_categories_len(&self) -> usize {
+        self.recommend_categories.len()
+    }
+
+    pub fn recommend_category_name(&self, index: usize) -> &'static str {
+        self.recommend_categories.get(index).copied().unwrap_or("")
+    }
+
+    pub fn is_recommend_cat_loaded(&self, index: usize) -> bool {
+        self.recommend_loaded.get(index).copied().unwrap_or(false)
     }
 }
 
@@ -1598,8 +1517,7 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub login: LoginState,
     pub home: HomeState,
-    pub home_sidebar: HomeSidebarState,
-    home_sidebar_anim_span_cells: u16,
+    pub topbar: TopBarState,
     pub playlist: PlaylistState,
     pub author: AuthorState,
     pub search: SearchState,
@@ -1612,9 +1530,9 @@ pub struct App {
     pub playback_state: PlaybackRuntimeState,
     pub startup_loading_progress: f32,
     pub player_bar_hits: PlayerBarHitTargets,
-    pub home_sidebar_panel_hit: Option<HitRect>,
-    pub home_sidebar_playlist_hits: Vec<(HitRect, HomeSidebarHit)>,
-    pub home_tile_hits: Vec<(HitRect, usize)>,
+    pub topbar_tab_hits: Vec<(HitRect, TopBarTab)>,
+    pub topbar_cat_hits: Vec<(HitRect, usize)>,
+    pub topbar_entry_hits: Vec<(HitRect, usize)>,
     pub playlist_track_hits: Vec<(HitRect, usize)>,
     pub author_tile_hits: Vec<(HitRect, usize)>,
     pub search_item_hits: Vec<(HitRect, usize)>,
@@ -1708,8 +1626,7 @@ impl App {
             overlay: None,
             login: LoginState::default(),
             home: HomeState::default(),
-            home_sidebar: HomeSidebarState::default(),
-            home_sidebar_anim_span_cells: 24,
+            topbar: TopBarState::default(),
             playlist: PlaylistState::default(),
             author: AuthorState::default(),
             search: SearchState::default(),
@@ -1722,9 +1639,9 @@ impl App {
             playback_state: PlaybackRuntimeState::Stopped,
             startup_loading_progress: 0.0,
             player_bar_hits: PlayerBarHitTargets::default(),
-            home_sidebar_panel_hit: None,
-            home_sidebar_playlist_hits: Vec::new(),
-            home_tile_hits: Vec::new(),
+            topbar_tab_hits: Vec::new(),
+            topbar_cat_hits: Vec::new(),
+            topbar_entry_hits: Vec::new(),
             playlist_track_hits: Vec::new(),
             author_tile_hits: Vec::new(),
             search_item_hits: Vec::new(),
@@ -1787,11 +1704,15 @@ impl App {
                     app.session_cookie = app.api.session_cookie().map(|value| value.to_string());
                     app.refresh_vip_audio_access().await;
                     let _ = app.refresh_liked_song_cache().await;
-                    app.home.status_line = "已恢复上次登录，正在加载推荐歌单".to_string();
+                    app.home.status_line = "已恢复上次登录，正在加载歌单".to_string();
                     app.begin_startup_loading();
-                    if let Err(err) = app.load_home_recommendations().await {
-                        app.home.status_line = format!("已恢复登录，但推荐加载失败: {}", err);
+                    if let Err(err) = app
+                        .load_topbar_tab(TopBarTab::UserPlaylists)
+                        .await
+                    {
+                        app.home.status_line = format!("已恢复登录，但歌单加载失败: {}", err);
                     }
+                    let _ = app.load_topbar_tab(TopBarTab::Recommend).await;
                     app.finish_startup_loading();
                     app.try_restore_playback_memory().await;
                     return Ok(app);
@@ -1815,7 +1736,6 @@ impl App {
         self.sync_mpris_exposure();
         self.tick_main_cava();
         self.tick_search_box_animation();
-        self.tick_home_sidebar_animation();
         self.tick_startup_loading();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
@@ -1849,11 +1769,6 @@ impl App {
         }
 
         if matches!(self.overlay, Some(Overlay::SearchBox)) || self.search_box_anim_height > 0 {
-            return true;
-        }
-
-        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
-        if (self.home_sidebar.anim_progress - target).abs() > 0.001 {
             return true;
         }
 
@@ -2017,6 +1932,13 @@ impl App {
         }
 
         match self.page {
+            Page::Home => {
+                if forward {
+                    self.topbar.focus_down();
+                } else {
+                    self.topbar.focus_up();
+                }
+            }
             Page::Search => {
                 if forward {
                     self.advance_search_focus().await;
@@ -2073,28 +1995,24 @@ impl App {
     }
 
     pub fn clear_content_hits(&mut self) {
-        self.home_sidebar_panel_hit = None;
-        self.home_sidebar_playlist_hits.clear();
-        self.home_tile_hits.clear();
+        self.topbar_tab_hits.clear();
+        self.topbar_cat_hits.clear();
+        self.topbar_entry_hits.clear();
         self.playlist_track_hits.clear();
         self.author_tile_hits.clear();
         self.search_item_hits.clear();
     }
 
-    pub fn set_home_sidebar_panel_hit(&mut self, rect: Option<HitRect>) {
-        self.home_sidebar_panel_hit = rect;
+    pub fn push_topbar_tab_hit(&mut self, rect: HitRect, tab: TopBarTab) {
+        self.topbar_tab_hits.push((rect, tab));
     }
 
-    pub fn set_home_sidebar_anim_span_cells(&mut self, span_cells: u16) {
-        self.home_sidebar_anim_span_cells = span_cells.max(1);
+    pub fn push_topbar_cat_hit(&mut self, rect: HitRect, index: usize) {
+        self.topbar_cat_hits.push((rect, index));
     }
 
-    pub fn push_home_sidebar_playlist_hit(&mut self, rect: HitRect, hit: HomeSidebarHit) {
-        self.home_sidebar_playlist_hits.push((rect, hit));
-    }
-
-    pub fn push_home_tile_hit(&mut self, rect: HitRect, index: usize) {
-        self.home_tile_hits.push((rect, index));
+    pub fn push_topbar_entry_hit(&mut self, rect: HitRect, index: usize) {
+        self.topbar_entry_hits.push((rect, index));
     }
 
     pub fn push_playlist_track_hit(&mut self, rect: HitRect, index: usize) {
@@ -2479,7 +2397,7 @@ impl App {
                 self.launch_fullscreen_requested = true;
             }
             KeybindAction::Settings => self.open_settings(),
-            KeybindAction::Sidebar => self.toggle_home_sidebar().await,
+            KeybindAction::Sidebar => {}
             KeybindAction::Quit => {
                 self.should_quit = true;
             }
@@ -2498,52 +2416,17 @@ impl App {
         }
     }
 
-    async fn toggle_home_sidebar(&mut self) {
-        if self.page != Page::Home || self.overlay.is_some() {
-            return;
-        }
-
-        if self.home_sidebar.expanded {
-            self.home_sidebar.expanded = false;
-            return;
-        }
-
-        self.home_sidebar.expanded = true;
-
-        if !self.home_sidebar.created_playlists.is_empty()
-            || !self.home_sidebar.collected_playlists.is_empty()
-        {
-            self.home_sidebar.reset_focus();
-            return;
-        }
-
-        match self.load_home_sidebar_playlists().await {
-            Ok(()) => {
-                self.home.status_line = self.home_sidebar.status_line.clone();
-                self.home_sidebar.reset_focus();
-            }
-            Err(err) => {
-                let text = format!(
-                    "{}: {}",
-                    self.lang_text("主页歌单加载失败", "Failed to load home playlists"),
-                    err
-                );
-                self.home_sidebar.status_line = text.clone();
-                self.home.status_line = text;
-            }
-        }
-    }
-
-    async fn open_focused_home_sidebar_playlist(&mut self) {
-        let (playlist_id, title) = {
-            let Some(item) = self.home_sidebar.focused_playlist() else {
+    async fn open_focused_topbar_entry(&mut self) {
+        let (playlist_id, is_daily, title) = {
+            let Some(item) = self.topbar.focused_playlist() else {
                 self.home.status_line = self
-                    .lang_text("侧边栏暂无可打开歌单", "No sidebar playlist to open")
+                    .lang_text("当前分类暂无可打开歌单", "No playlist to open here")
                     .to_string();
                 return;
             };
 
-            let Some(playlist_id) = item.id.clone() else {
+            let item_id = item.id.clone();
+            let Some(playlist_id) = item_id else {
                 self.home.status_line = self
                     .lang_text(
                         "当前歌单缺少 ID，无法打开",
@@ -2553,8 +2436,28 @@ impl App {
                 return;
             };
 
-            (playlist_id, item.title.clone())
+            (playlist_id, item.is_daily, item.title.clone())
         };
+
+        if is_daily {
+            self.home.status_line = format!("{} {}", self.lang_text("正在加载", "Loading"), title);
+            match self.load_daily_recommend_playlist().await {
+                Ok(()) => {
+                    self.playlist_return_page = Page::Home;
+                    self.playlist_section_return_snapshot = None;
+                    self.page = Page::Playlist;
+                    self.home.status_line = format!("{} {}", self.lang_text("已打开", "Opened"), title);
+                }
+                Err(err) => {
+                    self.home.status_line = format!(
+                        "{}: {}",
+                        self.lang_text("打开每日推荐失败", "Failed to open daily recommendations"),
+                        err
+                    );
+                }
+            }
+            return;
+        }
 
         if self.is_liked_playlist(&playlist_id, Some(&title)) {
             let _ = self.refresh_liked_song_cache().await;
@@ -2567,7 +2470,6 @@ impl App {
             Ok(()) => {
                 self.playlist_return_page = Page::Home;
                 self.playlist_section_return_snapshot = None;
-                self.home_sidebar.expanded = false;
                 self.page = Page::Playlist;
                 self.home.status_line = format!("{} {}", self.lang_text("已打开", "Opened"), title);
             }
@@ -4130,7 +4032,7 @@ impl App {
                     self.config.home_more_recommend = !self.config.home_more_recommend;
                     let _ = self.config.save();
                     if self.page == Page::Home {
-                        if let Err(err) = self.load_home_recommendations().await {
+                        if let Err(err) = self.load_topbar_tab(TopBarTab::Recommend).await {
                             self.home.status_line = format!(
                                 "{}: {}",
                                 self.lang_text(
@@ -4251,42 +4153,77 @@ impl App {
         }
     }
 
-    async fn handle_home_key(&mut self, key: KeyEvent) {
-        if self.home_sidebar.expanded {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                match key.code {
-                    KeyCode::Up => {
-                        self.home_sidebar.switch_section_prev();
-                        return;
-                    }
-                    KeyCode::Down => {
-                        self.home_sidebar.switch_section_next();
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-
-            match key.code {
-                KeyCode::Esc => {
-                    self.home_sidebar.expanded = false;
-                }
-                KeyCode::Up | KeyCode::BackTab => self.home_sidebar.focus_prev(),
-                KeyCode::Down | KeyCode::Tab => self.home_sidebar.focus_next(),
-                KeyCode::Enter => self.open_focused_home_sidebar_playlist().await,
-                _ => {}
-            }
+    async fn switch_topbar_tab(&mut self, tab: TopBarTab) {
+        if self.topbar.active_tab == tab {
             return;
         }
+        self.topbar.switch_tab(tab);
+        if !self.topbar.is_tab_loaded(tab) {
+            if let Err(err) = self.load_topbar_tab(tab).await {
+                self.home.status_line = format!(
+                    "{}: {}",
+                    self.lang_text("加载失败", "Failed to load"),
+                    err
+                );
+            }
+        }
+    }
 
+    async fn handle_home_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Tab => self.home.focus_next(),
-            KeyCode::BackTab => self.home.focus_prev(),
-            KeyCode::Left => self.home.focus_left(),
-            KeyCode::Right => self.home.focus_right(),
-            KeyCode::Up => self.home.focus_up(),
-            KeyCode::Down => self.home.focus_down(),
-            KeyCode::Enter => self.enter_home_tile().await,
+            KeyCode::Tab => {
+                let tabs = TopBarTab::all();
+                let idx = self.topbar.active_tab.index();
+                self.switch_topbar_tab(tabs[(idx + 1) % 3]).await;
+            }
+            KeyCode::BackTab => {
+                let tabs = TopBarTab::all();
+                let idx = self.topbar.active_tab.index();
+                self.switch_topbar_tab(tabs[(idx + 2) % 3]).await;
+            }
+            KeyCode::Left => {
+                if self.topbar.active_tab == TopBarTab::Recommend
+                    && self.topbar.recommend_cat_focus
+                {
+                    let total = self.topbar.recommend_categories_len();
+                    let next = (self.topbar.recommend_cat_index + total - 1) % total;
+                    self.switch_recommend_category(next).await;
+                } else {
+                    self.topbar.focus_left();
+                }
+            }
+            KeyCode::Right => {
+                if self.topbar.active_tab == TopBarTab::Recommend
+                    && self.topbar.recommend_cat_focus
+                {
+                    let total = self.topbar.recommend_categories_len();
+                    let next = (self.topbar.recommend_cat_index + 1) % total;
+                    self.switch_recommend_category(next).await;
+                } else {
+                    self.topbar.focus_right();
+                }
+            }
+            KeyCode::Up => self.topbar.focus_up(),
+            KeyCode::PageUp => self.topbar.page_up(),
+            KeyCode::PageDown => self.topbar.page_down(),
+            KeyCode::Down => {
+                if self.topbar.active_tab == TopBarTab::Recommend
+                    && self.topbar.recommend_cat_focus
+                {
+                    self.topbar.recommend_cat_focus = false;
+                } else {
+                    self.topbar.focus_down();
+                }
+            }
+            KeyCode::Enter => {
+                if self.topbar.active_tab == TopBarTab::Recommend
+                    && self.topbar.recommend_cat_focus
+                {
+                    self.topbar.recommend_cat_focus = false;
+                } else {
+                    self.open_focused_topbar_entry().await;
+                }
+            }
             _ => {}
         }
     }
@@ -4345,19 +4282,6 @@ impl App {
                 (self.search_box_anim_height + 1).min(SEARCH_BOX_TARGET_HEIGHT);
         } else {
             self.search_box_anim_height = 0;
-        }
-    }
-
-    fn tick_home_sidebar_animation(&mut self) {
-        let target = if self.home_sidebar.expanded { 1.0 } else { 0.0 };
-        // Keep home sidebar speed in sync with TMPlayer sidebar (4 cells per frame).
-        let span = self.home_sidebar_anim_span_cells.max(1) as f32;
-        let step = (SIDEBAR_SLIDE_STEP_CELLS / span).clamp(0.01, 1.0);
-
-        if self.home_sidebar.anim_progress < target {
-            self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress + step).min(target);
-        } else if self.home_sidebar.anim_progress > target {
-            self.home_sidebar.anim_progress = (self.home_sidebar.anim_progress - step).max(target);
         }
     }
 
@@ -4435,62 +4359,48 @@ impl App {
         is_double
     }
 
-    fn home_sidebar_double_click_index(hit: HomeSidebarHit) -> usize {
-        const CREATED_BASE: usize = 10_000;
-        const COLLECTED_BASE: usize = 20_000;
-        match hit.section {
-            HomeSidebarSection::Created => CREATED_BASE.saturating_add(hit.index),
-            HomeSidebarSection::Collected => COLLECTED_BASE.saturating_add(hit.index),
-        }
-    }
-
     async fn handle_content_click(&mut self, col: u16, row: u16) -> bool {
         match self.page {
             Page::Home => {
-                if self.home_sidebar.is_visible() {
-                    if let Some(panel) = self.home_sidebar_panel_hit {
-                        if panel.contains(col, row) {
-                            let sidebar_hit = self
-                                .home_sidebar_playlist_hits
-                                .iter()
-                                .find(|(rect, _)| rect.contains(col, row))
-                                .map(|(_, hit)| *hit);
-                            if let Some(hit) = sidebar_hit {
-                                if self.home_sidebar.expanded {
-                                    self.home_sidebar.set_focus(hit.section, hit.index);
-                                    if self.is_double_content_click(
-                                        Page::Home,
-                                        Self::home_sidebar_double_click_index(hit),
-                                    ) {
-                                        self.open_focused_home_sidebar_playlist().await;
-                                    }
-                                }
-                                return true;
-                            }
-                            self.last_content_click = None;
-                            return true;
-                        }
+                let tab_hit = self
+                    .topbar_tab_hits
+                    .iter()
+                    .find(|(rect, _)| rect.contains(col, row))
+                    .map(|(_, tab)| *tab);
+                if let Some(tab) = tab_hit {
+                    if tab != self.topbar.active_tab {
+                        self.switch_topbar_tab(tab).await;
                     }
+                    return true;
+                }
 
-                    if self.home_sidebar.expanded {
-                        self.last_content_click = None;
+                if self.topbar.active_tab == TopBarTab::Recommend {
+                    let cat_hit = self
+                        .topbar_cat_hits
+                        .iter()
+                        .find(|(rect, _)| rect.contains(col, row))
+                        .map(|(_, idx)| *idx);
+                    if let Some(idx) = cat_hit {
+                        if idx != self.topbar.recommend_cat_index {
+                            self.switch_recommend_category(idx).await;
+                        } else {
+                            self.topbar.recommend_cat_focus = false;
+                        }
                         return true;
                     }
                 }
 
                 let hit = self
-                    .home_tile_hits
+                    .topbar_entry_hits
                     .iter()
                     .find(|(rect, _)| rect.contains(col, row))
                     .map(|(_, idx)| *idx);
                 if let Some(idx) = hit {
-                    if idx < self.home.tiles.len() {
-                        self.home.focused_idx = idx;
-                        if self.is_double_content_click(Page::Home, idx) {
-                            self.enter_home_tile().await;
-                        }
-                        return true;
+                    self.topbar.set_current_focus(idx);
+                    if self.is_double_content_click(Page::Home, idx) {
+                        self.open_focused_topbar_entry().await;
                     }
+                    return true;
                 }
             }
             Page::Playlist => {
@@ -4729,7 +4639,7 @@ impl App {
         }
 
         if home_more_recommend_changed && self.page != Page::Login {
-            if let Err(err) = self.load_home_recommendations().await {
+            if let Err(err) = self.load_topbar_tab(TopBarTab::Recommend).await {
                 self.home.status_line = format!(
                     "{}: {}",
                     self.lang_text("推荐歌单刷新失败", "Failed to refresh home recommendations",),
@@ -5126,7 +5036,7 @@ impl App {
         self.playlist = PlaylistState::default();
         self.author = AuthorState::default();
         self.home = HomeState::default();
-        self.home_sidebar = HomeSidebarState::default();
+        self.topbar = TopBarState::default();
         self.playlist_section_return_snapshot = None;
         self.startup_loading_progress = 0.0;
         self.startup_loading_started_at = None;
@@ -5145,38 +5055,6 @@ impl App {
         self.playback_repeat_mode = PlaybackRepeatMode::Sequence;
 
         self.refresh_qr_login().await;
-    }
-
-    async fn enter_home_tile(&mut self) {
-        if self.home.tiles.is_empty() {
-            return;
-        }
-
-        let focused = self.home.focused_idx.min(self.home.tiles.len() - 1);
-        let title = self.home.tiles[focused].title.clone();
-        let Some(playlist_id) = self.home.tiles[focused].id.clone() else {
-            self.home.status_line = "当前块暂无可用歌单".to_string();
-            return;
-        };
-
-        self.home.status_line = format!("正在加载 {}", title);
-        let result = if playlist_id == HOME_DAILY_RECOMMEND_TILE_ID {
-            self.load_daily_recommend_playlist().await
-        } else {
-            self.load_playlist_detail(&playlist_id).await
-        };
-
-        match result {
-            Ok(()) => {
-                self.playlist_return_page = Page::Home;
-                self.playlist_section_return_snapshot = None;
-                self.page = Page::Playlist;
-                self.home.status_line = format!("已打开 {}", title);
-            }
-            Err(err) => {
-                self.home.status_line = format!("打开歌单失败: {}", err);
-            }
-        }
     }
 
     async fn submit_login_action(&mut self) {
@@ -5348,176 +5226,276 @@ impl App {
         self.login.status_line = format!("登录失败({}): {}", code, response_message(&response));
     }
 
-    async fn fetch_playlist_first_song_cover(&mut self, playlist_id: &str) -> Option<String> {
-        let response = self.api.playlist_detail(playlist_id).await.ok()?;
-        if response_code(&response) != 200 {
-            return None;
+    async fn load_topbar_tab(&mut self, tab: TopBarTab) -> Result<()> {
+        self.topbar.loading = true;
+        let result = match tab {
+            TopBarTab::UserPlaylists => self.load_topbar_user_playlists().await,
+            TopBarTab::Toplists => self.load_topbar_toplists().await,
+            TopBarTab::Recommend => self.load_topbar_recommend().await,
+        };
+        self.topbar.loading = false;
+        if result.is_ok() {
+            self.topbar.mark_tab_loaded(tab);
         }
-
-        response
-            .body
-            .pointer("/playlist/tracks")
-            .and_then(|value| value.as_array())
-            .and_then(|items| items.first())
-            .and_then(|track| first_non_empty(track, &["/al/picUrl", "/album/picUrl"]))
-            .map(|s| s.to_string())
+        result
     }
 
-    async fn load_home_recommendations(&mut self) -> Result<()> {
-        let mut daily_tile = HomeTile::placeholder_daily();
-        if let Ok(response) = self.api.recommend_songs().await {
-            if response_code(&response) == 200 {
-                if let Some(songs) = home_daily_song_items(&response.body) {
-                    if let Some(cover_url) = songs
-                        .iter()
-                        .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
-                    {
-                        daily_tile.cover.load(self.api.clone(), cover_url);
-                    }
-                }
-            }
+    async fn load_topbar_toplists(&mut self) -> Result<()> {
+        let response = self.api.toplist().await?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!(
+                "{} ({}): {}",
+                self.lang_text("排行榜请求失败", "Failed to fetch toplists"),
+                code,
+                response_message(&response)
+            ));
         }
 
-        let mut cards = Vec::new();
-
-        if let Ok(response) = self.api.recommend_resource().await {
-            cards = parse_recommend_cards(&response, 24);
+        let mut items = parse_toplists(&response);
+        if items.is_empty() {
+            return Err(anyhow!(
+                self.lang_text("排行榜数据为空", "Toplist data is empty")
+            ));
         }
 
-        if cards.is_empty() {
-            if let Ok(response) = self.api.personalized(24).await {
-                cards = parse_personalized_cards(&response, 24);
+        for item in &mut items {
+            if let Some(url) = item.cover_url.as_ref() {
+                item.cover.load(self.api.clone(), url.clone());
             }
         }
-
-        let mut tiles = Vec::with_capacity(cards.len().saturating_add(1));
-        tiles.push(daily_tile);
-
-        for card in cards {
-            let pinned_title = normalize_home_pinned_title(&card.title);
-            if pinned_title == Some("每日推荐") {
-                continue;
-            }
-
-            let mut tile = HomeTile::from_recommendation(
-                &self.api,
-                card.id,
-                card.title,
-                card.subtitle,
-                card.cover_url,
-            );
-
-            if pinned_title == Some("私人雷达") {
-                if let Some(playlist_id) = tile.id.clone() {
-                    if let Some(cover_url) =
-                        self.fetch_playlist_first_song_cover(&playlist_id).await
-                    {
-                        tile.cover.load(self.api.clone(), cover_url);
-                    }
-                }
-            }
-
-            tiles.push(tile);
-        }
-
-        self.home.set_tiles(prioritize_home_tiles(
-            &self.api,
-            tiles,
-            self.config.home_more_recommend,
-        ));
-        self.home.status_line = self
-            .lang_text(
-                "方向键/Tab 切换，Enter 打开歌单",
-                "Use arrows/Tab to focus, Enter to open playlist",
-            )
+        self.topbar.lists[TopBarTab::Toplists.index()] = items;
+        self.topbar.status_line = self
+            .lang_text("网易云官方排行榜", "Netease official toplists")
             .to_string();
         Ok(())
     }
 
-    async fn load_home_sidebar_playlists(&mut self) -> Result<()> {
-        self.home_sidebar.loading = true;
+    async fn load_topbar_recommend(&mut self) -> Result<()> {
+        let mut daily_api = self.api.clone();
+        let mut resource_api = self.api.clone();
+        let mut personalized_api = self.api.clone();
+        let (daily_cover, resource_res, personalized_res) = tokio::join!(
+            async move { fetch_daily_recommend_cover(&mut daily_api).await },
+            async move { resource_api.recommend_resource().await },
+            async move { personalized_api.personalized(100).await },
+        );
 
-        let result = (async || -> Result<()> {
-            let account = match self.api.user_account().await {
-                Ok(v) => v,
-                Err(_) => self.api.login_status().await?,
-            };
-            let account_code = response_code(&account);
-            if account_code != 200 {
-                return Err(anyhow!(
-                    "{}({}): {}",
-                    self.lang_text("账号信息请求失败", "Failed to fetch account profile"),
-                    account_code,
-                    response_message(&account)
-                ));
+        let mut items: Vec<TopBarPlaylist> = Vec::new();
+        items.push(TopBarPlaylist::new(
+            None,
+            true,
+            self.lang_text("每日推荐", "Daily Recommendations").to_string(),
+            daily_cover,
+        ));
+
+        if let Ok(response) = resource_res {
+            for card in parse_recommend_cards(&response, 24) {
+                if !topbar_card_is_daily(&card.title) {
+                    items.push(TopBarPlaylist::new(
+                        card.id,
+                        false,
+                        card.title,
+                        card.cover_url,
+                    ));
+                }
             }
+        }
 
-            let uid = extract_current_user_id(&account).ok_or_else(|| {
-                anyhow!(self.lang_text("未找到当前用户 ID", "Current user id not found"))
-            })?;
-            let user_name = extract_current_user_name(&account)
-                .unwrap_or_else(|| self.lang_text("当前用户", "Current User").to_string());
-
-            let created_response = self
-                .api
-                .user_playlist_create(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)
-                .await?;
-            let created_code = response_code(&created_response);
-            if created_code != 200 {
-                return Err(anyhow!(
-                    "{}({}): {}",
-                    self.lang_text("创建歌单请求失败", "Created playlists request failed"),
-                    created_code,
-                    response_message(&created_response)
-                ));
+        if let Ok(response) = personalized_res {
+            for card in parse_personalized_cards(&response, 100) {
+                if !topbar_card_is_daily(&card.title) {
+                    items.push(TopBarPlaylist::new(
+                        card.id,
+                        false,
+                        card.title,
+                        card.cover_url,
+                    ));
+                }
             }
+        }
 
-            let collected_response = self
-                .api
-                .user_playlist_collect(&uid, HOME_SIDEBAR_PLAYLIST_LIMIT, 0)
-                .await?;
-            let collected_code = response_code(&collected_response);
-            if collected_code != 200 {
-                return Err(anyhow!(
-                    "{}({}): {}",
-                    self.lang_text("收藏歌单请求失败", "Collected playlists request failed"),
-                    collected_code,
-                    response_message(&collected_response)
-                ));
+        let mut seen = HashSet::new();
+        items.retain(|item| {
+            item.id
+                .as_deref()
+                .map(|id| seen.insert(id.to_string()))
+                .unwrap_or(true)
+        });
+
+        for item in &mut items {
+            if let Some(url) = item.cover_url.as_ref() {
+                item.cover.load(self.api.clone(), url.clone());
             }
+        }
+        self.topbar.recommend_lists[0] = items;
+        self.topbar.recommend_loaded[0] = true;
+        self.topbar.status_line = self
+            .lang_text("每日推荐 + 每日精选 + 个性化推荐歌单", "Daily songs, picks & personalized playlists")
+            .to_string();
+        Ok(())
+    }
 
-            let created_playlists = parse_home_sidebar_playlists(&created_response);
-            let collected_playlists = parse_home_sidebar_playlists(&collected_response);
+    async fn load_recommend_category(&mut self, index: usize) -> Result<()> {
+        let cat = self.topbar.recommend_category_name(index);
+        if cat.is_empty() || cat == "推荐" {
+            return Err(anyhow!("invalid category index"));
+        }
 
-            self.home_sidebar.user_id = Some(uid);
-            self.home_sidebar.liked_playlist_id = extract_liked_playlist_id(&account);
-            self.home_sidebar.user_name = user_name;
-            self.home_sidebar.created_playlists = created_playlists;
-            self.home_sidebar.collected_playlists = collected_playlists;
-            self.home_sidebar.clamp_focus();
-            self.home_sidebar.status_line = match self.config.language {
-                Language::Zh => format!(
-                    "创建 {} 个，收藏 {} 个",
-                    self.home_sidebar.created_playlists.len(),
-                    self.home_sidebar.collected_playlists.len()
-                ),
-                Language::En => format!(
-                    "{} created, {} collected",
-                    self.home_sidebar.created_playlists.len(),
-                    self.home_sidebar.collected_playlists.len()
-                ),
-            };
+        let response = self.api.top_playlist_highquality(cat, 50).await?;
+        let code = response_code(&response);
+        if code != 200 {
+            return Err(anyhow!(
+                "{} ({}): {}",
+                self.lang_text("精品歌单请求失败", "Failed to fetch high-quality playlists"),
+                code,
+                response_message(&response)
+            ));
+        }
 
-            Ok(())
-        })()
-        .await;
+        let mut items = parse_highquality_playlists(&response);
+        if items.is_empty() {
+            return Err(anyhow!(
+                self.lang_text("该分类暂无歌单", "No playlists in this category")
+            ));
+        }
 
-        self.home_sidebar.loading = false;
-        result
+        for item in &mut items {
+            if let Some(url) = item.cover_url.as_ref() {
+                item.cover.load(self.api.clone(), url.clone());
+            }
+        }
+        self.topbar.recommend_lists[index] = items;
+        self.topbar.recommend_loaded[index] = true;
+        Ok(())
+    }
+
+    async fn switch_recommend_category(&mut self, index: usize) {
+        if index >= self.topbar.recommend_categories_len() {
+            return;
+        }
+        if index == self.topbar.recommend_cat_index {
+            return;
+        }
+        self.topbar.recommend_cat_index = index;
+        if self.topbar.is_recommend_cat_loaded(index) {
+            return;
+        }
+
+        let result = if index == 0 {
+            self.load_topbar_recommend().await
+        } else {
+            self.load_recommend_category(index).await
+        };
+        if let Err(err) = result {
+            self.home.status_line = format!(
+                "{}: {}",
+                self.lang_text("歌单加载失败", "Failed to load playlists"),
+                err
+            );
+        }
+    }
+
+    async fn load_topbar_user_playlists(&mut self) -> Result<()> {
+        let account = match self.api.user_account().await {
+            Ok(v) => v,
+            Err(_) => self.api.login_status().await?,
+        };
+        let account_code = response_code(&account);
+        if account_code != 200 {
+            return Err(anyhow!(
+                "{}({}): {}",
+                self.lang_text("账号信息请求失败", "Failed to fetch account profile"),
+                account_code,
+                response_message(&account)
+            ));
+        }
+
+        let uid = extract_current_user_id(&account).ok_or_else(|| {
+            anyhow!(self.lang_text("未找到当前用户 ID", "Current user id not found"))
+        })?;
+        let user_name = extract_current_user_name(&account)
+            .unwrap_or_else(|| self.lang_text("当前用户", "Current User").to_string());
+
+        let created_response = self
+            .api
+            .user_playlist_create(&uid, TOPBAR_USER_PLAYLIST_LIMIT, 0)
+            .await?;
+        let created_code = response_code(&created_response);
+        if created_code != 200 {
+            return Err(anyhow!(
+                "{}({}): {}",
+                self.lang_text("创建歌单请求失败", "Created playlists request failed"),
+                created_code,
+                response_message(&created_response)
+            ));
+        }
+
+        let collected_response = self
+            .api
+            .user_playlist_collect(&uid, TOPBAR_USER_PLAYLIST_LIMIT, 0)
+            .await?;
+        let collected_code = response_code(&collected_response);
+        if collected_code != 200 {
+            return Err(anyhow!(
+                "{}({}): {}",
+                self.lang_text("收藏歌单请求失败", "Collected playlists request failed"),
+                collected_code,
+                response_message(&collected_response)
+            ));
+        }
+
+        let created_playlists = parse_topbar_playlists(&created_response);
+        let collected_playlists = parse_topbar_playlists(&collected_response);
+        let created_len = created_playlists.len();
+        let collected_len = collected_playlists.len();
+        let liked_playlist_id = extract_liked_playlist_id(&account);
+
+        let mut items = Vec::with_capacity(
+            created_len
+                .saturating_add(collected_len)
+                .saturating_add(1),
+        );
+        if let Some(id) = liked_playlist_id.as_ref() {
+            items.push(TopBarPlaylist::new(
+                Some(id.clone()),
+                false,
+                self.lang_text("我喜欢的音乐", "Liked Songs").to_string(),
+                None,
+            ));
+        }
+        items.extend(
+            created_playlists
+                .into_iter()
+                .filter(|item| {
+                    item.id
+                        .as_deref()
+                        .map(|id| liked_playlist_id.as_deref() != Some(id))
+                        .unwrap_or(true)
+                }),
+        );
+        items.extend(collected_playlists);
+
+        for item in &mut items {
+            if let Some(url) = item.cover_url.as_ref() {
+                item.cover.load(self.api.clone(), url.clone());
+            }
+        }
+
+        self.topbar.user_id = Some(uid);
+        self.topbar.liked_playlist_id = liked_playlist_id;
+        self.topbar.user_name = user_name;
+        self.topbar.lists[TopBarTab::UserPlaylists.index()] = items;
+        self.topbar.status_line = match self.config.language {
+            Language::Zh => format!("创建 {} 个，收藏 {} 个", created_len, collected_len),
+            Language::En => format!("{} created, {} collected", created_len, collected_len),
+        };
+
+        Ok(())
     }
 
     async fn resolve_current_user_id(&mut self) -> Result<String> {
-        if let Some(uid) = self.home_sidebar.user_id.as_ref() {
+        if let Some(uid) = self.topbar.user_id.as_ref() {
             return Ok(uid.clone());
         }
 
@@ -5539,10 +5517,10 @@ impl App {
             anyhow!(self.lang_text("未找到当前用户 ID", "Current user id not found"))
         })?;
 
-        self.home_sidebar.user_id = Some(uid.clone());
-        self.home_sidebar.liked_playlist_id = extract_liked_playlist_id(&account);
+        self.topbar.user_id = Some(uid.clone());
+        self.topbar.liked_playlist_id = extract_liked_playlist_id(&account);
         if let Some(name) = extract_current_user_name(&account) {
-            self.home_sidebar.user_name = name;
+            self.topbar.user_name = name;
         }
 
         Ok(uid)
@@ -5568,7 +5546,7 @@ impl App {
 
     fn is_liked_playlist(&self, playlist_id: &str, title: Option<&str>) -> bool {
         if self
-            .home_sidebar
+            .topbar
             .liked_playlist_id
             .as_deref()
             .map(|id| id == playlist_id)
@@ -6111,13 +6089,14 @@ impl App {
         }
         self.refresh_vip_audio_access().await;
         let _ = self.refresh_liked_song_cache().await;
-        self.home_sidebar = HomeSidebarState::default();
+        self.topbar = TopBarState::default();
         self.playlist_section_return_snapshot = None;
         self.home.status_line = text.to_string();
         self.begin_startup_loading();
-        if let Err(err) = self.load_home_recommendations().await {
-            self.home.status_line = format!("{}，推荐歌单加载失败: {}", text, err);
+        if let Err(err) = self.load_topbar_tab(TopBarTab::UserPlaylists).await {
+            self.home.status_line = format!("{}，歌单加载失败: {}", text, err);
         }
+        let _ = self.load_topbar_tab(TopBarTab::Recommend).await;
         self.finish_startup_loading();
         self.try_restore_playback_memory().await;
     }
@@ -6373,7 +6352,6 @@ fn char_index_for_display_column(text: &str, column: u16) -> usize {
 struct RecommendCard {
     id: Option<String>,
     title: String,
-    subtitle: String,
     cover_url: Option<String>,
 }
 
@@ -6394,65 +6372,23 @@ fn home_daily_song_items(body: &Value) -> Option<&[Value]> {
         })
 }
 
-fn normalize_home_pinned_title(title: &str) -> Option<&'static str> {
+fn topbar_card_is_daily(title: &str) -> bool {
     let compact: String = title.chars().filter(|ch| !ch.is_whitespace()).collect();
-
-    if compact.contains("欧美私人雷达") {
-        return Some("欧美私人雷达");
-    }
-    if compact.contains("私人雷达") {
-        return Some("私人雷达");
-    }
-    if compact.contains("每日推荐") {
-        return Some("每日推荐");
-    }
-
-    None
+    compact.contains("每日推荐")
 }
 
-fn prioritize_home_tiles(
-    api: &ApiState,
-    mut tiles: Vec<HomeTile>,
-    show_more: bool,
-) -> Vec<HomeTile> {
-    let mut pinned = Vec::with_capacity(HOME_PINNED_TITLES.len());
-
-    for target in HOME_PINNED_TITLES {
-        if let Some(index) = tiles
-            .iter()
-            .position(|tile| normalize_home_pinned_title(&tile.title) == Some(target))
-        {
-            let mut tile = tiles.remove(index);
-            tile.title = target.to_string();
-            tile.subtitle.clear();
-            pinned.push(tile);
-            continue;
-        }
-
-        if target == "每日推荐" {
-            pinned.push(HomeTile::placeholder_daily());
-        } else {
-            pinned.push(HomeTile::from_recommendation(
-                api,
-                None,
-                target.to_string(),
-                String::new(),
-                None,
-            ));
-        }
+async fn fetch_daily_recommend_cover(api: &mut ApiState) -> Option<String> {
+    let response = api.recommend_songs().await.ok()?;
+    if response_code(&response) != 200 {
+        return None;
     }
-
-    pinned.extend(tiles);
-
-    if !show_more && pinned.len() > HOME_PINNED_TITLES.len() {
-        pinned.truncate(HOME_PINNED_TITLES.len());
-    }
-
-    if pinned.is_empty() {
-        pinned.push(HomeTile::placeholder_daily());
-    }
-
-    pinned
+    home_daily_song_items(&response.body)
+        .and_then(|songs| {
+            songs
+                .iter()
+                .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
+        })
+        .map(|s| s.to_string())
 }
 
 fn parse_recommend_cards(response: &ApiResponse, limit: usize) -> Vec<RecommendCard> {
@@ -6468,12 +6404,9 @@ fn parse_recommend_cards(response: &ApiResponse, limit: usize) -> Vec<RecommendC
                         .get("name")
                         .and_then(|value| value.as_str())?
                         .to_string();
-                    let subtitle = first_non_empty(item, &["/copywriter", "/creator/nickname"])
-                        .unwrap_or_else(|| "推荐歌单".to_string());
                     Some(RecommendCard {
                         id: parse_value_as_string(item.get("id")),
                         title,
-                        subtitle,
                         cover_url: first_non_empty(item, &["/picUrl", "/coverImgUrl"]),
                     })
                 })
@@ -6496,12 +6429,9 @@ fn parse_personalized_cards(response: &ApiResponse, limit: usize) -> Vec<Recomme
                         .get("name")
                         .and_then(|value| value.as_str())?
                         .to_string();
-                    let subtitle = first_non_empty(item, &["/copywriter", "/creator/nickname"])
-                        .unwrap_or_else(|| "推荐歌单".to_string());
                     Some(RecommendCard {
                         id: parse_value_as_string(item.get("id")),
                         title,
-                        subtitle,
                         cover_url: first_non_empty(item, &["/picUrl", "/coverImgUrl"]),
                     })
                 })
@@ -6511,7 +6441,7 @@ fn parse_personalized_cards(response: &ApiResponse, limit: usize) -> Vec<Recomme
         .unwrap_or_default()
 }
 
-fn parse_home_sidebar_playlists(response: &ApiResponse) -> Vec<HomeSidebarPlaylist> {
+fn parse_topbar_playlists(response: &ApiResponse) -> Vec<TopBarPlaylist> {
     let Some(items) = response
         .body
         .get("playlist")
@@ -6538,30 +6468,55 @@ fn parse_home_sidebar_playlists(response: &ApiResponse) -> Vec<HomeSidebarPlayli
             continue;
         };
 
-        let track_count = item
-            .get("trackCount")
-            .and_then(|value| value.as_u64())
-            .map(|value| value as usize)
-            .or_else(|| {
-                item.get("trackCount")
-                    .and_then(|value| value.as_i64())
-                    .map(|value| value.max(0) as usize)
-            })
-            .unwrap_or(0);
-
-        out.push(HomeSidebarPlaylist {
-            id: parse_value_as_string(item.get("id")),
-            title: title.to_string(),
-            creator: item
-                .pointer("/creator/nickname")
-                .and_then(|value| value.as_str())
-                .unwrap_or("Unknown User")
-                .to_string(),
-            track_count,
-        });
+        out.push(TopBarPlaylist::new(
+            parse_value_as_string(item.get("id")),
+            false,
+            title.to_string(),
+            first_non_empty(item, &["/coverImgUrl", "/picUrl"]),
+        ));
     }
 
     out
+}
+
+fn parse_toplists(response: &ApiResponse) -> Vec<TopBarPlaylist> {
+    let Some(items) = response.body.get("list").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let title = item.get("name").and_then(|value| value.as_str())?;
+            let id = parse_value_as_string(item.get("id"))?;
+            Some(TopBarPlaylist::new(
+                Some(id),
+                false,
+                title.to_string(),
+                first_non_empty(item, &["/coverImgUrl", "/picUrl"]),
+            ))
+        })
+        .collect()
+}
+
+fn parse_highquality_playlists(response: &ApiResponse) -> Vec<TopBarPlaylist> {
+    let Some(items) = response.body.get("playlists").and_then(|value| value.as_array()) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let title = item.get("name").and_then(|value| value.as_str())?;
+            let id = parse_value_as_string(item.get("id"))?;
+            Some(TopBarPlaylist::new(
+                Some(id),
+                false,
+                title.to_string(),
+                first_non_empty(item, &["/coverImgUrl", "/picUrl"]),
+            ))
+        })
+        .collect()
 }
 
 fn extract_current_user_id(response: &ApiResponse) -> Option<String> {
