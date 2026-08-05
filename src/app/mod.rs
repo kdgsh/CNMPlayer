@@ -2417,29 +2417,16 @@ impl App {
     }
 
     async fn open_focused_topbar_entry(&mut self) {
-        let (playlist_id, is_daily, title) = {
-            let Some(item) = self.topbar.focused_playlist() else {
-                self.home.status_line = self
-                    .lang_text("当前分类暂无可打开歌单", "No playlist to open here")
-                    .to_string();
-                return;
-            };
-
-            let item_id = item.id.clone();
-            let Some(playlist_id) = item_id else {
-                self.home.status_line = self
-                    .lang_text(
-                        "当前歌单缺少 ID，无法打开",
-                        "The selected playlist has no ID",
-                    )
-                    .to_string();
-                return;
-            };
-
-            (playlist_id, item.is_daily, item.title.clone())
+        let Some(item) = self.topbar.focused_playlist() else {
+            self.home.status_line = self
+                .lang_text("当前分类暂无可打开歌单", "No playlist to open here")
+                .to_string();
+            return;
         };
 
-        if is_daily {
+        let title = item.title.clone();
+
+        if item.is_daily {
             self.home.status_line = format!("{} {}", self.lang_text("正在加载", "Loading"), title);
             match self.load_daily_recommend_playlist().await {
                 Ok(()) => {
@@ -2458,6 +2445,16 @@ impl App {
             }
             return;
         }
+
+        let Some(playlist_id) = item.id.clone() else {
+            self.home.status_line = self
+                .lang_text(
+                    "当前歌单缺少 ID，无法打开",
+                    "The selected playlist has no ID",
+                )
+                .to_string();
+            return;
+        };
 
         if self.is_liked_playlist(&playlist_id, Some(&title)) {
             let _ = self.refresh_liked_song_cache().await;
