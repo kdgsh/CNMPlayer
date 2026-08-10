@@ -26,16 +26,6 @@ impl ThemeName {
             _ => Self::System,
         }
     }
-
-    pub fn as_label(&self) -> &'static str {
-        match self {
-            ThemeName::System => "System",
-            ThemeName::Latte => "Latte",
-            ThemeName::Frappe => "Frappe",
-            ThemeName::Macchiato => "Macchiato",
-            ThemeName::Mocha => "Mocha",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
