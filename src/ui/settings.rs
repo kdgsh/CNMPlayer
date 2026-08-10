@@ -1,5 +1,7 @@
 use crate::app::{App, Overlay};
-use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
+use crate::data::config::{
+    AudioQuality, BarChannels, BarNumber, Language, SourceProvider, VisualizeMode,
+};
 use crate::tmplayer::data::about::{BrailleImage, about_info};
 use crate::tmplayer::ui::borders::SOLID_BORDER;
 use ratatui::Frame;
@@ -24,6 +26,7 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
         Some(Overlay::Settings) => l(app, " 设置 ", " Settings "),
         Some(Overlay::SettingsPlayback) => l(app, " 播放设置 ", " Playback Settings "),
         Some(Overlay::SettingsKeybinds) => l(app, " 按键绑定 ", " Keybinds "),
+        Some(Overlay::SettingsSource) => l(app, " 音源设置 ", " Source Settings "),
         Some(Overlay::SettingsAbout) => " about ",
         _ => l(app, " 设置 ", " Settings "),
     };
@@ -46,6 +49,7 @@ pub fn draw_settings_modal(frame: &mut Frame, app: &App) {
     match app.overlay {
         Some(Overlay::SettingsPlayback) => draw_playback_settings(frame, app, inner),
         Some(Overlay::SettingsKeybinds) => draw_keybind_settings(frame, app, inner),
+        Some(Overlay::SettingsSource) => draw_source_settings(frame, app, inner),
         _ => draw_root_settings(frame, app, inner),
     }
 }
@@ -96,6 +100,7 @@ fn draw_root_settings(frame: &mut Frame, app: &App, inner: Rect) {
             l(app, "主页更多推荐", "More Home Recommendations"),
             on_off(app, app.config.home_more_recommend)
         ),
+        format!("{}...", l(app, "音源", "Source")),
         l(app, "退出登录", "Logout").to_string(),
         "about".to_string(),
     ];
@@ -189,6 +194,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         format!(
             "{}: {}",
+            l(app, "歌词翻译", "Lyric Translation"),
+            on_off(app, app.config.show_lyric_translation)
+        ),
+        format!(
+            "{}: {}",
             l(app, "音质", "Audio Quality"),
             audio_quality_label(app, app.config.audio_quality)
         ),
@@ -215,6 +225,92 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
             Line::from(Span::styled(format!("  {}", text), style))
         })
         .collect();
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
+        rows[1],
+    );
+
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[2],
+    );
+}
+
+fn draw_source_settings(frame: &mut Frame, app: &App, inner: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(app.theme.color_surface())),
+        rows[0],
+    );
+
+    let provider = match app.config.source.provider {
+        SourceProvider::Netease => l(app, "网易云", "Netease Cloud Music"),
+        SourceProvider::Custom => l(app, "自定义 (LX Music)", "Custom (LX Music)"),
+    };
+    let url_value = if app.config.source.url.is_empty() {
+        l(app, "（未设置）", "(not set)")
+    } else {
+        app.config.source.url.as_str()
+    };
+    let key_value = if app.config.source.api_key.is_empty() {
+        l(app, "（未设置）", "(not set)")
+    } else {
+        app.config.source.api_key.as_str()
+    };
+    let test_value = if app.source_test_status.is_empty() {
+        l(app, "未测试", "Not tested")
+    } else {
+        app.source_test_status.as_str()
+    };
+    let editing = app.settings_source_edit;
+
+    let items = [
+        format!("{}: {}", l(app, "音源类型", "Provider"), provider),
+        format!(
+            "{}: {}{}",
+            l(app, "API 地址", "API URL"),
+            url_value,
+            if editing == Some(1) { "▏" } else { "" }
+        ),
+        format!(
+            "{}: {}{}",
+            l(app, "API Key", "API Key"),
+            key_value,
+            if editing == Some(2) { "▏" } else { "" }
+        ),
+        format!(
+            "{}: {}",
+            l(app, "测试可用性", "Test Availability"),
+            test_value
+        ),
+    ];
+
+    let lines: Vec<Line> = items
+        .iter()
+        .enumerate()
+        .map(|(idx, text)| {
+            let style = if editing == Some(idx) {
+                Style::default()
+                    .fg(app.theme.color_accent())
+                    .add_modifier(Modifier::BOLD)
+            } else if idx == app.settings_source_selected {
+                Style::default()
+                    .fg(app.theme.color_accent2())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(app.theme.color_text())
+            };
+            Line::from(Span::styled(format!("  {}", text), style))
+        })
+        .collect();
+
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
         rows[1],

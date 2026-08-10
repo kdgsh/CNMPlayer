@@ -46,12 +46,14 @@ pub fn draw_page_lyrics_panel(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let (current, next) = app.current_page_lyric_lines();
+    let (current, translation, next) = app.current_page_lyric_lines();
     let (line1, line2) = if current.trim().is_empty() {
         match app.config.language {
             Language::Zh => ("暂无歌词".to_string(), String::new()),
             Language::En => ("No lyrics".to_string(), String::new()),
         }
+    } else if app.config.show_lyric_translation && !translation.trim().is_empty() {
+        (current, translation)
     } else {
         (current, next)
     };
