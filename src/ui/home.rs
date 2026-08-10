@@ -106,10 +106,14 @@ fn draw_home_topbar(frame: &mut Frame, app: &mut App, area: Rect) {
             tab,
         );
 
-        let style = if active {
+        let style = if active && app.topbar.tab_focus {
             Style::default()
                 .fg(app.theme.color_base())
                 .bg(app.theme.color_accent())
+                .add_modifier(Modifier::BOLD)
+        } else if active {
+            Style::default()
+                .fg(app.theme.color_accent())
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(app.theme.color_subtext())
@@ -270,7 +274,9 @@ fn draw_home_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             index,
         );
 
-        let focused = index == app.topbar.tab_focused();
+        let focused = !app.topbar.tab_focus
+            && !app.topbar.recommend_cat_focus
+            && index == app.topbar.tab_focused();
         let tile_bg = if focused {
             app.theme.color_surface()
         } else {

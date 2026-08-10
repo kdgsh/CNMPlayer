@@ -219,6 +219,25 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &mut App, area: Rect) {
         area,
     );
 
+    if app.playlist.loading || app.playlist.tracks.is_empty() {
+        let text = if app.playlist.loading {
+            match app.config.language {
+                Language::Zh => "正在加载...",
+                Language::En => "Loading...",
+            }
+        } else {
+            match app.config.language {
+                Language::Zh => "暂无歌曲",
+                Language::En => "No tracks",
+            }
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(app.theme.color_subtext())),
+            inner,
+        );
+        return;
+    }
+
     let visible = inner.height as usize;
     app.playlist.set_visible_rows(visible);
     let offset = app.playlist.effective_scroll_offset();
