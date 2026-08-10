@@ -24,6 +24,7 @@ pub struct UiLayout {
 
     pub info_progress: Rect,
     pub info_controls: Rect,
+    pub info_meta: Rect,
 
     pub info_cover_image: Rect,
 
@@ -148,6 +149,7 @@ impl Tui {
             let info_l = info_panel::layout(cols[0]);
             layout_out.info_progress = info_l.progress;
             layout_out.info_controls = info_l.controls;
+            layout_out.info_meta = info_l.meta;
 
             // For kitty graphics, we draw into the inner area (optional border).
             layout_out.info_cover_image = info_l.cover.inner(ratatui::layout::Margin {
@@ -572,6 +574,11 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
             "{}: {}",
             lang_text(app, "页面歌词", "Page Lyrics"),
             lang_on_off(app, app.config.page_lyrics)
+        ),
+        format!(
+            "{}: {}",
+            lang_text(app, "歌词翻译", "Lyric Translation"),
+            lang_on_off(app, app.config.show_lyric_translation)
         ),
         format!(
             "{}: {}",
@@ -1490,6 +1497,12 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
                 });
             }
         }
+    }
+
+    if contains(layout.info_meta, col, row)
+        && col == layout.info_meta.x.saturating_add(layout.info_meta.width.saturating_sub(1))
+    {
+        return Some(Action::ToggleFavorite);
     }
 
     if contains(layout.info_controls, col, row) {

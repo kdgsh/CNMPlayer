@@ -92,6 +92,7 @@ impl EqSettings {
 pub struct LyricLine {
     pub start_ms: u64,
     pub text: String,
+    pub translation: Option<String>,
 }
 
 #[derive(Debug, Clone)]

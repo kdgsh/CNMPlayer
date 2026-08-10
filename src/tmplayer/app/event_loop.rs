@@ -145,6 +145,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         language: app.language,
         graphics_protocol: app.config.graphics_protocol,
         page_lyrics: app.config.page_lyrics,
+        show_lyric_translation: app.config.show_lyric_translation,
         audio_quality: match app.config.audio_quality {
             AudioQuality::Standard => crate::data::config::AudioQuality::Standard,
             AudioQuality::Higher => crate::data::config::AudioQuality::Higher,
@@ -1168,11 +1169,15 @@ async fn handle_action(
                     save_and_sync_host_config(app, host_bridge).await;
                 }
                 7 => {
+                    app.config.show_lyric_translation = !app.config.show_lyric_translation;
+                    save_and_sync_host_config(app, host_bridge).await;
+                }
+                8 => {
                     app.config.audio_quality =
                         app.config.audio_quality.cycle(1, app.vip_audio_unlocked || app.source_is_custom);
                     save_and_sync_host_config(app, host_bridge).await;
                 }
-                8 => {
+                9 => {
                     app.config.playback_memory = !app.config.playback_memory;
                     save_and_sync_host_config(app, host_bridge).await;
                 }
@@ -1344,7 +1349,7 @@ async fn handle_action(
                     app.settings_selected -= 1;
                 }
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 9;
+                let count = 10;
                 if app.bar_settings_selected == 0 {
                     app.bar_settings_selected = count - 1;
                 } else {
@@ -1377,7 +1382,7 @@ async fn handle_action(
                 let count = 10;
                 app.settings_selected = (app.settings_selected + 1) % count;
             } else if app.overlay == Overlay::BarSettingsModal {
-                let count = 9;
+                let count = 10;
                 app.bar_settings_selected = (app.bar_settings_selected + 1) % count;
             } else if app.overlay == Overlay::LocalAudioSettingsModal {
                 let count = 5;
