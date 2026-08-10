@@ -131,6 +131,10 @@ impl MusicSource for NeteaseSource {
 //   Response: { "code": 200, "url": "https://..." }
 // ---------------------------------------------------------------------------
 
+// Well-known Netease song ids used to probe custom source availability;
+// some ids may be unavailable on a given source, so try several.
+const SOURCE_TEST_SONG_IDS: [&str; 3] = ["33894312", "347230", "28014074"];
+
 #[derive(Clone)]
 pub struct CustomApiSource {
     api_url: String,
@@ -146,6 +150,46 @@ impl CustomApiSource {
             api_key,
             http,
         }
+    }
+
+    pub async fn check_availability(&self) -> Result<()> {
+        let mut last_err = String::from("no url in response");
+        for song_id in SOURCE_TEST_SONG_IDS {
+            let url = format!(
+                "{}/url?source=wy&songId={}&quality=128k",
+                self.api_url, song_id
+            );
+            let resp = self.http.get(&url);
+            let req = if self.api_key.is_empty() {
+                resp
+            } else {
+                resp.header("X-API-Key", &self.api_key)
+                    .header("X-Request-Key", &self.api_key)
+            };
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => return Err(anyhow!("connection failed: {e}")),
+            };
+            let text = match resp.text().await {
+                Ok(t) => t,
+                Err(e) => return Err(anyhow!("read response failed: {e}")),
+            };
+            let parsed: serde_json::Value = match serde_json::from_str(&text) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if parsed["url"].as_str().is_some_and(|s| !s.is_empty())
+                || parsed["data"]["url"].as_str().is_some_and(|s| !s.is_empty())
+            {
+                return Ok(());
+            }
+            last_err = format!(
+                "{} (code={})",
+                parsed["message"].as_str().unwrap_or("no url in response"),
+                parsed["code"].as_i64().unwrap_or(-1)
+            );
+        }
+        Err(anyhow!("{last_err}"))
     }
 
     async fn get_json(&self, url: &str) -> Result<serde_json::Value> {
