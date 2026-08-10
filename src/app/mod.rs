@@ -4,7 +4,7 @@ pub(crate) mod player;
 pub mod source;
 pub(crate) mod streaming;
 
-use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language};
+use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, SourceProvider};
 use crate::data::config::{Config, GraphicsProtocol};
 use crate::data::playback_session;
 use crate::data::session;
@@ -35,7 +35,7 @@ use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -53,10 +53,11 @@ use streaming::StreamingReader;
 
 const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
-const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
+const SUGGEST_DEBOUNCE: Duration = Duration::from_millis(300);
 const TOPBAR_USER_PLAYLIST_LIMIT: usize = 100;
-const SETTINGS_ROOT_ITEMS: usize = 10;
-const SETTINGS_PLAYBACK_ITEMS: usize = 9;
+const SETTINGS_ROOT_ITEMS: usize = 11;
+const SETTINGS_SOURCE_ITEMS: usize = 4;
+const SETTINGS_PLAYBACK_ITEMS: usize = 10;
 pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 17;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
@@ -123,6 +124,7 @@ pub enum Overlay {
     SettingsPlayback,
     SettingsKeybinds,
     SettingsAbout,
+    SettingsSource,
     SearchBox,
 }
 
@@ -260,6 +262,74 @@ pub fn peek_shared_future<T>(cover_bytes: &Option<SharedFuture<T>>) -> Option<&T
     cover_bytes.as_ref()?.peek()?.as_ref()
 }
 
+fn normalize_cover_url(url: &str) -> &str {
+    let key = url.trim();
+    let without_query = key.split('?').next().unwrap_or(key);
+    match without_query.find("://") {
+        Some(i) => {
+            let rest = &without_query[i + 3..];
+            match rest.find('/') {
+                Some(j) => &rest[j..],
+                None => rest,
+            }
+        }
+        None => without_query,
+    }
+}
+
+fn cover_cache_path(cache_dir: &Path, url: &str) -> Option<PathBuf> {
+    let key = url.trim();
+    if key.is_empty() {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    normalize_cover_url(key).hash(&mut hasher);
+    Some(cache_dir.join(format!("{:016x}.img", hasher.finish())))
+}
+
+fn cover_urls_same(a: &str, b: &str) -> bool {
+    normalize_cover_url(a) == normalize_cover_url(b)
+}
+
+fn load_fallback_cover(
+    cover: &mut CoverFetchState,
+    api: &ApiState,
+    cache_dir: &Path,
+    url: Option<String>,
+) {
+    if cover.image.is_none()
+        && let Some(url) = url
+    {
+        cover.load(api.clone(), cache_dir.to_path_buf(), url);
+    }
+}
+
+async fn load_cover_bytes_cached(
+    api: &ApiState,
+    cache_dir: Option<&Path>,
+    url: &str,
+) -> Option<Vec<u8>> {
+    if let Some(dir) = cache_dir
+        && let Some(path) = cover_cache_path(dir, url)
+        && let Ok(bytes) = fs::read(&path)
+        && !bytes.is_empty()
+    {
+        return Some(bytes);
+    }
+
+    let bytes = api.fetch_cover_bytes(url).await.ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    if let Some(dir) = cache_dir
+        && let Some(path) = cover_cache_path(dir, url)
+    {
+        let _ = fs::create_dir_all(dir);
+        let _ = fs::write(path, &bytes);
+    }
+    Some(bytes)
+}
+
 #[derive(Clone, Default)]
 pub struct CoverFetchState {
     pub url: Option<String>,
@@ -270,10 +340,10 @@ pub struct CoverFetchState {
 }
 
 impl CoverFetchState {
-    pub fn load(&mut self, api: ApiState, url: String) {
+    pub fn load(&mut self, api: ApiState, cache_dir: PathBuf, url: String) {
         let cover_url = url.clone();
         let fut = async move {
-            let bytes = api.fetch_cover_bytes(&cover_url).await.ok();
+            let bytes = load_cover_bytes_cached(&api, Some(&cache_dir), &cover_url).await;
             let flatten = bytes.filter(|x| !x.is_empty());
             let image = flatten.and_then(|x| image::load_from_memory(&x).ok());
 
@@ -285,6 +355,16 @@ impl CoverFetchState {
         self.url = Some(url);
         self.size = Size::ZERO;
         self.protocol = None;
+    }
+
+    pub fn set_image(&mut self, image: Arc<DynamicImage>, url: String) {
+        let fut: Pin<Box<dyn Future<Output = Option<Arc<DynamicImage>>> + Send>> =
+            Box::pin(std::future::ready(Some(image)));
+        self.image = Some(shot_and_share(fut));
+        self.url = Some(url);
+        self.size = Size::ZERO;
+        self.protocol = None;
+        self.ascii = None;
     }
 
     pub fn render(
@@ -446,6 +526,7 @@ pub struct TopBarState {
     pub visible_rows: usize,
     pub loaded: [bool; 3],
     pub loading: bool,
+    pub load: Option<TopbarLoadHandle>,
     pub status_line: String,
     pub user_id: Option<String>,
     pub liked_playlist_id: Option<String>,
@@ -453,6 +534,7 @@ pub struct TopBarState {
     pub recommend_categories: Vec<&'static str>,
     pub recommend_cat_index: usize,
     pub recommend_cat_focus: bool,
+    pub tab_focus: bool,
     pub recommend_lists: Vec<Vec<TopBarPlaylist>>,
     pub recommend_loaded: Vec<bool>,
     pub recommend_focused: Vec<usize>,
@@ -471,6 +553,7 @@ impl Default for TopBarState {
             visible_rows: 1,
             loaded: [false, false, false],
             loading: false,
+            load: None,
             status_line: String::new(),
             user_id: None,
             liked_playlist_id: None,
@@ -478,6 +561,7 @@ impl Default for TopBarState {
             recommend_categories: cats.clone(),
             recommend_cat_index: 0,
             recommend_cat_focus: false,
+            tab_focus: false,
             recommend_lists: cats.iter().map(|_| Vec::new()).collect(),
             recommend_loaded: cats.iter().map(|_| false).collect(),
             recommend_focused: cats.iter().map(|_| 0).collect(),
@@ -633,15 +717,24 @@ impl TopBarState {
     }
 
     pub fn focus_up(&mut self) {
+        if self.tab_focus {
+            return;
+        }
         let cols = self.columns.max(1);
-        if self.is_recommend() && !self.recommend_cat_focus {
-            if self.tab_focused() < cols {
-                self.recommend_cat_focus = true;
-                return;
-            }
+        if self.recommend_cat_focus {
+            self.recommend_cat_focus = false;
+            self.tab_focus = true;
+            return;
+        }
+        if self.is_recommend() && self.tab_focused() < cols {
+            self.recommend_cat_focus = true;
+            return;
         }
         let focus = *self.current_focus_mut();
         if focus < cols {
+            if !self.is_recommend() {
+                self.tab_focus = true;
+            }
             return;
         }
         *self.current_focus_mut() = focus - cols;
@@ -649,6 +742,13 @@ impl TopBarState {
     }
 
     pub fn focus_down(&mut self) {
+        if self.tab_focus {
+            self.tab_focus = false;
+            if self.is_recommend() {
+                self.recommend_cat_focus = true;
+            }
+            return;
+        }
         let len = self.tab_len();
         if len == 0 {
             return;
@@ -731,6 +831,61 @@ impl TopBarState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopbarLoadKind {
+    Tab(TopBarTab),
+    Category(usize),
+}
+
+#[derive(Debug, Clone)]
+pub struct TopbarRawItem {
+    pub id: Option<String>,
+    pub is_daily: bool,
+    pub title: String,
+    pub cover_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TopbarLoadData {
+    pub kind: TopbarLoadKind,
+    pub items: Vec<TopbarRawItem>,
+    pub user_id: Option<String>,
+    pub user_name: String,
+    pub liked_playlist_id: Option<String>,
+    pub status_line: String,
+}
+
+type TopbarLoadFuture =
+    Shared<Pin<Box<dyn Future<Output = Result<TopbarLoadData, String>> + Send>>>;
+
+pub struct TopbarLoadHandle {
+    pub kind: TopbarLoadKind,
+    pub fut: TopbarLoadFuture,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TopbarEntryLoadKind {
+    Daily,
+    Detail,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlaylistDetailData {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub description: String,
+    pub cover_url: Option<String>,
+    pub tracks: Vec<PlaylistTrack>,
+}
+
+type PlaylistLoadFuture =
+    Shared<Pin<Box<dyn Future<Output = Result<PlaylistDetailData, String>> + Send>>>;
+type LikedLoadFuture = Shared<Pin<Box<dyn Future<Output = Option<HashSet<String>>> + Send>>>;
+type SuggestLoadFuture =
+    Shared<Pin<Box<dyn Future<Output = Option<Vec<SuggestItem>>> + Send>>>;
+type SourceTestFuture = Shared<Pin<Box<dyn Future<Output = Result<String, String>> + Send>>>;
+
 #[derive(Debug, Clone)]
 pub struct PlaylistTrack {
     pub kind: PlaylistTrackKind,
@@ -751,6 +906,7 @@ pub enum PlaylistTrackKind {
     Single,
 }
 
+#[derive(Clone)]
 pub struct SearchItem {
     pub left_label: String,
     pub right_label: String,
@@ -792,6 +948,12 @@ impl SearchFilter {
             Self::Playlist => "歌单",
         }
     }
+}
+
+#[derive(Clone)]
+pub struct SuggestItem {
+    pub kind: SearchFilter,
+    pub item: SearchItem,
 }
 
 pub struct SearchState {
@@ -941,6 +1103,7 @@ pub struct PlaylistState {
     pub scroll_offset: usize,
     pub visible_rows: usize,
     pub tracks: Vec<PlaylistTrack>,
+    pub loading: bool,
 }
 
 impl Default for PlaylistState {
@@ -955,6 +1118,7 @@ impl Default for PlaylistState {
             scroll_offset: 0,
             visible_rows: 1,
             tracks: Vec::new(),
+            loading: false,
         }
     }
 }
@@ -1083,13 +1247,14 @@ impl AuthorTile {
 
     fn from_album(
         api: &ApiState,
+        cache_dir: PathBuf,
         title: String,
         subtitle: String,
         cover_url: Option<String>,
         kind: AuthorTileKind,
     ) -> Self {
         let mut cover = CoverFetchState::default();
-        cover_url.map(|x| cover.load(api.clone(), x));
+        cover_url.map(|x| cover.load(api.clone(), cache_dir, x));
         Self {
             kind,
             title,
@@ -1412,6 +1577,7 @@ pub struct PlayerBarHitTargets {
     pub play_pause: Option<HitRect>,
     pub next: Option<HitRect>,
     pub progress: Option<HitRect>,
+    pub like: Option<HitRect>,
 }
 
 #[derive(Debug, Clone)]
@@ -1493,13 +1659,29 @@ async fn loop_lyric_fetch(
             api.set_cookie(cookie.to_string());
         }
 
+        // Song ids are Netease ids regardless of source; one request returns
+        // both lrc and tlyric. Custom sources only resolve playback URLs.
+        if let Ok(lyric) = api.lyric(&req.song_id).await
+            && let Some(lrc) = lyric.body.pointer("/lrc/lyric").and_then(|v| v.as_str())
+        {
+            let mut lines = parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc));
+            if let Some(lines) = lines.as_mut()
+                && let Some(tlyric) = lyric
+                    .body
+                    .pointer("/tlyric/lyric")
+                    .and_then(|v| v.as_str())
+                && let Some(translations) = parse_lrc(tlyric)
+            {
+                merge_lyric_translations(lines, &translations);
+            }
+            return lines;
+        }
+
         if let Ok(Some(raw_lrc)) = api.fetch_lyric_raw(&req.song_id).await {
             return parse_lrc(&raw_lrc).or_else(|| parse_plain_lyrics(&raw_lrc));
         }
 
-        let lyric = api.lyric(&req.song_id).await.ok()?;
-        let lrc = lyric.body.pointer("/lrc/lyric")?.as_str()?;
-        parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc))
+        None
     };
     while let Some(req) = rx.recv().await {
         let lyrics = process_fn(&req).await;
@@ -1507,6 +1689,17 @@ async fn loop_lyric_fetch(
             song_id: req.song_id,
             lyrics,
         });
+    }
+}
+
+fn merge_lyric_translations(lines: &mut [LyricLine], translations: &[LyricLine]) {
+    for translation in translations {
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.start_ms == translation.start_ms && line.translation.is_none())
+        {
+            line.translation = Some(translation.text.clone());
+        }
     }
 }
 
@@ -1539,10 +1732,19 @@ pub struct App {
     pub search_box_input: String,
     pub search_box_cursor: usize,
     pub search_box_anim_height: u16,
+    pub search_suggest: Vec<SuggestItem>,
+    pub search_suggest_focus: Option<usize>,
+    search_suggest_query: String,
+    search_suggest_deadline: Option<Instant>,
+    search_suggest_load: Option<SuggestLoadFuture>,
     pub settings_selected: usize,
     pub settings_playback_selected: usize,
     pub settings_keybind_selected: usize,
     pub settings_keybind_rebinding: Option<usize>,
+    pub settings_source_selected: usize,
+    pub settings_source_edit: Option<usize>,
+    pub source_test_status: String,
+    source_test_load: Option<SourceTestFuture>,
     pub session_cookie: Option<String>,
     pub should_quit: bool,
     pub launch_fullscreen_requested: bool,
@@ -1568,6 +1770,8 @@ pub struct App {
     lyric_fetch_rx: Receiver<LyricFetchResult>,
     lyric_fetch_inflight_song_id: Option<String>,
     lyric_fetch_last_attempt_at: Option<Instant>,
+    playlist_load: Option<PlaylistLoadFuture>,
+    liked_load: Option<LikedLoadFuture>,
     mpris_bridge: MprisBridge,
     mpris_last_sync_at: Instant,
     mpris_last_signature: Option<u64>,
@@ -1648,10 +1852,19 @@ impl App {
             search_box_input: String::new(),
             search_box_cursor: 0,
             search_box_anim_height: 0,
+            search_suggest: Vec::new(),
+            search_suggest_focus: None,
+            search_suggest_query: String::new(),
+            search_suggest_deadline: None,
+            search_suggest_load: None,
             settings_selected: 0,
             settings_playback_selected: 0,
             settings_keybind_selected: 0,
             settings_keybind_rebinding: None,
+            settings_source_selected: 0,
+            settings_source_edit: None,
+            source_test_status: String::new(),
+            source_test_load: None,
             session_cookie: None,
             should_quit: false,
             launch_fullscreen_requested: false,
@@ -1677,6 +1890,8 @@ impl App {
             lyric_fetch_rx,
             lyric_fetch_inflight_song_id: None,
             lyric_fetch_last_attempt_at: None,
+            playlist_load: None,
+            liked_load: None,
             mpris_bridge,
             mpris_last_sync_at: Instant::now(),
             mpris_last_signature: None,
@@ -1706,13 +1921,9 @@ impl App {
                     let _ = app.refresh_liked_song_cache().await;
                     app.home.status_line = "已恢复上次登录，正在加载歌单".to_string();
                     app.begin_startup_loading();
-                    if let Err(err) = app
-                        .load_topbar_tab(TopBarTab::UserPlaylists)
-                        .await
-                    {
+                    if let Err(err) = app.load_startup_tabs().await {
                         app.home.status_line = format!("已恢复登录，但歌单加载失败: {}", err);
                     }
-                    let _ = app.load_topbar_tab(TopBarTab::Recommend).await;
                     app.finish_startup_loading();
                     app.try_restore_playback_memory().await;
                     return Ok(app);
@@ -1732,10 +1943,15 @@ impl App {
         self.tick_audio().await;
         self.tick_cover_fetch();
         self.tick_lyric_fetch();
+        self.tick_topbar_load();
+        self.tick_playlist_load();
+        self.tick_liked_song_load();
         self.apply_mpris_control_events().await;
         self.sync_mpris_exposure();
         self.tick_main_cava();
         self.tick_search_box_animation();
+        self.tick_suggest();
+        self.tick_source_test();
         self.tick_startup_loading();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
@@ -1888,6 +2104,12 @@ impl App {
                         return;
                     }
                 }
+                if let Some(rect) = self.player_bar_hits.like {
+                    if rect.contains(col, row) {
+                        self.toggle_like_hotkey().await;
+                        return;
+                    }
+                }
                 if let Some(rect) = self.player_bar_hits.progress {
                     if rect.contains(col, row) {
                         let relative_x = col.saturating_sub(rect.x) as f32;
@@ -1917,6 +2139,11 @@ impl App {
             || self
                 .player_bar_hits
                 .next
+                .map(|rect| rect.contains(col, row))
+                .unwrap_or(false)
+            || self
+                .player_bar_hits
+                .like
                 .map(|rect| rect.contains(col, row))
                 .unwrap_or(false)
             || self
@@ -2349,6 +2576,7 @@ impl App {
             Overlay::SettingsPlayback => self.handle_settings_playback_key(key),
             Overlay::SettingsKeybinds => self.handle_settings_keybinds_key(key),
             Overlay::SettingsAbout => self.handle_settings_about_key(key),
+            Overlay::SettingsSource => self.handle_settings_source_key(key),
             Overlay::SearchBox => self.handle_search_box_key(key).await,
         }
     }
@@ -2416,7 +2644,7 @@ impl App {
         }
     }
 
-    async fn open_focused_topbar_entry(&mut self) {
+    fn open_focused_topbar_entry(&mut self) {
         let Some(item) = self.topbar.focused_playlist() else {
             self.home.status_line = self
                 .lang_text("当前分类暂无可打开歌单", "No playlist to open here")
@@ -2425,24 +2653,23 @@ impl App {
         };
 
         let title = item.title.clone();
+        let cover_image = peek_shared_future(&item.cover.image).cloned();
+        let cover_url = item.cover_url.clone();
 
         if item.is_daily {
-            self.home.status_line = format!("{} {}", self.lang_text("正在加载", "Loading"), title);
-            match self.load_daily_recommend_playlist().await {
-                Ok(()) => {
-                    self.playlist_return_page = Page::Home;
-                    self.playlist_section_return_snapshot = None;
-                    self.page = Page::Playlist;
-                    self.home.status_line = format!("{} {}", self.lang_text("已打开", "Opened"), title);
-                }
-                Err(err) => {
-                    self.home.status_line = format!(
-                        "{}: {}",
-                        self.lang_text("打开每日推荐失败", "Failed to open daily recommendations"),
-                        err
-                    );
-                }
+            if self.playlist_load.is_some()
+                && self.page == Page::Playlist
+                && self.playlist.id.as_deref() == Some(HOME_DAILY_RECOMMEND_TILE_ID)
+            {
+                return;
             }
+            self.start_playlist_load(
+                title,
+                TopbarEntryLoadKind::Daily,
+                None,
+                cover_url,
+                cover_image,
+            );
             return;
         }
 
@@ -2456,28 +2683,152 @@ impl App {
             return;
         };
 
-        if self.is_liked_playlist(&playlist_id, Some(&title)) {
-            let _ = self.refresh_liked_song_cache().await;
-            self.refresh_now_playing_like_state().await;
+        if self.playlist_load.is_some()
+            && self.page == Page::Playlist
+            && self.playlist.id.as_deref() == Some(playlist_id.as_str())
+        {
+            return;
         }
 
-        self.home.status_line = format!("{} {}", self.lang_text("正在加载", "Loading"), title);
+        self.start_playlist_load(
+            title,
+            TopbarEntryLoadKind::Detail,
+            Some(playlist_id),
+            cover_url,
+            cover_image,
+        );
+    }
 
-        match self.load_playlist_detail(&playlist_id).await {
-            Ok(()) => {
-                self.playlist_return_page = Page::Home;
-                self.playlist_section_return_snapshot = None;
-                self.page = Page::Playlist;
-                self.home.status_line = format!("{} {}", self.lang_text("已打开", "Opened"), title);
+    fn start_playlist_load(
+        &mut self,
+        title: String,
+        kind: TopbarEntryLoadKind,
+        id: Option<String>,
+        cover_url: Option<String>,
+        cover_image: Option<Arc<DynamicImage>>,
+    ) {
+        let lang = self.config.language;
+        let api = self.api.clone();
+        let fetch_id = id.clone();
+        let fut: Pin<Box<dyn Future<Output = Result<PlaylistDetailData, String>> + Send>> =
+            Box::pin(async move {
+                let mut api = api;
+                match kind {
+                    TopbarEntryLoadKind::Daily => fetch_daily_recommend_data(&mut api, lang).await,
+                    TopbarEntryLoadKind::Detail => {
+                        let playlist_id = fetch_id.as_deref().unwrap_or_default();
+                        fetch_playlist_detail_data(&mut api, playlist_id).await
+                    }
+                }
+            });
+
+        self.playlist.id = match kind {
+            TopbarEntryLoadKind::Daily => Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string()),
+            TopbarEntryLoadKind::Detail => id,
+        };
+        self.playlist.title = title;
+        self.playlist.artist = pick_text(lang, "网易云音乐", "Netease Cloud Music").to_string();
+        self.playlist.description = pick_text(lang, "正在加载歌单...", "Loading playlist...").to_string();
+        self.playlist.tracks.clear();
+        self.playlist.cover = CoverFetchState::default();
+        match (cover_image, cover_url) {
+            (Some(image), Some(url)) => self.playlist.cover.set_image(image, url),
+            (None, Some(url)) => {
+                self.playlist
+                    .cover
+                    .load(self.api.clone(), self.cover_cache_dir.clone(), url);
             }
-            Err(err) => {
+            _ => {}
+        }
+        self.playlist.loading = true;
+        self.playlist_load = Some(shot_and_share(fut));
+        self.playlist_return_page = Page::Home;
+        self.playlist_section_return_snapshot = None;
+        self.page = Page::Playlist;
+    }
+
+    fn tick_playlist_load(&mut self) {
+        let result = match &self.playlist_load {
+            Some(fut) => match fut.peek() {
+                Some(result) => result.clone(),
+                None => return,
+            },
+            None => return,
+        };
+        self.playlist_load = None;
+        match result {
+            Ok(data) => {
+                let liked = self.is_liked_playlist(&data.id, Some(&data.title));
+                self.apply_playlist_detail(data);
+                if liked {
+                    self.start_liked_song_refresh();
+                }
+                self.home.status_line = format!(
+                    "{} {}",
+                    self.lang_text("已打开", "Opened"),
+                    self.playlist.title
+                );
+            }
+            Err(message) => {
+                self.playlist.loading = false;
+                self.playlist.description = message.clone();
                 self.home.status_line = format!(
                     "{}: {}",
-                    self.lang_text("打开歌单失败", "Failed to open playlist"),
-                    err
+                    self.lang_text("加载失败", "Failed to load"),
+                    message
                 );
             }
         }
+    }
+
+    fn apply_playlist_detail(&mut self, data: PlaylistDetailData) {
+        self.playlist.id = Some(data.id);
+        self.playlist.title = data.title;
+        self.playlist.artist = data.artist;
+        self.playlist.description = data.description;
+        self.playlist.set_tracks(data.tracks);
+        self.playlist.loading = false;
+        match data.cover_url {
+            Some(url) if self.playlist.cover.url.as_deref().is_none_or(|u| !cover_urls_same(u, &url)) => {
+                self.playlist
+                    .cover
+                    .load(self.api.clone(), self.cover_cache_dir.clone(), url)
+            }
+            Some(_) => {}
+            None => self.playlist.cover = CoverFetchState::default(),
+        }
+    }
+
+    fn start_liked_song_refresh(&mut self) {
+        if self.liked_load.is_some() {
+            return;
+        }
+        let mut api = self.api.clone();
+        let user_id = self.topbar.user_id.clone();
+        let fut: Pin<Box<dyn Future<Output = Option<HashSet<String>>> + Send>> = Box::pin(
+            async move { fetch_liked_song_ids(&mut api, user_id).await },
+        );
+        self.liked_load = Some(shot_and_share(fut));
+    }
+
+    fn tick_liked_song_load(&mut self) {
+        let result = match &self.liked_load {
+            Some(fut) => match fut.peek() {
+                Some(result) => result.clone(),
+                None => return,
+            },
+            None => return,
+        };
+        self.liked_load = None;
+        let Some(ids) = result else {
+            return;
+        };
+        self.liked_song_ids = ids;
+        self.now_playing_liked = self
+            .now_playing
+            .as_ref()
+            .map(|track| self.liked_song_ids.contains(&track.song_id))
+            .unwrap_or(false);
     }
 
     fn keybind_action_from_event(&self, key: KeyEvent) -> Option<KeybindAction> {
@@ -2991,15 +3342,7 @@ impl App {
     }
 
     fn cover_cache_path_for_url(&self, url: &str) -> Option<PathBuf> {
-        let key = url.trim();
-        if key.is_empty() {
-            return None;
-        }
-
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        let hash = hasher.finish();
-        Some(self.cover_cache_dir.join(format!("{hash:016x}.img")))
+        cover_cache_path(&self.cover_cache_dir, url)
     }
 
     fn load_cover_from_disk_cache(&self, url: &str) -> Option<Vec<u8>> {
@@ -3235,11 +3578,9 @@ impl App {
                 continue;
             }
 
-            if let (Some(bytes), Some(url)) = (track.cover.as_deref(), track.cover_url.as_deref()) {
-                let mut hasher = DefaultHasher::new();
-                url.hash(&mut hasher);
-                let hash = hasher.finish();
-                let path = cover_cache_dir.join(format!("{hash:016x}.img"));
+            if let (Some(bytes), Some(url)) = (track.cover.as_deref(), track.cover_url.as_deref())
+                && let Some(path) = cover_cache_path(&cover_cache_dir, url)
+            {
                 let _ = fs::create_dir_all(&cover_cache_dir);
                 let _ = fs::write(path, bytes);
             }
@@ -3442,7 +3783,11 @@ impl App {
             )
             .to_string();
         self.playlist.set_tracks(tracks);
-        section_cover.map(|x| self.playlist.cover.load(self.api.clone(), x));
+        section_cover.map(|x| {
+            self.playlist
+                .cover
+                .load(self.api.clone(), self.cover_cache_dir.clone(), x)
+        });
         self.page = Page::Playlist;
     }
 
@@ -3482,10 +3827,12 @@ impl App {
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
                 self.playlist_section_return_snapshot = section_snapshot;
-                match (&self.playlist.cover.image, fallback_cover_url) {
-                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
-                    _ => (),
-                }
+                load_fallback_cover(
+                    &mut self.playlist.cover,
+                    &self.api,
+                    &self.cover_cache_dir,
+                    fallback_cover_url,
+                );
                 self.set_runtime_status(format!(
                     "{} {}",
                     self.lang_text("已打开专辑", "Opened album"),
@@ -3529,10 +3876,12 @@ impl App {
 
         match self.load_author_detail(&artist_id).await {
             Ok(()) => {
-                match (&self.author.cover.image, fallback_cover_url) {
-                    (None, Some(url)) => self.author.cover.load(self.api.clone(), url),
-                    _ => (),
-                }
+                load_fallback_cover(
+                    &mut self.author.cover,
+                    &self.api,
+                    &self.cover_cache_dir,
+                    fallback_cover_url,
+                );
                 self.playlist_section_return_snapshot = None;
                 self.page = Page::Author;
                 self.search.status_line = format!("已打开作者 {}", self.author.title);
@@ -3580,15 +3929,11 @@ impl App {
 
         match self.load_album_detail(&album_id).await {
             Ok(()) => {
-                self.playlist_section_return_snapshot = None;
-                match (&self.playlist.cover.image, fallback_cover_url) {
-                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
-                    _ => (),
-                }
-                self.playlist_return_page = Page::Search;
-                self.page = Page::Playlist;
-                self.search.status_line =
-                    format!("{} {}", self.lang_text("已打开专辑", "Opened album"), title);
+                self.finish_open_search_page(
+                    self.lang_text("已打开专辑", "Opened album"),
+                    &title,
+                    fallback_cover_url,
+                );
             }
             Err(err) => {
                 self.search.status_line = format!(
@@ -3631,17 +3976,10 @@ impl App {
 
         match self.load_playlist_detail(&playlist_id).await {
             Ok(()) => {
-                self.playlist_section_return_snapshot = None;
-                match (&self.playlist.cover.image, fallback_cover_url) {
-                    (None, Some(url)) => self.playlist.cover.load(self.api.clone(), url),
-                    _ => (),
-                }
-                self.playlist_return_page = Page::Search;
-                self.page = Page::Playlist;
-                self.search.status_line = format!(
-                    "{} {}",
+                self.finish_open_search_page(
                     self.lang_text("已打开歌单", "Opened playlist"),
-                    title
+                    &title,
+                    fallback_cover_url,
                 );
             }
             Err(err) => {
@@ -3652,6 +3990,19 @@ impl App {
                 );
             }
         }
+    }
+
+    fn finish_open_search_page(&mut self, ok_text: &str, title: &str, cover_url: Option<String>) {
+        self.playlist_section_return_snapshot = None;
+        load_fallback_cover(
+            &mut self.playlist.cover,
+            &self.api,
+            &self.cover_cache_dir,
+            cover_url,
+        );
+        self.playlist_return_page = Page::Search;
+        self.page = Page::Playlist;
+        self.search.status_line = format!("{} {}", ok_text, title);
     }
 
     async fn activate_focused_search_result(&mut self) {
@@ -3673,6 +4024,7 @@ impl App {
     fn open_settings(&mut self) {
         self.settings_selected = 0;
         self.settings_keybind_rebinding = None;
+        self.settings_source_edit = None;
         self.overlay = Some(Overlay::Settings);
     }
 
@@ -3692,7 +4044,29 @@ impl App {
 
         match key.code {
             KeyCode::Esc => self.close_overlay(),
-            KeyCode::Enter => self.execute_search_from_box().await,
+            KeyCode::Enter => {
+                if let Some(focus) = self.search_suggest_focus {
+                    self.open_suggest_item(focus).await;
+                } else {
+                    self.execute_search_from_box().await;
+                }
+            }
+            KeyCode::Up => {
+                if !self.search_suggest.is_empty() {
+                    self.search_suggest_focus = Some(match self.search_suggest_focus {
+                        Some(focus) if focus > 0 => focus - 1,
+                        _ => self.search_suggest.len() - 1,
+                    });
+                }
+            }
+            KeyCode::Down => {
+                if !self.search_suggest.is_empty() {
+                    self.search_suggest_focus = Some(match self.search_suggest_focus {
+                        Some(focus) if focus + 1 < self.search_suggest.len() => focus + 1,
+                        _ => 0,
+                    });
+                }
+            }
             KeyCode::Backspace => {
                 if self.search_box_cursor > 0 {
                     self.search_box_cursor =
@@ -3818,8 +4192,13 @@ impl App {
                 }
                 6 => self.apply_settings_root_delta(1).await,
                 7 => self.apply_settings_root_delta(1).await,
-                8 => self.logout_to_login().await,
-                9 => {
+                8 => {
+                    self.settings_source_selected = 0;
+                    self.settings_source_edit = None;
+                    self.overlay = Some(Overlay::SettingsSource);
+                }
+                9 => self.logout_to_login().await,
+                10 => {
                     self.overlay = Some(Overlay::SettingsAbout);
                 }
                 _ => {}
@@ -3978,6 +4357,141 @@ impl App {
         }
     }
 
+    fn handle_settings_source_key(&mut self, key: KeyEvent) {
+        if let Some(edit_idx) = self.settings_source_edit {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.settings_source_edit = None;
+                    let _ = self.config.save();
+                    self.set_runtime_status(self.lang_text(
+                        "已保存，重启后生效",
+                        "Saved, restart to apply",
+                    ));
+                }
+                KeyCode::Char(c)
+                    if key.modifiers == KeyModifiers::CONTROL && (c == 'u' || c == 'U') =>
+                {
+                    self.source_field_mut(edit_idx).clear();
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.source_field_mut(edit_idx).push(c);
+                }
+                KeyCode::Backspace => {
+                    self.source_field_mut(edit_idx).pop();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.settings_source_edit = None;
+                self.overlay = Some(Overlay::Settings);
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.close_overlay();
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                if self.settings_source_selected == 0 {
+                    self.settings_source_selected = SETTINGS_SOURCE_ITEMS - 1;
+                } else {
+                    self.settings_source_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.settings_source_selected =
+                    (self.settings_source_selected + 1) % SETTINGS_SOURCE_ITEMS;
+            }
+            KeyCode::Left => self.apply_settings_source_delta(-1),
+            KeyCode::Right | KeyCode::Enter => match self.settings_source_selected {
+                0 => self.apply_settings_source_delta(1),
+                1 | 2 => self.settings_source_edit = Some(self.settings_source_selected),
+                3 => self.start_source_test(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn source_field_mut(&mut self, index: usize) -> &mut String {
+        if index == 1 {
+            &mut self.config.source.url
+        } else {
+            &mut self.config.source.api_key
+        }
+    }
+
+    fn apply_settings_source_delta(&mut self, delta: i32) {
+        if delta == 0 || self.settings_source_selected != 0 {
+            return;
+        }
+        self.config.source.provider = match self.config.source.provider {
+            SourceProvider::Netease => SourceProvider::Custom,
+            SourceProvider::Custom => SourceProvider::Netease,
+        };
+        let _ = self.config.save();
+        self.set_runtime_status(self.lang_text(
+            "音源已切换，重启后生效",
+            "Source switched, restart to apply",
+        ));
+    }
+
+    fn start_source_test(&mut self) {
+        if self.source_test_load.is_some() {
+            return;
+        }
+        if self.config.source.url.trim().is_empty() {
+            self.source_test_status = self
+                .lang_text("请先填写 API 地址", "Please fill in the API URL first")
+                .to_string();
+            return;
+        }
+        let lang = self.config.language;
+        self.source_test_status = pick_text(lang, "测试中...", "Testing...").to_string();
+        let api_url = self.config.source.url.clone();
+        let api_key = self.config.source.api_key.clone();
+        let http = self.api.http_client().clone();
+        let ok_text = pick_text(lang, "可用", "Available").to_string();
+        let err_prefix = pick_text(lang, "不可用", "Unavailable").to_string();
+        let fut = Box::pin(async move {
+            let source = crate::app::source::CustomApiSource::new(api_url, api_key, http);
+            match source.check_availability().await {
+                Ok(()) => Ok(ok_text),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let msg = if msg.chars().count() > 80 {
+                        let mut clipped: String = msg.chars().take(80).collect();
+                        clipped.push_str("...");
+                        clipped
+                    } else {
+                        msg
+                    };
+                    Err(format!("{}: {}", err_prefix, msg))
+                }
+            }
+        });
+        self.source_test_load = Some(shot_and_share(fut));
+    }
+
+    fn tick_source_test(&mut self) {
+        let Some(load) = &self.source_test_load else {
+            return;
+        };
+        let Some(result) = load.peek().cloned() else {
+            return;
+        };
+        match result {
+            Ok(msg) => self.source_test_status = msg,
+            Err(err) => self.source_test_status = err,
+        }
+        self.source_test_load = None;
+    }
+
     async fn apply_settings_root_delta(&mut self, delta: i32) {
         match self.settings_selected {
             0 => {
@@ -4089,13 +4603,17 @@ impl App {
                 let _ = self.config.save();
             }
             7 => {
+                self.config.show_lyric_translation = !self.config.show_lyric_translation;
+                let _ = self.config.save();
+            }
+            8 => {
                 let next = self
                     .config
                     .audio_quality
                     .cycle(delta, self.quality_unlocked());
                 self.set_audio_quality(next);
             }
-            8 => {
+            9 => {
                 self.config.playback_memory = !self.config.playback_memory;
                 let _ = self.config.save();
                 if self.config.playback_memory {
@@ -4150,19 +4668,13 @@ impl App {
         }
     }
 
-    async fn switch_topbar_tab(&mut self, tab: TopBarTab) {
+    fn switch_topbar_tab(&mut self, tab: TopBarTab) {
         if self.topbar.active_tab == tab {
             return;
         }
         self.topbar.switch_tab(tab);
         if !self.topbar.is_tab_loaded(tab) {
-            if let Err(err) = self.load_topbar_tab(tab).await {
-                self.home.status_line = format!(
-                    "{}: {}",
-                    self.lang_text("加载失败", "Failed to load"),
-                    err
-                );
-            }
+            self.start_topbar_load(TopbarLoadKind::Tab(tab));
         }
     }
 
@@ -4171,31 +4683,41 @@ impl App {
             KeyCode::Tab => {
                 let tabs = TopBarTab::all();
                 let idx = self.topbar.active_tab.index();
-                self.switch_topbar_tab(tabs[(idx + 1) % 3]).await;
+                self.switch_topbar_tab(tabs[(idx + 1) % 3]);
+                self.topbar.tab_focus = false;
             }
             KeyCode::BackTab => {
                 let tabs = TopBarTab::all();
                 let idx = self.topbar.active_tab.index();
-                self.switch_topbar_tab(tabs[(idx + 2) % 3]).await;
+                self.switch_topbar_tab(tabs[(idx + 2) % 3]);
+                self.topbar.tab_focus = false;
             }
             KeyCode::Left => {
-                if self.topbar.active_tab == TopBarTab::Recommend
+                if self.topbar.tab_focus {
+                    let tabs = TopBarTab::all();
+                    let idx = self.topbar.active_tab.index();
+                    self.switch_topbar_tab(tabs[(idx + 2) % 3]);
+                } else if self.topbar.active_tab == TopBarTab::Recommend
                     && self.topbar.recommend_cat_focus
                 {
                     let total = self.topbar.recommend_categories_len();
                     let next = (self.topbar.recommend_cat_index + total - 1) % total;
-                    self.switch_recommend_category(next).await;
+                    self.switch_recommend_category(next);
                 } else {
                     self.topbar.focus_left();
                 }
             }
             KeyCode::Right => {
-                if self.topbar.active_tab == TopBarTab::Recommend
+                if self.topbar.tab_focus {
+                    let tabs = TopBarTab::all();
+                    let idx = self.topbar.active_tab.index();
+                    self.switch_topbar_tab(tabs[(idx + 1) % 3]);
+                } else if self.topbar.active_tab == TopBarTab::Recommend
                     && self.topbar.recommend_cat_focus
                 {
                     let total = self.topbar.recommend_categories_len();
                     let next = (self.topbar.recommend_cat_index + 1) % total;
-                    self.switch_recommend_category(next).await;
+                    self.switch_recommend_category(next);
                 } else {
                     self.topbar.focus_right();
                 }
@@ -4204,7 +4726,9 @@ impl App {
             KeyCode::PageUp => self.topbar.page_up(),
             KeyCode::PageDown => self.topbar.page_down(),
             KeyCode::Down => {
-                if self.topbar.active_tab == TopBarTab::Recommend
+                if self.topbar.tab_focus {
+                    self.topbar.focus_down();
+                } else if self.topbar.active_tab == TopBarTab::Recommend
                     && self.topbar.recommend_cat_focus
                 {
                     self.topbar.recommend_cat_focus = false;
@@ -4213,12 +4737,14 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if self.topbar.active_tab == TopBarTab::Recommend
+                if self.topbar.tab_focus {
+                    self.topbar.focus_down();
+                } else if self.topbar.active_tab == TopBarTab::Recommend
                     && self.topbar.recommend_cat_focus
                 {
                     self.topbar.recommend_cat_focus = false;
                 } else {
-                    self.open_focused_topbar_entry().await;
+                    self.open_focused_topbar_entry();
                 }
             }
             _ => {}
@@ -4275,11 +4801,98 @@ impl App {
 
     fn tick_search_box_animation(&mut self) {
         if matches!(self.overlay, Some(Overlay::SearchBox)) {
-            self.search_box_anim_height =
-                (self.search_box_anim_height + 1).min(SEARCH_BOX_TARGET_HEIGHT);
+            let target = crate::ui::search_box::search_box_target_height(self);
+            self.search_box_anim_height = (self.search_box_anim_height + 1).min(target);
         } else {
             self.search_box_anim_height = 0;
         }
+    }
+
+    fn tick_suggest(&mut self) {
+        if !matches!(self.overlay, Some(Overlay::SearchBox)) {
+            return;
+        }
+
+        let (query, _) = parse_search_input(&self.search_box_input);
+
+        if query.is_empty() {
+            if !self.search_suggest.is_empty() || self.search_suggest_load.is_some() {
+                self.search_suggest.clear();
+                self.search_suggest_focus = None;
+                self.search_suggest_load = None;
+            }
+            return;
+        }
+
+        if self.search_suggest_query != query {
+            self.search_suggest_query = query.clone();
+            self.search_suggest_deadline = Some(Instant::now() + SUGGEST_DEBOUNCE);
+            return;
+        }
+
+        match self.search_suggest_deadline {
+            Some(deadline) if Instant::now() >= deadline => {
+                self.search_suggest_deadline = None;
+                if self.search_suggest_load.is_none() {
+                    self.start_suggest_load(query);
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(load) = &self.search_suggest_load
+            && let Some(result) = load.peek().cloned()
+        {
+            self.search_suggest_load = None;
+            if self.search_suggest_query == parse_search_input(&self.search_box_input).0 {
+                if let Some(items) = result {
+                    self.search_suggest = items;
+                    let Some(focus) = self.search_suggest_focus else {
+                        return;
+                    };
+                    if self.search_suggest.is_empty() {
+                        self.search_suggest_focus = None;
+                    } else {
+                        self.search_suggest_focus = Some(focus.min(self.search_suggest.len() - 1));
+                    }
+                } else {
+                    self.search_suggest.clear();
+                    self.search_suggest_focus = None;
+                }
+            }
+        }
+    }
+
+    fn start_suggest_load(&mut self, query: String) {
+        let mut api = self.api.clone();
+        let fut: Pin<Box<dyn Future<Output = Option<Vec<SuggestItem>>> + Send>> =
+            Box::pin(async move {
+                match api.search_suggest(&query).await {
+                    Ok(response) => Some(parse_suggest_web(&response)),
+                    Err(_) => None,
+                }
+            });
+        self.search_suggest_load = Some(shot_and_share(fut));
+    }
+
+    async fn open_suggest_item(&mut self, index: usize) {
+        let Some(suggest) = self.search_suggest.get(index) else {
+            return;
+        };
+        let item = suggest.item.clone();
+        let kind = suggest.kind;
+
+        self.search.results = vec![item];
+        self.search.focused_idx = 0;
+        self.search.scroll_offset = 0;
+        self.search.filter = kind;
+        self.search.query = self.search_box_input.clone();
+
+        self.activate_focused_search_result().await;
+
+        self.search_suggest.clear();
+        self.search_suggest_focus = None;
+        self.close_overlay();
     }
 
     fn begin_startup_loading(&mut self) {
@@ -4366,8 +4979,9 @@ impl App {
                     .map(|(_, tab)| *tab);
                 if let Some(tab) = tab_hit {
                     if tab != self.topbar.active_tab {
-                        self.switch_topbar_tab(tab).await;
+                        self.switch_topbar_tab(tab);
                     }
+                    self.topbar.tab_focus = false;
                     return true;
                 }
 
@@ -4378,8 +4992,9 @@ impl App {
                         .find(|(rect, _)| rect.contains(col, row))
                         .map(|(_, idx)| *idx);
                     if let Some(idx) = cat_hit {
+                        self.topbar.tab_focus = false;
                         if idx != self.topbar.recommend_cat_index {
-                            self.switch_recommend_category(idx).await;
+                            self.switch_recommend_category(idx);
                         } else {
                             self.topbar.recommend_cat_focus = false;
                         }
@@ -4394,8 +5009,9 @@ impl App {
                     .map(|(_, idx)| *idx);
                 if let Some(idx) = hit {
                     self.topbar.set_current_focus(idx);
+                    self.topbar.tab_focus = false;
                     if self.is_double_content_click(Page::Home, idx) {
-                        self.open_focused_topbar_entry().await;
+                        self.open_focused_topbar_entry();
                     }
                     return true;
                 }
@@ -4460,6 +5076,11 @@ impl App {
         self.search_box_input = self.search.query.clone();
         self.search_box_cursor = char_count(&self.search_box_input);
         self.search_box_anim_height = 0;
+        self.search_suggest.clear();
+        self.search_suggest_focus = None;
+        self.search_suggest_query.clear();
+        self.search_suggest_deadline = None;
+        self.search_suggest_load = None;
         self.overlay = Some(Overlay::SearchBox);
     }
 
@@ -4485,6 +5106,8 @@ impl App {
         }
         self.playlist_section_return_snapshot = None;
         self.page = Page::Search;
+        self.search_suggest.clear();
+        self.search_suggest_focus = None;
         self.close_overlay();
     }
 
@@ -4506,6 +5129,7 @@ impl App {
             language: self.config.language,
             graphics_protocol: self.config.graphics_protocol,
             page_lyrics: self.config.page_lyrics,
+            show_lyric_translation: self.config.show_lyric_translation,
             audio_quality: self.config.audio_quality,
             eq_bands_db: self.config.eq_bands_db,
             playback_memory: self.config.playback_memory,
@@ -4556,6 +5180,11 @@ impl App {
 
         if self.config.page_lyrics != sync.page_lyrics {
             self.config.page_lyrics = sync.page_lyrics;
+            changed = true;
+        }
+
+        if self.config.show_lyric_translation != sync.show_lyric_translation {
+            self.config.show_lyric_translation = sync.show_lyric_translation;
             changed = true;
         }
 
@@ -4980,15 +5609,15 @@ impl App {
         self.vip_audio_unlocked || self.api.source_is_custom()
     }
 
-    pub fn current_page_lyric_lines(&self) -> (String, String) {
+    pub fn current_page_lyric_lines(&self) -> (String, String, String) {
         let Some(track) = self.now_playing.as_ref() else {
-            return (String::new(), String::new());
+            return (String::new(), String::new(), String::new());
         };
         let Some(lines) = track.lyrics.as_ref() else {
-            return (String::new(), String::new());
+            return (String::new(), String::new(), String::new());
         };
         if lines.is_empty() {
-            return (String::new(), String::new());
+            return (String::new(), String::new(), String::new());
         }
 
         let pos_ms = self.playback_position().as_millis() as u64;
@@ -5005,11 +5634,15 @@ impl App {
             .get(idx)
             .map(|line| line.text.clone())
             .unwrap_or_default();
+        let translation = lines
+            .get(idx)
+            .and_then(|line| line.translation.clone())
+            .unwrap_or_default();
         let next = lines
             .get(idx + 1)
             .map(|line| line.text.clone())
             .unwrap_or_default();
-        (current, next)
+        (current, translation, next)
     }
 
     async fn logout_to_login(&mut self) {
@@ -5225,149 +5858,144 @@ impl App {
 
     async fn load_topbar_tab(&mut self, tab: TopBarTab) -> Result<()> {
         self.topbar.loading = true;
-        let result = match tab {
-            TopBarTab::UserPlaylists => self.load_topbar_user_playlists().await,
-            TopBarTab::Toplists => self.load_topbar_toplists().await,
-            TopBarTab::Recommend => self.load_topbar_recommend().await,
+        let lang = self.config.language;
+        let cached_user_id = self.topbar.user_id.clone();
+        let result =
+            fetch_topbar_tab_data(&mut self.api, TopbarLoadKind::Tab(tab), lang, cached_user_id)
+                .await;
+        let result = match result {
+            Ok(data) => {
+                self.apply_topbar_load(data);
+                Ok(())
+            }
+            Err(message) => Err(anyhow!(message)),
         };
         self.topbar.loading = false;
-        if result.is_ok() {
-            self.topbar.mark_tab_loaded(tab);
-        }
         result
     }
 
-    async fn load_topbar_toplists(&mut self) -> Result<()> {
-        let response = self.api.toplist().await?;
-        let code = response_code(&response);
-        if code != 200 {
-            return Err(anyhow!(
-                "{} ({}): {}",
-                self.lang_text("排行榜请求失败", "Failed to fetch toplists"),
-                code,
-                response_message(&response)
-            ));
-        }
-
-        let mut items = parse_toplists(&response);
-        if items.is_empty() {
-            return Err(anyhow!(
-                self.lang_text("排行榜数据为空", "Toplist data is empty")
-            ));
-        }
-
-        for item in &mut items {
-            if let Some(url) = item.cover_url.as_ref() {
-                item.cover.load(self.api.clone(), url.clone());
-            }
-        }
-        self.topbar.lists[TopBarTab::Toplists.index()] = items;
-        self.topbar.status_line = self
-            .lang_text("网易云官方排行榜", "Netease official toplists")
-            .to_string();
-        Ok(())
-    }
-
-    async fn load_topbar_recommend(&mut self) -> Result<()> {
-        let mut daily_api = self.api.clone();
-        let mut resource_api = self.api.clone();
-        let mut personalized_api = self.api.clone();
-        let (daily_cover, resource_res, personalized_res) = tokio::join!(
-            async move { fetch_daily_recommend_cover(&mut daily_api).await },
-            async move { resource_api.recommend_resource().await },
-            async move { personalized_api.personalized(100).await },
+    async fn load_startup_tabs(&mut self) -> Result<(), String> {
+        self.topbar.loading = true;
+        let lang = self.config.language;
+        let cached_user_id = self.topbar.user_id.clone();
+        let mut user_api = self.api.clone();
+        let mut recommend_api = self.api.clone();
+        let (user_res, recommend_res) = tokio::join!(
+            fetch_topbar_tab_data(
+                &mut user_api,
+                TopbarLoadKind::Tab(TopBarTab::UserPlaylists),
+                lang,
+                cached_user_id,
+            ),
+            fetch_topbar_tab_data(
+                &mut recommend_api,
+                TopbarLoadKind::Tab(TopBarTab::Recommend),
+                lang,
+                None,
+            ),
         );
-
-        let mut items: Vec<TopBarPlaylist> = Vec::new();
-        items.push(TopBarPlaylist::new(
-            None,
-            true,
-            self.lang_text("每日推荐", "Daily Recommendations").to_string(),
-            daily_cover,
-        ));
-
-        if let Ok(response) = resource_res {
-            for card in parse_recommend_cards(&response, 24) {
-                if !topbar_card_is_daily(&card.title) {
-                    items.push(TopBarPlaylist::new(
-                        card.id,
-                        false,
-                        card.title,
-                        card.cover_url,
-                    ));
-                }
+        let user_result = match user_res {
+            Ok(data) => {
+                self.apply_topbar_load(data);
+                Ok(())
             }
+            Err(message) => Err(message),
+        };
+        if let Ok(data) = recommend_res {
+            self.apply_topbar_load(data);
         }
+        self.topbar.loading = false;
+        user_result
+    }
 
-        if let Ok(response) = personalized_res {
-            for card in parse_personalized_cards(&response, 100) {
-                if !topbar_card_is_daily(&card.title) {
-                    items.push(TopBarPlaylist::new(
-                        card.id,
-                        false,
-                        card.title,
-                        card.cover_url,
-                    ));
-                }
-            }
+    fn start_topbar_load(&mut self, kind: TopbarLoadKind) {
+        let kind = match kind {
+            TopbarLoadKind::Category(0) => TopbarLoadKind::Tab(TopBarTab::Recommend),
+            other => other,
+        };
+        if let Some(handle) = &self.topbar.load
+            && handle.kind == kind
+        {
+            return;
         }
-
-        let mut seen = HashSet::new();
-        items.retain(|item| {
-            item.id
-                .as_deref()
-                .map(|id| seen.insert(id.to_string()))
-                .unwrap_or(true)
+        let api = self.api.clone();
+        let lang = self.config.language;
+        let cached_user_id = self.topbar.user_id.clone();
+        let fut: Pin<Box<dyn Future<Output = Result<TopbarLoadData, String>> + Send>> =
+            Box::pin(async move {
+                let mut api = api;
+                fetch_topbar_tab_data(&mut api, kind, lang, cached_user_id).await
+            });
+        self.topbar.load = Some(TopbarLoadHandle {
+            kind,
+            fut: shot_and_share(fut),
         });
-
-        for item in &mut items {
-            if let Some(url) = item.cover_url.as_ref() {
-                item.cover.load(self.api.clone(), url.clone());
-            }
-        }
-        self.topbar.recommend_lists[0] = items;
-        self.topbar.recommend_loaded[0] = true;
-        self.topbar.status_line = self
-            .lang_text("每日推荐 + 每日精选 + 个性化推荐歌单", "Daily songs, picks & personalized playlists")
-            .to_string();
-        Ok(())
+        self.topbar.loading = true;
     }
 
-    async fn load_recommend_category(&mut self, index: usize) -> Result<()> {
-        let cat = self.topbar.recommend_category_name(index);
-        if cat.is_empty() || cat == "推荐" {
-            return Err(anyhow!("invalid category index"));
-        }
-
-        let response = self.api.top_playlist_highquality(cat, 50).await?;
-        let code = response_code(&response);
-        if code != 200 {
-            return Err(anyhow!(
-                "{} ({}): {}",
-                self.lang_text("精品歌单请求失败", "Failed to fetch high-quality playlists"),
-                code,
-                response_message(&response)
-            ));
-        }
-
-        let mut items = parse_highquality_playlists(&response);
-        if items.is_empty() {
-            return Err(anyhow!(
-                self.lang_text("该分类暂无歌单", "No playlists in this category")
-            ));
-        }
-
-        for item in &mut items {
-            if let Some(url) = item.cover_url.as_ref() {
-                item.cover.load(self.api.clone(), url.clone());
+    fn tick_topbar_load(&mut self) {
+        let result = match &self.topbar.load {
+            Some(handle) => match handle.fut.peek() {
+                Some(result) => result.clone(),
+                None => return,
+            },
+            None => return,
+        };
+        self.topbar.load = None;
+        self.topbar.loading = false;
+        match result {
+            Ok(data) => self.apply_topbar_load(data),
+            Err(message) => {
+                self.home.status_line = format!(
+                    "{}: {}",
+                    self.lang_text("加载失败", "Failed to load"),
+                    message
+                );
             }
         }
-        self.topbar.recommend_lists[index] = items;
-        self.topbar.recommend_loaded[index] = true;
-        Ok(())
     }
 
-    async fn switch_recommend_category(&mut self, index: usize) {
+    fn apply_topbar_load(&mut self, data: TopbarLoadData) {
+        let kind = data.kind;
+        let mut items = Vec::with_capacity(data.items.len());
+        for raw in data.items {
+            let mut item = TopBarPlaylist::new(raw.id, raw.is_daily, raw.title, raw.cover_url);
+            if let Some(url) = item.cover_url.as_ref() {
+                item.cover
+                .load(self.api.clone(), self.cover_cache_dir.clone(), url.clone());
+            }
+            items.push(item);
+        }
+        match kind {
+            TopbarLoadKind::Tab(TopBarTab::UserPlaylists) => {
+                self.topbar.user_id = data.user_id;
+                if let Some(id) = data.liked_playlist_id {
+                    self.topbar.liked_playlist_id = Some(id);
+                }
+                if !data.user_name.is_empty() {
+                    self.topbar.user_name = data.user_name;
+                }
+                self.topbar.lists[TopBarTab::UserPlaylists.index()] = items;
+                self.topbar.mark_tab_loaded(TopBarTab::UserPlaylists);
+            }
+            TopbarLoadKind::Tab(TopBarTab::Toplists) => {
+                self.topbar.lists[TopBarTab::Toplists.index()] = items;
+                self.topbar.mark_tab_loaded(TopBarTab::Toplists);
+            }
+            TopbarLoadKind::Tab(TopBarTab::Recommend) => {
+                self.topbar.recommend_lists[0] = items;
+                self.topbar.recommend_loaded[0] = true;
+                self.topbar.mark_tab_loaded(TopBarTab::Recommend);
+            }
+            TopbarLoadKind::Category(index) => {
+                self.topbar.recommend_lists[index] = items;
+                self.topbar.recommend_loaded[index] = true;
+            }
+        }
+        self.topbar.status_line = data.status_line;
+    }
+
+    fn switch_recommend_category(&mut self, index: usize) {
         if index >= self.topbar.recommend_categories_len() {
             return;
         }
@@ -5378,117 +6006,11 @@ impl App {
         if self.topbar.is_recommend_cat_loaded(index) {
             return;
         }
-
-        let result = if index == 0 {
-            self.load_topbar_recommend().await
+        self.start_topbar_load(if index == 0 {
+            TopbarLoadKind::Tab(TopBarTab::Recommend)
         } else {
-            self.load_recommend_category(index).await
-        };
-        if let Err(err) = result {
-            self.home.status_line = format!(
-                "{}: {}",
-                self.lang_text("歌单加载失败", "Failed to load playlists"),
-                err
-            );
-        }
-    }
-
-    async fn load_topbar_user_playlists(&mut self) -> Result<()> {
-        let account = match self.api.user_account().await {
-            Ok(v) => v,
-            Err(_) => self.api.login_status().await?,
-        };
-        let account_code = response_code(&account);
-        if account_code != 200 {
-            return Err(anyhow!(
-                "{}({}): {}",
-                self.lang_text("账号信息请求失败", "Failed to fetch account profile"),
-                account_code,
-                response_message(&account)
-            ));
-        }
-
-        let uid = extract_current_user_id(&account).ok_or_else(|| {
-            anyhow!(self.lang_text("未找到当前用户 ID", "Current user id not found"))
-        })?;
-        let user_name = extract_current_user_name(&account)
-            .unwrap_or_else(|| self.lang_text("当前用户", "Current User").to_string());
-
-        let created_response = self
-            .api
-            .user_playlist_create(&uid, TOPBAR_USER_PLAYLIST_LIMIT, 0)
-            .await?;
-        let created_code = response_code(&created_response);
-        if created_code != 200 {
-            return Err(anyhow!(
-                "{}({}): {}",
-                self.lang_text("创建歌单请求失败", "Created playlists request failed"),
-                created_code,
-                response_message(&created_response)
-            ));
-        }
-
-        let collected_response = self
-            .api
-            .user_playlist_collect(&uid, TOPBAR_USER_PLAYLIST_LIMIT, 0)
-            .await?;
-        let collected_code = response_code(&collected_response);
-        if collected_code != 200 {
-            return Err(anyhow!(
-                "{}({}): {}",
-                self.lang_text("收藏歌单请求失败", "Collected playlists request failed"),
-                collected_code,
-                response_message(&collected_response)
-            ));
-        }
-
-        let created_playlists = parse_topbar_playlists(&created_response);
-        let collected_playlists = parse_topbar_playlists(&collected_response);
-        let created_len = created_playlists.len();
-        let collected_len = collected_playlists.len();
-        let liked_playlist_id = extract_liked_playlist_id(&account);
-
-        let mut items = Vec::with_capacity(
-            created_len
-                .saturating_add(collected_len)
-                .saturating_add(1),
-        );
-        if let Some(id) = liked_playlist_id.as_ref() {
-            items.push(TopBarPlaylist::new(
-                Some(id.clone()),
-                false,
-                self.lang_text("我喜欢的音乐", "Liked Songs").to_string(),
-                None,
-            ));
-        }
-        items.extend(
-            created_playlists
-                .into_iter()
-                .filter(|item| {
-                    item.id
-                        .as_deref()
-                        .map(|id| liked_playlist_id.as_deref() != Some(id))
-                        .unwrap_or(true)
-                }),
-        );
-        items.extend(collected_playlists);
-
-        for item in &mut items {
-            if let Some(url) = item.cover_url.as_ref() {
-                item.cover.load(self.api.clone(), url.clone());
-            }
-        }
-
-        self.topbar.user_id = Some(uid);
-        self.topbar.liked_playlist_id = liked_playlist_id;
-        self.topbar.user_name = user_name;
-        self.topbar.lists[TopBarTab::UserPlaylists.index()] = items;
-        self.topbar.status_line = match self.config.language {
-            Language::Zh => format!("创建 {} 个，收藏 {} 个", created_len, collected_len),
-            Language::En => format!("{} created, {} collected", created_len, collected_len),
-        };
-
-        Ok(())
+            TopbarLoadKind::Category(index)
+        });
     }
 
     async fn resolve_current_user_id(&mut self) -> Result<String> {
@@ -5559,99 +6081,13 @@ impl App {
     }
 
     async fn load_playlist_detail(&mut self, playlist_id: &str) -> Result<()> {
-        let response = self.api.playlist_detail(playlist_id).await?;
-        let code = response_code(&response);
-        if code != 200 {
-            return Err(anyhow!(
-                "请求失败({}): {}",
-                code,
-                response_message(&response)
-            ));
-        }
-
-        let playlist = response
-            .body
-            .get("playlist")
-            .ok_or_else(|| anyhow!("歌单数据缺失"))?;
-
-        let title = playlist
-            .get("name")
-            .and_then(|value| value.as_str())
-            .unwrap_or("未命名歌单")
-            .to_string();
-
-        if self.is_liked_playlist(playlist_id, Some(&title)) {
+        let data = fetch_playlist_detail_data(&mut self.api, playlist_id)
+            .await
+            .map_err(anyhow::Error::msg)?;
+        if self.is_liked_playlist(&data.id, Some(&data.title)) {
             let _ = self.refresh_liked_song_cache().await;
         }
-
-        let artist = playlist
-            .pointer("/creator/nickname")
-            .and_then(|value| value.as_str())
-            .unwrap_or("网易云音乐")
-            .to_string();
-
-        let description = first_non_empty(
-            playlist,
-            &["/description", "/copywriter", "/creator/signature"],
-        )
-        .unwrap_or_else(|| "暂无简介".to_string());
-
-        let cover_url = first_non_empty(playlist, &["/coverImgUrl", "/picUrl"]);
-
-        let tracks = playlist
-            .get("tracks")
-            .and_then(|value| value.as_array())
-            .map(|items| parse_tracks(items))
-            .unwrap_or_default();
-
-        self.playlist.id = Some(playlist_id.to_string());
-        self.playlist.title = title;
-        self.playlist.artist = artist;
-        self.playlist.description = description;
-        self.playlist.set_tracks(tracks);
-        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
-        Ok(())
-    }
-
-    async fn load_daily_recommend_playlist(&mut self) -> Result<()> {
-        let response = self.api.recommend_songs().await?;
-        let code = response_code(&response);
-        if code != 200 {
-            return Err(anyhow!(
-                "请求失败({}): {}",
-                code,
-                response_message(&response)
-            ));
-        }
-
-        let songs = home_daily_song_items(&response.body).ok_or_else(|| {
-            anyhow!(self.lang_text("每日推荐数据缺失", "Daily recommendations are missing"))
-        })?;
-
-        let tracks = parse_tracks(songs);
-        if tracks.is_empty() {
-            return Err(anyhow!(
-                self.lang_text("每日推荐为空", "Daily recommendations are empty")
-            ));
-        }
-
-        let cover_url = tracks.iter().find_map(|track| track.cover_url.clone());
-
-        self.playlist.id = Some(HOME_DAILY_RECOMMEND_TILE_ID.to_string());
-        self.playlist.title = self
-            .lang_text("每日推荐", "Daily Recommendations")
-            .to_string();
-        self.playlist.artist = self
-            .lang_text("网易云音乐", "Netease Cloud Music")
-            .to_string();
-        self.playlist.description = self
-            .lang_text(
-                "来自网易云每日推荐歌曲，按 Enter 播放",
-                "Daily songs from Netease. Press Enter to play",
-            )
-            .to_string();
-        self.playlist.set_tracks(tracks);
-        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
+        self.apply_playlist_detail(data);
         Ok(())
     }
 
@@ -5713,7 +6149,11 @@ impl App {
         self.playlist.artist = artist;
         self.playlist.description = description;
         self.playlist.set_tracks(tracks);
-        cover_url.map(|x| self.playlist.cover.load(self.api.clone(), x));
+        cover_url.map(|x| {
+            self.playlist
+                .cover
+                .load(self.api.clone(), self.cover_cache_dir.clone(), x)
+        });
         Ok(())
     }
 
@@ -5875,6 +6315,7 @@ impl App {
         let mut tiles = vec![
             AuthorTile::from_album(
                 &self.api,
+                self.cover_cache_dir.clone(),
                 self.lang_text("热门歌曲", "Hot Songs").to_string(),
                 format!("{} {}", hot_count, self.lang_text("首", "tracks")),
                 hot_songs
@@ -5885,6 +6326,7 @@ impl App {
             ),
             AuthorTile::from_album(
                 &self.api,
+                self.cover_cache_dir.clone(),
                 self.lang_text("专辑", "Albums").to_string(),
                 format!("{} {}", album_count, self.lang_text("张", "items")),
                 albums
@@ -5895,6 +6337,7 @@ impl App {
             ),
             AuthorTile::from_album(
                 &self.api,
+                self.cover_cache_dir.clone(),
                 "EP".to_string(),
                 format!("{} {}", ep_count, self.lang_text("张", "items")),
                 eps.first()
@@ -5904,6 +6347,7 @@ impl App {
             ),
             AuthorTile::from_album(
                 &self.api,
+                self.cover_cache_dir.clone(),
                 "Single".to_string(),
                 format!("{} {}", single_count, self.lang_text("张", "items")),
                 singles
@@ -5931,7 +6375,11 @@ impl App {
             ),
         };
         self.author.description = description;
-        cover_url.map(|x| self.author.cover.load(self.api.clone(), x));
+        cover_url.map(|x| {
+            self.author
+                .cover
+                .load(self.api.clone(), self.cover_cache_dir.clone(), x)
+        });
         self.author.set_tiles(tiles);
         self.author.hot_songs = hot_songs;
         self.author.albums = albums;
@@ -6090,10 +6538,9 @@ impl App {
         self.playlist_section_return_snapshot = None;
         self.home.status_line = text.to_string();
         self.begin_startup_loading();
-        if let Err(err) = self.load_topbar_tab(TopBarTab::UserPlaylists).await {
+        if let Err(err) = self.load_startup_tabs().await {
             self.home.status_line = format!("{}，歌单加载失败: {}", text, err);
         }
-        let _ = self.load_topbar_tab(TopBarTab::Recommend).await;
         self.finish_startup_loading();
         self.try_restore_playback_memory().await;
     }
@@ -6386,6 +6833,403 @@ async fn fetch_daily_recommend_cover(api: &mut ApiState) -> Option<String> {
                 .find_map(|item| first_non_empty(item, &["/al/picUrl", "/album/picUrl"]))
         })
         .map(|s| s.to_string())
+}
+
+fn pick_text(lang: Language, zh: &'static str, en: &'static str) -> &'static str {
+    match lang {
+        Language::Zh => zh,
+        Language::En => en,
+    }
+}
+
+fn topbar_raw_item(item: TopBarPlaylist) -> TopbarRawItem {
+    TopbarRawItem {
+        id: item.id,
+        is_daily: item.is_daily,
+        title: item.title,
+        cover_url: item.cover_url,
+    }
+}
+
+async fn fetch_topbar_tab_data(
+    api: &mut ApiState,
+    kind: TopbarLoadKind,
+    lang: Language,
+    cached_user_id: Option<String>,
+) -> Result<TopbarLoadData, String> {
+    match kind {
+        TopbarLoadKind::Tab(TopBarTab::UserPlaylists) => {
+            fetch_topbar_user_playlists(api, lang, cached_user_id).await
+        }
+        TopbarLoadKind::Tab(TopBarTab::Toplists) => fetch_topbar_toplists(api, lang).await,
+        TopbarLoadKind::Tab(TopBarTab::Recommend) | TopbarLoadKind::Category(0) => {
+            fetch_topbar_recommend(api, lang).await
+        }
+        TopbarLoadKind::Category(index) => fetch_recommend_category(api, index, lang).await,
+    }
+}
+
+async fn fetch_topbar_toplists(
+    api: &mut ApiState,
+    lang: Language,
+) -> Result<TopbarLoadData, String> {
+    let response = api.toplist().await.map_err(|err| err.to_string())?;
+    let code = response_code(&response);
+    if code != 200 {
+        return Err(format!(
+            "{} ({}): {}",
+            pick_text(lang, "排行榜请求失败", "Failed to fetch toplists"),
+            code,
+            response_message(&response)
+        ));
+    }
+
+    let items = parse_toplists(&response);
+    if items.is_empty() {
+        return Err(pick_text(lang, "排行榜数据为空", "Toplist data is empty").to_string());
+    }
+
+    Ok(TopbarLoadData {
+        kind: TopbarLoadKind::Tab(TopBarTab::Toplists),
+        items: items.into_iter().map(topbar_raw_item).collect(),
+        user_id: None,
+        user_name: String::new(),
+        liked_playlist_id: None,
+        status_line: pick_text(lang, "网易云官方排行榜", "Netease official toplists").to_string(),
+    })
+}
+
+async fn fetch_topbar_recommend(
+    api: &mut ApiState,
+    lang: Language,
+) -> Result<TopbarLoadData, String> {
+    let mut daily_api = api.clone();
+    let mut resource_api = api.clone();
+    let mut personalized_api = api.clone();
+    let (daily_cover, resource_res, personalized_res) = tokio::join!(
+        async move { fetch_daily_recommend_cover(&mut daily_api).await },
+        async move { resource_api.recommend_resource().await },
+        async move { personalized_api.personalized(100).await },
+    );
+
+    let mut items: Vec<TopbarRawItem> = Vec::new();
+    items.push(TopbarRawItem {
+        id: None,
+        is_daily: true,
+        title: pick_text(lang, "每日推荐", "Daily Recommendations").to_string(),
+        cover_url: daily_cover,
+    });
+
+    if let Ok(response) = resource_res {
+        for card in parse_recommend_cards(&response, 24) {
+            if !topbar_card_is_daily(&card.title) {
+                items.push(TopbarRawItem {
+                    id: card.id,
+                    is_daily: false,
+                    title: card.title,
+                    cover_url: card.cover_url,
+                });
+            }
+        }
+    }
+
+    if let Ok(response) = personalized_res {
+        for card in parse_personalized_cards(&response, 100) {
+            if !topbar_card_is_daily(&card.title) {
+                items.push(TopbarRawItem {
+                    id: card.id,
+                    is_daily: false,
+                    title: card.title,
+                    cover_url: card.cover_url,
+                });
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    items.retain(|item| {
+        item.id
+            .as_deref()
+            .map(|id| seen.insert(id.to_string()))
+            .unwrap_or(true)
+    });
+
+    Ok(TopbarLoadData {
+        kind: TopbarLoadKind::Tab(TopBarTab::Recommend),
+        items,
+        user_id: None,
+        user_name: String::new(),
+        liked_playlist_id: None,
+        status_line: pick_text(
+            lang,
+            "每日推荐 + 每日精选 + 个性化推荐歌单",
+            "Daily songs, picks & personalized playlists",
+        )
+        .to_string(),
+    })
+}
+
+async fn fetch_recommend_category(
+    api: &mut ApiState,
+    index: usize,
+    lang: Language,
+) -> Result<TopbarLoadData, String> {
+    let cat = RECOMMEND_CATEGORIES.get(index).copied().unwrap_or_default();
+    if cat.is_empty() || cat == "推荐" {
+        return Err("invalid category index".to_string());
+    }
+
+    let response = api
+        .top_playlist_highquality(cat, 50)
+        .await
+        .map_err(|err| err.to_string())?;
+    let code = response_code(&response);
+    if code != 200 {
+        return Err(format!(
+            "{} ({}): {}",
+            pick_text(lang, "精品歌单请求失败", "Failed to fetch high-quality playlists"),
+            code,
+            response_message(&response)
+        ));
+    }
+
+    let items = parse_highquality_playlists(&response);
+    if items.is_empty() {
+        return Err(pick_text(lang, "该分类暂无歌单", "No playlists in this category").to_string());
+    }
+
+    Ok(TopbarLoadData {
+        kind: TopbarLoadKind::Category(index),
+        items: items.into_iter().map(topbar_raw_item).collect(),
+        user_id: None,
+        user_name: String::new(),
+        liked_playlist_id: None,
+        status_line: String::new(),
+    })
+}
+
+async fn fetch_topbar_user_playlists(
+    api: &mut ApiState,
+    lang: Language,
+    cached_user_id: Option<String>,
+) -> Result<TopbarLoadData, String> {
+    let (uid, user_name, liked_playlist_id) = match cached_user_id {
+        Some(uid) => (uid, String::new(), None),
+        None => {
+            let account = match api.user_account().await {
+                Ok(value) => value,
+                Err(_) => api.login_status().await.map_err(|err| err.to_string())?,
+            };
+            let account_code = response_code(&account);
+            if account_code != 200 {
+                return Err(format!(
+                    "{}({}): {}",
+                    pick_text(lang, "账号信息请求失败", "Failed to fetch account profile"),
+                    account_code,
+                    response_message(&account)
+                ));
+            }
+
+            let uid = extract_current_user_id(&account).ok_or_else(|| {
+                pick_text(lang, "未找到当前用户 ID", "Current user id not found").to_string()
+            })?;
+            let user_name = extract_current_user_name(&account)
+                .unwrap_or_else(|| pick_text(lang, "当前用户", "Current User").to_string());
+            (
+                uid,
+                user_name,
+                extract_liked_playlist_id(&account),
+            )
+        }
+    };
+
+    let mut create_api = api.clone();
+    let mut collect_api = api.clone();
+    let uid_ref = &uid;
+    let (created_response, collected_response) = tokio::join!(
+        async move {
+            create_api
+                .user_playlist_create(uid_ref, TOPBAR_USER_PLAYLIST_LIMIT, 0)
+                .await
+        },
+        async move {
+            collect_api
+                .user_playlist_collect(uid_ref, TOPBAR_USER_PLAYLIST_LIMIT, 0)
+                .await
+        },
+    );
+
+    let created_response = created_response.map_err(|err| err.to_string())?;
+    let created_code = response_code(&created_response);
+    if created_code != 200 {
+        return Err(format!(
+            "{}({}): {}",
+            pick_text(lang, "创建歌单请求失败", "Created playlists request failed"),
+            created_code,
+            response_message(&created_response)
+        ));
+    }
+
+    let collected_response = collected_response.map_err(|err| err.to_string())?;
+    let collected_code = response_code(&collected_response);
+    if collected_code != 200 {
+        return Err(format!(
+            "{}({}): {}",
+            pick_text(lang, "收藏歌单请求失败", "Collected playlists request failed"),
+            collected_code,
+            response_message(&collected_response)
+        ));
+    }
+
+    let created_playlists = parse_topbar_playlists(&created_response);
+    let collected_playlists = parse_topbar_playlists(&collected_response);
+    let created_len = created_playlists.len();
+    let collected_len = collected_playlists.len();
+
+    let mut items =
+        Vec::with_capacity(created_len.saturating_add(collected_len).saturating_add(1));
+    if let Some(id) = liked_playlist_id.as_ref() {
+        items.push(TopbarRawItem {
+            id: Some(id.clone()),
+            is_daily: false,
+            title: pick_text(lang, "我喜欢的音乐", "Liked Songs").to_string(),
+            cover_url: None,
+        });
+    }
+    items.extend(
+        created_playlists
+            .into_iter()
+            .filter(|item| {
+                item.id
+                    .as_deref()
+                    .map(|id| liked_playlist_id.as_deref() != Some(id))
+                    .unwrap_or(true)
+            })
+            .map(topbar_raw_item),
+    );
+    items.extend(collected_playlists.into_iter().map(topbar_raw_item));
+
+    Ok(TopbarLoadData {
+        kind: TopbarLoadKind::Tab(TopBarTab::UserPlaylists),
+        items,
+        user_id: Some(uid),
+        user_name,
+        liked_playlist_id,
+        status_line: match lang {
+            Language::Zh => format!("创建 {} 个，收藏 {} 个", created_len, collected_len),
+            Language::En => format!("{} created, {} collected", created_len, collected_len),
+        },
+    })
+}
+
+async fn fetch_playlist_detail_data(
+    api: &mut ApiState,
+    playlist_id: &str,
+) -> Result<PlaylistDetailData, String> {
+    let response = api
+        .playlist_detail(playlist_id)
+        .await
+        .map_err(|err| err.to_string())?;
+    let code = response_code(&response);
+    if code != 200 {
+        return Err(format!("请求失败({}): {}", code, response_message(&response)));
+    }
+
+    let playlist = response
+        .body
+        .get("playlist")
+        .ok_or_else(|| "歌单数据缺失".to_string())?;
+
+    let title = playlist
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("未命名歌单")
+        .to_string();
+    let artist = playlist
+        .pointer("/creator/nickname")
+        .and_then(|value| value.as_str())
+        .unwrap_or("网易云音乐")
+        .to_string();
+    let description = first_non_empty(
+        playlist,
+        &["/description", "/copywriter", "/creator/signature"],
+    )
+    .unwrap_or_else(|| "暂无简介".to_string());
+    let cover_url = first_non_empty(playlist, &["/coverImgUrl", "/picUrl"]);
+    let tracks = playlist
+        .get("tracks")
+        .and_then(|value| value.as_array())
+        .map(|items| parse_tracks(items))
+        .unwrap_or_default();
+
+    Ok(PlaylistDetailData {
+        id: playlist_id.to_string(),
+        title,
+        artist,
+        description,
+        cover_url,
+        tracks,
+    })
+}
+
+async fn fetch_daily_recommend_data(
+    api: &mut ApiState,
+    lang: Language,
+) -> Result<PlaylistDetailData, String> {
+    let response = api.recommend_songs().await.map_err(|err| err.to_string())?;
+    let code = response_code(&response);
+    if code != 200 {
+        return Err(format!("请求失败({}): {}", code, response_message(&response)));
+    }
+
+    let songs = home_daily_song_items(&response.body).ok_or_else(|| {
+        pick_text(lang, "每日推荐数据缺失", "Daily recommendations are missing").to_string()
+    })?;
+    let tracks = parse_tracks(songs);
+    if tracks.is_empty() {
+        return Err(pick_text(lang, "每日推荐为空", "Daily recommendations are empty").to_string());
+    }
+
+    let cover_url = tracks.iter().find_map(|track| track.cover_url.clone());
+
+    Ok(PlaylistDetailData {
+        id: HOME_DAILY_RECOMMEND_TILE_ID.to_string(),
+        title: pick_text(lang, "每日推荐", "Daily Recommendations").to_string(),
+        artist: pick_text(lang, "网易云音乐", "Netease Cloud Music").to_string(),
+        description: pick_text(
+            lang,
+            "来自网易云每日推荐歌曲，按 Enter 播放",
+            "Daily songs from Netease. Press Enter to play",
+        )
+        .to_string(),
+        cover_url,
+        tracks,
+    })
+}
+
+async fn fetch_liked_song_ids(
+    api: &mut ApiState,
+    user_id: Option<String>,
+) -> Option<HashSet<String>> {
+    let uid = match user_id {
+        Some(uid) => uid,
+        None => {
+            let account = match api.user_account().await {
+                Ok(value) => value,
+                Err(_) => api.login_status().await.ok()?,
+            };
+            if response_code(&account) != 200 {
+                return None;
+            }
+            extract_current_user_id(&account)?
+        }
+    };
+
+    let response = api.likelist(&uid).await.ok()?;
+    if response_code(&response) != 200 {
+        return None;
+    }
+    Some(parse_likelist_song_ids(&response.body))
 }
 
 fn parse_recommend_cards(response: &ApiResponse, limit: usize) -> Vec<RecommendCard> {
@@ -6774,6 +7618,118 @@ fn parse_search_input(raw: &str) -> (String, SearchFilter) {
 
 fn is_followed_author_query(keywords: &str, filter: SearchFilter) -> bool {
     filter == SearchFilter::Author && keywords.trim().is_empty()
+}
+
+fn suggest_str(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(String::from)
+}
+
+fn parse_suggest_web(response: &ApiResponse) -> Vec<SuggestItem> {
+    let mut items = Vec::new();
+    let Some(result) = response.body.get("result") else {
+        return items;
+    };
+
+    if let Some(songs) = result.get("songs").and_then(Value::as_array) {
+        for song in songs.iter().take(5) {
+            let Some(id) = song.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(name) = suggest_str(song, "name") else {
+                continue;
+            };
+            let artist = song
+                .get("artists")
+                .and_then(Value::as_array)
+                .and_then(|list| list.first())
+                .and_then(|item| suggest_str(item, "name"));
+            let album = song
+                .get("album")
+                .and_then(|item| suggest_str(item, "name"));
+            let cover_url = song
+                .get("album")
+                .and_then(|item| suggest_str(item, "picUrl"));
+            items.push(SuggestItem {
+                kind: SearchFilter::Single,
+                item: SearchItem {
+                    left_label: name.clone(),
+                    right_label: artist.clone().unwrap_or_default(),
+                    type_tag: Some(SearchFilter::Single.display_name().to_string()),
+                    song_id: Some(id.to_string()),
+                    album_id: None,
+                    playlist_id: None,
+                    artist_id: None,
+                    title: Some(name),
+                    artist,
+                    album,
+                    cover_url,
+                    duration_ms: None,
+                },
+            });
+        }
+    }
+
+    if let Some(artists) = result.get("artists").and_then(Value::as_array) {
+        for artist in artists.iter().take(5) {
+            let Some(id) = artist.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(name) = suggest_str(artist, "name") else {
+                continue;
+            };
+            let cover_url = suggest_str(artist, "picUrl");
+            items.push(SuggestItem {
+                kind: SearchFilter::Author,
+                item: SearchItem {
+                    left_label: name.clone(),
+                    right_label: String::new(),
+                    type_tag: Some(SearchFilter::Author.display_name().to_string()),
+                    song_id: None,
+                    album_id: None,
+                    playlist_id: None,
+                    artist_id: Some(id.to_string()),
+                    title: Some(name),
+                    artist: None,
+                    album: None,
+                    cover_url,
+                    duration_ms: None,
+                },
+            });
+        }
+    }
+
+    if let Some(albums) = result.get("albums").and_then(Value::as_array) {
+        for album in albums.iter().take(5) {
+            let Some(id) = album.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(name) = suggest_str(album, "name") else {
+                continue;
+            };
+            let artist = album
+                .get("artist")
+                .and_then(|item| suggest_str(item, "name"));
+            items.push(SuggestItem {
+                kind: SearchFilter::Album,
+                item: SearchItem {
+                    left_label: name.clone(),
+                    right_label: artist.clone().unwrap_or_default(),
+                    type_tag: Some(SearchFilter::Album.display_name().to_string()),
+                    song_id: None,
+                    album_id: Some(id.to_string()),
+                    playlist_id: None,
+                    artist_id: None,
+                    title: Some(name),
+                    artist,
+                    album: None,
+                    cover_url: None,
+                    duration_ms: None,
+                },
+            });
+        }
+    }
+
+    items
 }
 
 struct FollowedAuthorPage {
