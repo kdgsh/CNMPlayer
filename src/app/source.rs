@@ -126,7 +126,8 @@ impl MusicSource for NeteaseSource {
 // ---------------------------------------------------------------------------
 // CustomApiSource: LX Music compatible HTTP API
 //   GET {api_url}/url?source=wy&songId={id}&quality={q}
-//   Header: X-API-Key: {key}
+//   GET {api_url}/lyric?source=wy&songId={id}
+//   Headers: X-API-Key / X-Request-Key: {key}
 //   Response: { "code": 200, "url": "https://..." }
 // ---------------------------------------------------------------------------
 
@@ -150,7 +151,9 @@ impl CustomApiSource {
     async fn get_json(&self, url: &str) -> Result<serde_json::Value> {
         let mut req = self.http.get(url)?;
         if !self.api_key.is_empty() {
-            req = req.header("X-API-Key", &self.api_key)?;
+            req = req
+                .header("X-API-Key", &self.api_key)?
+                .header("X-Request-Key", &self.api_key)?;
         }
         let resp = req.send().await.context("custom source request")?;
         let resp = crate::app::api::error_for_status(resp).context("custom source HTTP error")?;
@@ -192,7 +195,7 @@ impl MusicSource for CustomApiSource {
     }
 
     async fn fetch_lyric(&mut self, song_id: &str) -> Result<Option<String>> {
-        let url = format!("{}/lrc?source=wy&songId={}", self.api_url, song_id);
+        let url = format!("{}/lyric?source=wy&songId={}", self.api_url, song_id);
         let parsed = self.get_json(&url).await?;
         if let Some(lrc) = parsed["lyric"].as_str().filter(|s| !s.is_empty()) {
             return Ok(Some(lrc.to_string()));
