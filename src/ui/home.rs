@@ -1,4 +1,4 @@
-use crate::app::{App, HomeSidebarHit, HomeSidebarSection};
+use crate::app::{App, TopBarTab};
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
@@ -6,8 +6,10 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
+
+const TOPBAR_HEIGHT: u16 = 1;
 
 pub fn draw_home(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
@@ -46,7 +48,30 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
         (rows[0], Rect::default())
     };
 
-    draw_tiles(frame, app, content_area);
+    let layout = if app.topbar.active_tab == TopBarTab::Recommend {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(TOPBAR_HEIGHT),
+                Constraint::Length(TOPBAR_HEIGHT),
+                Constraint::Min(1),
+            ])
+            .split(content_area);
+        (split[0], Some(split[1]), split[2])
+    } else {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(TOPBAR_HEIGHT), Constraint::Min(1)])
+            .split(content_area);
+        (split[0], None, split[1])
+    };
+
+    draw_home_topbar(frame, app, layout.0);
+    if let Some(categories_area) = layout.1 {
+        draw_home_topbar_categories(frame, app, categories_area);
+    }
+    draw_home_tiles(frame, app, layout.2);
+
     if app.config.page_lyrics {
         let panel_area = page_lyrics::overlay_panel_area(content_area);
         page_lyrics::draw_page_lyrics_panel(frame, app, panel_area);
@@ -54,14 +79,144 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
     if app.config.show_hints {
         draw_home_hint(frame, app, hint_area);
     }
-    if app.home_sidebar.is_visible() {
-        draw_home_sidebar(frame, app, rows[0]);
-    }
 
     player_bar::draw_collapsed_player_bar(frame, app, rows[1]);
 }
 
-fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
+fn draw_home_topbar(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let zh = app.config.language == Language::Zh;
+    let mut spans: Vec<Span> = Vec::new();
+    let mut cursor = area.x;
+
+    for tab in TopBarTab::all() {
+        let active = tab == app.topbar.active_tab;
+        let text = format!(" {} ", tab.label(zh));
+        let width = display_width(&text) as u16;
+        app.push_topbar_tab_hit(
+            crate::app::HitRect {
+                x: cursor,
+                y: area.y,
+                width: width.max(1),
+                height: 1,
+            },
+            tab,
+        );
+
+        let style = if active {
+            Style::default()
+                .fg(app.theme.color_base())
+                .bg(app.theme.color_accent())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.theme.color_subtext())
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::styled("  ", Style::default()));
+
+        cursor = cursor.saturating_add(width).saturating_add(2);
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_home_topbar_categories(frame: &mut Frame, app: &mut App, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let total = app.topbar.recommend_categories_len();
+    if total == 0 {
+        return;
+    }
+
+    let focus = app.topbar.recommend_cat_index.min(total - 1);
+    let mut order: Vec<usize> = vec![focus];
+    let mut used = 2 + display_width(app.topbar.recommend_category_name(focus));
+    let mut left = focus;
+    let mut right = focus;
+    let mut can_left = true;
+    let mut can_right = true;
+
+    while (can_left || can_right) && used < usize::from(area.width) {
+        if can_left && left > 0 {
+            left -= 1;
+            used = used.saturating_add(2 + display_width(app.topbar.recommend_category_name(left)));
+            order.insert(0, left);
+        } else {
+            can_left = false;
+        }
+        if used >= usize::from(area.width) {
+            break;
+        }
+        if can_right && right + 1 < total {
+            right += 1;
+            used = used.saturating_add(2 + display_width(app.topbar.recommend_category_name(right)));
+            order.push(right);
+        } else {
+            can_right = false;
+        }
+    }
+
+    let mut spans: Vec<Span> = Vec::new();
+    let mut cursor = area.x;
+    for idx in order {
+        let text = format!(" {} ", app.topbar.recommend_category_name(idx));
+        let width = display_width(&text) as u16;
+        if cursor.saturating_add(width) > area.x.saturating_add(area.width) {
+            break;
+        }
+        app.push_topbar_cat_hit(
+            crate::app::HitRect {
+                x: cursor,
+                y: area.y,
+                width: width.max(1),
+                height: 1,
+            },
+            idx,
+        );
+
+        let active = idx == focus;
+        let style = if active && app.topbar.recommend_cat_focus {
+            Style::default()
+                .fg(app.theme.color_base())
+                .bg(app.theme.color_accent())
+                .add_modifier(Modifier::BOLD)
+        } else if active {
+            Style::default()
+                .fg(app.theme.color_accent())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.theme.color_subtext())
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::styled("  ", Style::default()));
+        cursor = cursor.saturating_add(width).saturating_add(2);
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_home_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
+    let zh = app.config.language == Language::Zh;
+    let total = app.topbar.tab_len();
+
+    if total == 0 {
+        let text = if app.topbar.loading {
+            if zh { "正在加载..." } else { "Loading..." }
+        } else {
+            if zh { "暂无内容，按 Tab 切换分类" } else { "Nothing here yet" }
+        };
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(app.theme.color_subtext())),
+            area,
+        );
+        return;
+    }
+
     let margin = ratatui::layout::Margin {
         horizontal: 1,
         vertical: 1,
@@ -76,15 +231,14 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
     let col_step = tile_w.saturating_add(2);
     let row_step = tile_h.saturating_add(1);
     let columns = usize::from((inner.width / col_step).max(1));
-    app.home.set_columns(columns);
-
     let visible_rows = usize::from((inner.height / row_step).max(1));
-    app.home.set_visible_rows(visible_rows);
-    let row_offset = app.home.effective_scroll_row_offset();
+    app.topbar.set_columns(columns);
+    app.topbar.set_visible_rows(visible_rows);
+    let row_offset = app.topbar.effective_scroll_row_offset();
+    let draw_ascii = app.draw_ascii();
 
-    for index in 0..app.home.tiles.len() {
-        let virtual_index = home_real_to_virtual_index(index, columns);
-        let row = virtual_index / columns;
+    for index in 0..total {
+        let row = index / columns;
         if row < row_offset {
             continue;
         }
@@ -92,7 +246,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
         if visual_row >= visible_rows {
             continue;
         }
-        let col = virtual_index % columns;
+        let col = index % columns;
         let x = inner.x + (col as u16) * col_step;
         let y = inner.y + (visual_row as u16) * row_step;
         if x >= inner.x + inner.width || y >= inner.y + inner.height {
@@ -106,7 +260,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             height: tile_h.min(inner.y + inner.height - y),
         };
 
-        app.push_home_tile_hit(
+        app.push_topbar_entry_hit(
             crate::app::HitRect {
                 x: rect.x,
                 y: rect.y,
@@ -116,7 +270,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             index,
         );
 
-        let focused = index == app.home.focused_idx;
+        let focused = index == app.topbar.tab_focused();
         let tile_bg = if focused {
             app.theme.color_surface()
         } else {
@@ -151,7 +305,7 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
             continue;
         }
 
-        let text_rows = if inner_rect.height >= 4 { 2 } else { 1 };
+        let text_rows = 1;
         let cover_height = inner_rect.height.saturating_sub(text_rows);
         let cover_rect = Rect {
             x: inner_rect.x,
@@ -167,26 +321,28 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
         };
 
         if !cover_rect.is_empty() {
-            let draw_ascii = app.draw_ascii();
             let text_style = if focused {
                 Style::default().fg(app.theme.color_accent2())
             } else {
                 Style::default().fg(app.theme.color_text())
             };
-            app.home.tiles[index].cover.render(
-                frame,
-                &mut app.graphics_picker,
-                cover_rect,
-                text_style,
-                None,
-                draw_ascii,
-            );
+            if let Some(cover) = app.topbar.cover_at_mut(index) {
+                cover.render(
+                    frame,
+                    &mut app.graphics_picker,
+                    cover_rect,
+                    text_style,
+                    None,
+                    draw_ascii,
+                );
+            }
         }
 
-        let (title, subtitle) = {
-            let tile = &app.home.tiles[index];
-            (tile.title.clone(), tile.subtitle.clone())
-        };
+        let title = app
+            .topbar
+            .item_at(index)
+            .map(|item| item.title.clone())
+            .unwrap_or_default();
 
         let title_style = if focused {
             Style::default()
@@ -195,12 +351,8 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::default().fg(app.theme.color_text())
         };
-        let subtitle_style = Style::default().fg(app.theme.color_subtext());
 
-        let mut lines = vec![Line::from(Span::styled(title, title_style))];
-        if text_rows > 1 {
-            lines.push(Line::from(Span::styled(subtitle, subtitle_style)));
-        }
+        let lines = vec![Line::from(Span::styled(title, title_style))];
 
         let content = Paragraph::new(lines)
             .wrap(Wrap { trim: true })
@@ -208,14 +360,27 @@ fn draw_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
 
         frame.render_widget(content, text_rect);
     }
-}
 
-fn home_real_to_virtual_index(index: usize, columns: usize) -> usize {
-    let cols = columns.max(1);
-    if cols <= 3 || index < 3 {
-        index
-    } else {
-        index.saturating_add(cols - 3)
+    let total_rows = total.saturating_sub(1) / columns + 1;
+    if total_rows > visible_rows {
+        let page = (row_offset + 1).min(total_rows);
+        let text = format!("{}/{}", page, total_rows);
+        let width = display_width(&text) as u16;
+        let indicator = Rect {
+            x: inner.x + inner.width - width - 1,
+            y: inner.y + inner.height - 1,
+            width: width + 1,
+            height: 1,
+        };
+        if indicator.y >= inner.y {
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    text,
+                    Style::default().fg(app.theme.color_subtext()),
+                )),
+                indicator,
+            );
+        }
     }
 }
 
@@ -226,18 +391,16 @@ fn draw_home_hint(frame: &mut Frame, app: &App, area: Rect) {
 
     let text = match app.config.language {
         Language::Zh => format!(
-            "{} 搜索  {} 设置  {} 侧边栏  {} 全屏  {} 退出",
+            "{} 搜索  {} 设置  {} 全屏  {} 退出",
             app.config.keybind_search_box,
             app.config.keybind_settings,
-            app.config.keybind_sidebar,
             app.config.keybind_fullscreen,
             app.config.keybind_quit
         ),
         Language::En => format!(
-            "{} Search  {} Settings  {} Sidebar  {} Fullscreen  {} Quit",
+            "{} Search  {} Settings  {} Fullscreen  {} Quit",
             app.config.keybind_search_box,
             app.config.keybind_settings,
-            app.config.keybind_sidebar,
             app.config.keybind_fullscreen,
             app.config.keybind_quit
         ),
@@ -251,329 +414,8 @@ fn draw_home_hint(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn draw_home_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
-    if area.width < 20 || area.height < 8 {
-        return;
-    }
-
-    let max_width = (area.width / 3).max(24).min(area.width);
-    app.set_home_sidebar_anim_span_cells(max_width);
-    let progress = app.home_sidebar.anim_progress.clamp(0.0, 1.0);
-    let width = ((max_width as f32) * progress).round() as u16;
-    if width < 12 {
-        return;
-    }
-
-    let sidebar = Rect {
-        x: area.x,
-        y: area.y,
-        width,
-        height: area.height,
-    };
-
-    frame.render_widget(Clear, sidebar);
-
-    app.set_home_sidebar_panel_hit(Some(crate::app::HitRect {
-        x: sidebar.x,
-        y: sidebar.y,
-        width: sidebar.width,
-        height: sidebar.height,
-    }));
-
-    let title = match app.config.language {
-        Language::Zh => "主页侧边栏",
-        Language::En => "Home Sidebar",
-    };
-
-    let panel_style = Style::default()
-        .fg(app.theme.color_subtext())
-        .bg(app.theme.color_surface());
-
-    frame.render_widget(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(Line::from(Span::styled(
-                title,
-                Style::default().fg(app.theme.color_subtext()),
-            )))
-            .border_style(Style::default().fg(app.theme.color_subtext()))
-            .style(panel_style),
-        sidebar,
-    );
-
-    let inner = sidebar.inner(ratatui::layout::Margin {
-        horizontal: 1,
-        vertical: 1,
-    });
-    if inner.width < 8 || inner.height < 4 {
-        return;
-    }
-
-    let header_height = if inner.height >= 5 { 2 } else { 1 };
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(header_height), Constraint::Min(1)])
-        .split(inner);
-
-    let user_name = if app.home_sidebar.user_name.trim().is_empty() {
-        match app.config.language {
-            Language::Zh => "未识别用户".to_string(),
-            Language::En => "Unknown User".to_string(),
-        }
-    } else {
-        app.home_sidebar.user_name.clone()
-    };
-
-    let status = if app.home_sidebar.loading {
-        match app.config.language {
-            Language::Zh => "正在同步歌单...".to_string(),
-            Language::En => "Syncing playlists...".to_string(),
-        }
-    } else if app.home_sidebar.status_line.trim().is_empty() {
-        match app.config.language {
-            Language::Zh => "Ctrl+上下切换分区 上下切换歌单 Enter进入 Esc收起".to_string(),
-            Language::En => {
-                "Ctrl+Up/Down switch section, Up/Down switch playlist, Enter open, Esc collapse"
-                    .to_string()
-            }
-        }
-    } else {
-        app.home_sidebar.status_line.clone()
-    };
-
-    let mut header_lines = vec![Line::from(Span::styled(
-        user_name,
-        Style::default()
-            .fg(app.theme.color_text())
-            .add_modifier(Modifier::BOLD),
-    ))];
-    if header_height > 1 {
-        header_lines.push(Line::from(Span::styled(
-            status,
-            Style::default().fg(app.theme.color_subtext()),
-        )));
-    }
-    frame.render_widget(
-        Paragraph::new(header_lines).wrap(Wrap { trim: true }),
-        chunks[0],
-    );
-
-    let sections = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
-
-    let created_items = app.home_sidebar.created_playlists.clone();
-    let collected_items = app.home_sidebar.collected_playlists.clone();
-
-    draw_home_sidebar_section(
-        frame,
-        app,
-        sections[0],
-        match app.config.language {
-            Language::Zh => "用户创建的歌单",
-            Language::En => "Created Playlists",
-        },
-        &created_items,
-        HomeSidebarSection::Created,
-    );
-
-    draw_home_sidebar_section(
-        frame,
-        app,
-        sections[1],
-        match app.config.language {
-            Language::Zh => "用户收藏的歌单",
-            Language::En => "Collected Playlists",
-        },
-        &collected_items,
-        HomeSidebarSection::Collected,
-    );
-}
-
-fn draw_home_sidebar_section(
-    frame: &mut Frame,
-    app: &mut App,
-    area: Rect,
-    title: &str,
-    items: &[crate::app::HomeSidebarPlaylist],
-    section: HomeSidebarSection,
-) {
-    if area.width < 6 || area.height < 3 {
-        return;
-    }
-
-    let section_focused = app.home_sidebar.expanded && app.home_sidebar.focused_section == section;
-    let section_title_style = if section_focused {
-        Style::default()
-            .fg(app.theme.color_accent2())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(app.theme.color_subtext())
-    };
-
-    frame.render_widget(
-        Block::default().style(Style::default().bg(app.theme.color_surface())),
-        area,
-    );
-
-    let title_line_area = Rect {
-        x: area.x.saturating_sub(1),
-        y: area.y,
-        width: area.width.saturating_add(2),
-        height: 1,
-    };
-    if title_line_area.width > 2 {
-        let line_width = usize::from(title_line_area.width);
-        let title_max = line_width.saturating_sub(2);
-        let clipped_title = clip_to_display_width(title, title_max.max(1));
-        let used = 2 + display_width(&clipped_title);
-        let dash_count = line_width.saturating_sub(used);
-        let connector_style = Style::default().fg(app.theme.color_subtext());
-
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("├", connector_style),
-                Span::styled(clipped_title, section_title_style),
-                Span::styled("─".repeat(dash_count), connector_style),
-                Span::styled("┤", connector_style),
-            ]))
-            .style(Style::default().bg(app.theme.color_surface())),
-            title_line_area,
-        );
-    }
-
-    let inner = Rect {
-        x: area.x.saturating_add(1),
-        y: area.y.saturating_add(1),
-        width: area.width.saturating_sub(2),
-        height: area.height.saturating_sub(1),
-    };
-    if inner.width == 0 || inner.height == 0 {
-        return;
-    }
-
-    let mut lines = Vec::new();
-    if items.is_empty() {
-        lines.push(Line::from(Span::styled(
-            match app.config.language {
-                Language::Zh => "暂无歌单",
-                Language::En => "No playlists",
-            },
-            Style::default().fg(app.theme.color_subtext()),
-        )));
-    } else {
-        let max_rows = inner.height as usize;
-        if max_rows == 0 {
-            return;
-        }
-        let total = items.len();
-        let focus_idx = if section_focused {
-            app.home_sidebar.focused_index.min(total.saturating_sub(1))
-        } else {
-            0
-        };
-        let mut start = if total <= max_rows {
-            0
-        } else {
-            app.home_sidebar
-                .section_scroll_offset(section)
-                .min(total.saturating_sub(max_rows))
-        };
-
-        if total > max_rows {
-            if focus_idx < start {
-                start = focus_idx;
-            } else if focus_idx >= start.saturating_add(max_rows) {
-                start = focus_idx + 1 - max_rows;
-            }
-            start = start.min(total.saturating_sub(max_rows));
-        }
-        app.home_sidebar.set_section_scroll_offset(section, start);
-
-        for (visual_idx, item) in items.iter().skip(start).take(max_rows).enumerate() {
-            let idx = start + visual_idx;
-            let left = if item.creator.trim().is_empty() {
-                format!("{:02}. {}", idx + 1, item.title)
-            } else {
-                format!("{:02}. {} - {}", idx + 1, item.title, item.creator)
-            };
-            let right = match app.config.language {
-                Language::Zh => format!("{}首", item.track_count),
-                Language::En => format!("{}", item.track_count),
-            };
-
-            let reserved = display_width(&right) + 1;
-            let left_max = usize::from(inner.width).saturating_sub(reserved);
-            let clipped_left = clip_to_display_width(&left, left_max);
-            let used = display_width(&clipped_left) + display_width(&right);
-            let spaces = usize::from(inner.width).saturating_sub(used).max(1);
-            let is_focused = section_focused && idx == app.home_sidebar.focused_index;
-
-            app.push_home_sidebar_playlist_hit(
-                crate::app::HitRect {
-                    x: inner.x,
-                    y: inner.y + visual_idx as u16,
-                    width: inner.width,
-                    height: 1,
-                },
-                HomeSidebarHit {
-                    section,
-                    index: idx,
-                },
-            );
-
-            let text_style = if is_focused {
-                Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(app.theme.color_text())
-            };
-            let right_style = if is_focused {
-                Style::default()
-                    .fg(app.theme.color_base())
-                    .bg(app.theme.color_accent())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(app.theme.color_subtext())
-            };
-
-            lines.push(Line::from(vec![
-                Span::styled(clipped_left, text_style),
-                Span::styled(" ".repeat(spaces), text_style),
-                Span::styled(right, right_style),
-            ]));
-        }
-    }
-
-    frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(app.theme.color_surface())),
-        inner,
-    );
-}
-
 fn display_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
-}
-
-fn clip_to_display_width(text: &str, max_width: usize) -> String {
-    if max_width == 0 {
-        return String::new();
-    }
-
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let w = ch.width().unwrap_or(0);
-        if used + w > max_width {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out
 }
 
 fn base_bg_style(app: &App) -> Style {

@@ -127,6 +127,25 @@ impl ApiState {
         Ok(response)
     }
 
+    pub async fn toplist(&mut self) -> Result<ApiResponse> {
+        let query = self.query_with_cookie();
+        let response = self.client.toplist(&query).await?;
+        Ok(response)
+    }
+
+    pub async fn top_playlist_highquality(
+        &mut self,
+        cat: &str,
+        limit: usize,
+    ) -> Result<ApiResponse> {
+        let query = self
+            .query_with_cookie()
+            .param("cat", cat)
+            .param("limit", &limit.max(1).to_string());
+        let response = self.client.top_playlist_highquality(&query).await?;
+        Ok(response)
+    }
+
     pub async fn login_email(&mut self, email: &str, password: &str) -> Result<ApiResponse> {
         let query = Query::new()
             .param("email", email)
