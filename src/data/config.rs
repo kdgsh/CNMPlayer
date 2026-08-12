@@ -131,6 +131,9 @@ pub struct Config {
     #[serde(default)]
     pub cache: CacheConfig,
 
+    #[serde(default)]
+    pub source: SourceConfig,
+
     #[serde(default = "default_keybind_search_box")]
     pub keybind_search_box: String,
 
@@ -187,6 +190,35 @@ pub struct Config {
 
     #[serde(default = "default_keybind_toggle_like_collapsed")]
     pub keybind_toggle_like_collapsed: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceProvider {
+    #[serde(rename = "netease")]
+    Netease,
+    #[serde(rename = "custom")]
+    Custom,
+}
+
+impl Default for SourceProvider {
+    fn default() -> Self { Self::Netease }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceConfig {
+    #[serde(default)]
+    pub provider: SourceProvider,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub api_key: String,
+}
+
+impl Default for SourceConfig {
+    fn default() -> Self {
+        Self { provider: SourceProvider::default(), url: String::new(), api_key: String::new() }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -529,6 +561,7 @@ impl Default for Config {
             show_hints: default_show_hints(),
             home_more_recommend: false,
             cache: CacheConfig::default(),
+            source: SourceConfig::default(),
             keybind_search_box: default_keybind_search_box(),
             keybind_fullscreen: default_keybind_fullscreen(),
             keybind_settings: default_keybind_settings(),
@@ -596,6 +629,7 @@ impl Config {
             || !raw.contains("show_hints")
             || !raw.contains("home_more_recommend")
             || !raw.contains("[cache]")
+            || !raw.contains("[source]")
             || !raw.contains("bar_number")
             || !raw.contains("bar_channels")
             || !raw.contains("bar_channel_reverse")

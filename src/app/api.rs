@@ -3,6 +3,9 @@ use cyper::{Client, Response};
 use futures::StreamExt;
 use ncm_api::{ApiClient, ApiResponse, Query};
 
+use crate::app::source::SourceManager;
+use crate::data::config::SourceConfig;
+
 const MAX_COVER_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Clone)]
@@ -10,16 +13,31 @@ pub struct ApiState {
     client: ApiClient,
     cookie: Option<String>,
     http: Client,
+    source_manager: SourceManager,
 }
 
 impl ApiState {
-    pub fn new(cookie: Option<String>, http: Client) -> Result<Self> {
+    pub fn new(cookie: Option<String>, http: Client, source_config: &SourceConfig) -> Result<Self> {
         let client = ApiClient::new(cookie.clone(), http.clone());
+        let source_manager = match source_config.provider {
+            crate::data::config::SourceProvider::Netease => {
+                SourceManager::netease(cookie.clone(), http.clone())?
+            }
+            crate::data::config::SourceProvider::Custom => {
+                SourceManager::custom(
+                    cookie.clone(),
+                    source_config.url.clone(),
+                    source_config.api_key.clone(),
+                    http.clone(),
+                )?
+            }
+        };
 
         Ok(Self {
             client,
             cookie,
             http,
+            source_manager,
         })
     }
 
@@ -27,19 +45,24 @@ impl ApiState {
         self.cookie.as_deref()
     }
 
-    /// Get the HTTP client for streaming playback.
     pub fn http_client(&self) -> &Client {
         &self.http
     }
 
     pub fn set_cookie(&mut self, cookie: String) {
         self.cookie = Some(cookie.clone());
-        self.client.set_cookie(cookie);
+        self.client.set_cookie(cookie.clone());
+        self.source_manager.set_cookie(cookie);
     }
 
     pub fn clear_cookie(&mut self) {
         self.cookie = None;
         self.client.set_cookie(String::new());
+        self.source_manager.clear_cookie();
+    }
+
+    pub fn source_is_custom(&self) -> bool {
+        self.source_manager.is_using_custom()
     }
 
     pub async fn validate_cookie(&mut self, cookie: &str) -> Result<bool> {
@@ -274,34 +297,12 @@ impl ApiState {
         song_id: &str,
         level: &str,
     ) -> Result<String> {
-        let response = self.song_url_v1(song_id, level).await?;
-        if let Some(url) = response
-            .body
-            .pointer("/data/0/url")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Ok(url.to_string());
-        }
+        let resolved = self.source_manager.resolve_song_url(song_id, level).await?;
+        Ok(resolved.url)
+    }
 
-        // Keep backward compatibility for songs that only expose legacy stream URLs.
-        let fallback = self.song_url(song_id).await?;
-        if let Some(url) = fallback
-            .body
-            .pointer("/data/0/url")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Ok(url.to_string());
-        }
-
-        Err(anyhow!(
-            "song stream url not found for id {} at level {}",
-            song_id,
-            level
-        ))
+    pub async fn fetch_lyric_raw(&mut self, song_id: &str) -> Result<Option<String>> {
+        self.source_manager.fetch_lyric(song_id).await
     }
 
     pub async fn vip_info(&mut self) -> Result<ApiResponse> {
@@ -388,7 +389,8 @@ impl ApiState {
 
         let merged = response.cookie.join("; ");
         self.cookie = Some(merged.clone());
-        self.client.set_cookie(merged);
+        self.client.set_cookie(merged.clone());
+        self.source_manager.set_cookie(merged);
     }
 }
 
