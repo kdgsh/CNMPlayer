@@ -7,7 +7,7 @@ pub struct ResolvedUrl {
     pub url: String,
 }
 
-pub trait MusicSource: Send {
+pub trait MusicSource {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
     async fn resolve_song_url(&mut self, song_id: &str, quality: &str) -> Result<ResolvedUrl>;
