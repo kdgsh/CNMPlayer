@@ -12,9 +12,9 @@
 - [x] f590a57 `feat: dynamic system theme adapting to DMS accent color and dark/light mode`（f882cb2）
 - [x] aca32f5 `feat: system theme follows Noctalia wallpaper accent`（1b5b5bc）
 
-## 3. 顶栏导航重构
-- [ ] e947f4b `feat: replace sidebar with topbar tabs for user playlists/toplists/recommend`
-- [ ] 1428696 `fix: open daily recommendations from topbar recommend tab`
+## 3. 顶栏导航重构 ✅
+- [x] e947f4b `feat: replace sidebar with topbar tabs for user playlists/toplists/recommend`
+- [x] 1428696 `fix: open daily recommendations from topbar recommend tab`
 - [ ] c66e3c4 `refactor: remove in-app volume control`（伴随重构，按需）
 - [ ] 90b1f97 `refactor: unify progress bar style with volume bar style`（伴随重构，按需）
 
