@@ -8,9 +8,9 @@
 - [x] 96fe949 `fix: use X-Request-Key header and /lyric endpoint for custom source`（4fa792f，已适配 cyper）
 - [x] 90b5b6b `feat: unlock lossless/hires audio quality with custom source`（2bddfb9）
 
-## 2. 主题跟随系统
-- [ ] f590a57 `feat: dynamic system theme adapting to DMS accent color and dark/light mode`
-- [ ] aca32f5 `feat: system theme follows Noctalia wallpaper accent`
+## 2. 主题跟随系统 ✅
+- [x] f590a57 `feat: dynamic system theme adapting to DMS accent color and dark/light mode`（f882cb2）
+- [x] aca32f5 `feat: system theme follows Noctalia wallpaper accent`（1b5b5bc）
 
 ## 3. 顶栏导航重构
 - [ ] e947f4b `feat: replace sidebar with topbar tabs for user playlists/toplists/recommend`
