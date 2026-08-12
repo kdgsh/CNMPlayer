@@ -18,8 +18,8 @@
 - [ ] c66e3c4 `refactor: remove in-app volume control`（伴随重构，按需）
 - [ ] 90b1f97 `refactor: unify progress bar style with volume bar style`（伴随重构，按需）
 
-## 4. 后台加载 + 封面磁盘缓存（核心性能）
-- [ ] 835eabe `feat: background topbar/playlist loads, cover disk cache, search suggest state, lyric merge, like toggle in main app`（大提交，按功能拆开迁移）
+## 4. 后台加载 + 封面磁盘缓存（核心性能）✅
+- [x] 835eabe `feat: background topbar/playlist loads, cover disk cache, search suggest state, lyric merge, like toggle in main app`（大提交，按功能拆开迁移）
   - 顶栏 tab / 推荐分类后台加载（消除切换延迟）
   - 主页歌单→歌单页先进入（占位 + 后台加载）
   - 方向键导航到顶栏（tab_focus）
@@ -27,7 +27,7 @@
   - 用户歌单加载并行化 + 启动并行（load_startup_tabs）
   - 缓存 sidecar（lrc/cover）清理
   - 红心状态字段（like 相关状态）
-- [ ] af0306a `feat: show loading and empty states for background playlist loads`（依赖上面的状态字段）
+- [x] af0306a `feat: show loading and empty states for background playlist loads`（依赖上面的状态字段）
 
 ## 5. 搜索联想
 - [ ] 434b419 `feat: add live search suggestions with debounce in search box`（suggest/web 接口 + 300ms 防抖）
