@@ -9,6 +9,7 @@ use rodio::source::SeekError;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use see::sync::Receiver;
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::BufReader;
@@ -429,11 +430,45 @@ struct CacheEntry {
     modified: SystemTime,
 }
 
+const SIDECAR_SUBDIRS: [&str; 2] = ["lrc", "cover"];
+
+fn cache_entry_stem(entry: &CacheEntry) -> Option<String> {
+    entry
+        .path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::to_string)
+}
+
 pub(crate) fn cleanup_cache_dir(
     cache_dir: &Path,
     policy: &crate::data::config::CacheConfig,
 ) -> Result<()> {
     let mut entries = list_cache_entries(cache_dir)?;
+
+    // Sidecar files (lrc/cover subdirs) share the audio file's lifecycle.
+    let mut sidecar_entries = Vec::new();
+    for sub in SIDECAR_SUBDIRS {
+        let sub_dir = cache_dir.join(sub);
+        if sub_dir.is_dir() {
+            sidecar_entries.extend(list_cache_entries(&sub_dir)?);
+        }
+    }
+
+    // Drop sidecars whose audio file is no longer cached, pool the rest.
+    if !sidecar_entries.is_empty() {
+        let audio_stems: HashSet<String> = entries.iter().filter_map(cache_entry_stem).collect();
+        sidecar_entries.retain(|entry| {
+            let keep = cache_entry_stem(entry)
+                .map(|stem| audio_stems.contains(&stem))
+                .unwrap_or(false);
+            if !keep {
+                let _ = fs::remove_file(&entry.path);
+            }
+            keep
+        });
+        entries.extend(sidecar_entries);
+    }
 
     if matches!(
         policy.clean_strategy,
@@ -465,13 +500,36 @@ pub(crate) fn cleanup_cache_dir(
 
         if total_bytes > limit_bytes {
             entries.sort_by_key(|entry| entry.modified);
-            for entry in entries {
+            for entry in &entries {
                 if total_bytes <= limit_bytes {
                     break;
                 }
                 if fs::remove_file(&entry.path).is_ok() {
                     total_bytes = total_bytes.saturating_sub(entry.size);
                 }
+            }
+        }
+    }
+
+    // Sidecars whose audio was evicted by the policies above.
+    if entries
+        .iter()
+        .any(|entry| entry.path.parent() != Some(cache_dir))
+    {
+        let audio_stems: HashSet<String> = entries
+            .iter()
+            .filter(|entry| entry.path.parent() == Some(cache_dir))
+            .filter_map(cache_entry_stem)
+            .collect();
+        for entry in &entries {
+            if entry.path.parent() == Some(cache_dir) {
+                continue;
+            }
+            let keep = cache_entry_stem(entry)
+                .map(|stem| audio_stems.contains(&stem))
+                .unwrap_or(false);
+            if !keep {
+                let _ = fs::remove_file(&entry.path);
             }
         }
     }
