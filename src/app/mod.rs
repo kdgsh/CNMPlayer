@@ -6,7 +6,7 @@ pub(crate) mod streaming;
 
 use crate::app::api::error_for_status;
 use crate::app::player::is_nonempty_file;
-use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, VisualizeMode};
+use crate::data::config::{AudioQuality, BarChannels, BarNumber, Language, SourceProvider, VisualizeMode};
 use crate::data::config::{Config, GraphicsProtocol};
 use crate::data::playback_session;
 use crate::data::session;
@@ -57,9 +57,10 @@ const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
 const HOME_SIDEBAR_PLAYLIST_LIMIT: usize = 100;
-const SETTINGS_ROOT_ITEMS: usize = 10;
+const SETTINGS_ROOT_ITEMS: usize = 11;
 const SETTINGS_PLAYBACK_ITEMS: usize = 9;
 pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 19;
+const SETTINGS_SOURCE_ITEMS: usize = 4;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
 const GLOBAL_HOTKEY_COOLDOWN_MS: u64 = 120;
 const STARTUP_LOADING_MIN_VISIBLE_SECS: f32 = 0.75;
@@ -129,6 +130,7 @@ pub enum Overlay {
     SettingsPlayback,
     SettingsKeybinds,
     SettingsAbout,
+    SettingsSource,
     SearchBox,
 }
 
@@ -251,6 +253,7 @@ impl LoginState {
 type SharedFuture<T> = Shared<Pin<Box<dyn Future<Output = Option<T>>>>>;
 type CoverFuture = SharedFuture<Arc<DynamicImage>>;
 type AsciiFuture = SharedFuture<String>;
+type SourceTestFuture = Shared<Pin<Box<dyn Future<Output = Result<String, String>>>>>;
 
 fn shot_and_share<F>(fut: F) -> Shared<F>
 where
@@ -1627,6 +1630,10 @@ pub struct App {
     pub settings_selected: usize,
     pub settings_playback_selected: usize,
     pub settings_keybind_selected: usize,
+    pub settings_source_selected: usize,
+    pub settings_source_edit: Option<usize>,
+    pub source_test_status: String,
+    source_test_load: Option<SourceTestFuture>,
     pub settings_keybind_rebinding: Option<usize>,
     pub session_cookie: Option<String>,
     pub should_quit: bool,
@@ -1732,6 +1739,10 @@ impl App {
             settings_selected: 0,
             settings_playback_selected: 0,
             settings_keybind_selected: 0,
+            settings_source_selected: 0,
+            settings_source_edit: None,
+            source_test_status: String::new(),
+            source_test_load: None,
             settings_keybind_rebinding: None,
             session_cookie: None,
             should_quit: false,
@@ -1811,6 +1822,7 @@ impl App {
         self.sync_mpris_exposure();
         self.tick_search_box_animation();
         self.tick_startup_loading();
+        self.tick_source_test();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
             if self.login.qr_key.trim().is_empty() {
@@ -2355,6 +2367,7 @@ impl App {
             Overlay::SettingsPlayback => self.handle_settings_playback_key(key),
             Overlay::SettingsKeybinds => self.handle_settings_keybinds_key(key),
             Overlay::SettingsAbout => self.handle_settings_about_key(key),
+            Overlay::SettingsSource => self.handle_settings_source_key(key),
             Overlay::SearchBox => self.handle_search_box_key(key).await,
         }
     }
@@ -3751,6 +3764,7 @@ impl App {
     fn open_settings(&mut self) {
         self.settings_selected = 0;
         self.settings_keybind_rebinding = None;
+        self.settings_source_edit = None;
         self.overlay = Some(Overlay::Settings);
     }
 
@@ -3896,8 +3910,13 @@ impl App {
                 }
                 6 => self.apply_settings_root_delta(1).await,
                 7 => self.apply_settings_root_delta(1).await,
-                8 => self.logout_to_login().await,
-                9 => {
+                8 => {
+                    self.settings_source_selected = 0;
+                    self.settings_source_edit = None;
+                    self.overlay = Some(Overlay::SettingsSource);
+                }
+                9 => self.logout_to_login().await,
+                10 => {
                     self.overlay = Some(Overlay::SettingsAbout);
                 }
                 _ => {}
@@ -4054,6 +4073,142 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn handle_settings_source_key(&mut self, key: KeyEvent) {
+        if let Some(edit_idx) = self.settings_source_edit {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    self.settings_source_edit = None;
+                    let _ = self.config.save();
+                    self.set_runtime_status(self.lang_text(
+                        "已保存，重启后生效",
+                        "Saved, restart to apply",
+                    ));
+                }
+                KeyCode::Char(c)
+                    if key.modifiers == KeyModifiers::CONTROL && (c == 'u' || c == 'U') =>
+                {
+                    self.source_field_mut(edit_idx).clear();
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.source_field_mut(edit_idx).push(c);
+                }
+                KeyCode::Backspace => {
+                    self.source_field_mut(edit_idx).pop();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.settings_source_edit = None;
+                self.overlay = Some(Overlay::Settings);
+            }
+            KeyCode::Char('t') | KeyCode::Char('T') => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    self.close_overlay();
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab => {
+                if self.settings_source_selected == 0 {
+                    self.settings_source_selected = SETTINGS_SOURCE_ITEMS - 1;
+                } else {
+                    self.settings_source_selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                self.settings_source_selected =
+                    (self.settings_source_selected + 1) % SETTINGS_SOURCE_ITEMS;
+            }
+            KeyCode::Left => self.apply_settings_source_delta(-1),
+            KeyCode::Right | KeyCode::Enter => match self.settings_source_selected {
+                0 => self.apply_settings_source_delta(1),
+                1 | 2 => self.settings_source_edit = Some(self.settings_source_selected),
+                3 => self.start_source_test(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn source_field_mut(&mut self, index: usize) -> &mut String {
+        if index == 1 {
+            &mut self.config.source.url
+        } else {
+            &mut self.config.source.api_key
+        }
+    }
+
+    fn apply_settings_source_delta(&mut self, delta: i32) {
+        if delta == 0 || self.settings_source_selected != 0 {
+            return;
+        }
+        self.config.source.provider = match self.config.source.provider {
+            SourceProvider::Netease => SourceProvider::Custom,
+            SourceProvider::Custom => SourceProvider::Netease,
+        };
+        let _ = self.config.save();
+        self.set_runtime_status(self.lang_text(
+            "音源已切换，重启后生效",
+            "Source switched, restart to apply",
+        ));
+    }
+
+    fn start_source_test(&mut self) {
+        if self.source_test_load.is_some() {
+            return;
+        }
+        if self.config.source.url.trim().is_empty() {
+            self.source_test_status = self
+                .lang_text("请先填写 API 地址", "Please fill in the API URL first")
+                .to_string();
+            return;
+        }
+        self.source_test_status = self
+            .lang_text("测试中...", "Testing...")
+            .to_string();
+        let api_url = self.config.source.url.clone();
+        let api_key = self.config.source.api_key.clone();
+        let http = self.api.http_client().clone();
+        let ok_text = self.lang_text("可用", "Available").to_string();
+        let err_prefix = self.lang_text("不可用", "Unavailable").to_string();
+        let fut = Box::pin(async move {
+            let source = crate::app::source::CustomApiSource::new(api_url, api_key, http);
+            match source.check_availability().await {
+                Ok(()) => Ok(ok_text),
+                Err(e) => {
+                    let msg = e.to_string();
+                    let msg = if msg.chars().count() > 80 {
+                        let mut clipped: String = msg.chars().take(80).collect();
+                        clipped.push_str("...");
+                        clipped
+                    } else {
+                        msg
+                    };
+                    Err(format!("{}: {}", err_prefix, msg))
+                }
+            }
+        });
+        self.source_test_load = Some(shot_and_share(fut));
+    }
+
+    fn tick_source_test(&mut self) {
+        let Some(load) = &self.source_test_load else {
+            return;
+        };
+        let Some(result) = load.peek().cloned() else {
+            return;
+        };
+        match result {
+            Ok(msg) => self.source_test_status = msg,
+            Err(err) => self.source_test_status = err,
+        }
+        self.source_test_load = None;
     }
 
     async fn apply_settings_root_delta(&mut self, delta: i32) {

@@ -46,8 +46,8 @@
 ## 8. 红心点击
 - [ ] 2845559 `feat: click heart icon on player bar to toggle like`（播放条 + 全屏 meta 行）
 
-## 9. 音源设置 UI
-- [ ] f11a55d `feat: add custom source settings with availability test`（设置页填写 + 自动测试）
+## 9. 音源设置 UI ✅
+- [x] f11a55d `feat: add custom source settings with availability test`（cd431c3，设置页填写 + 自动测试；UI 部分取自 835eabe）
 
 ## 备注
 - develop 是 compio/cyper 生态（无 tokio），后台加载模式（shot_and_share/tokio::spawn）迁移时需适配
