@@ -22,6 +22,15 @@ fn home_config_dir() -> PathBuf {
     }
 }
 
+fn detect_noctalia_accent() -> Option<(u8, u8, u8)> {
+    let raw = std::fs::read_to_string(home_config_dir().join("cnmplayer/accent")).ok()?;
+    let hex = raw.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(parse_hex(hex))
+}
+
 fn detect_dms_accent() -> Option<(u8, u8, u8)> {
     let colors_conf = home_config_dir().join("hypr/dms/colors.conf");
     if !colors_conf.exists() {
@@ -194,7 +203,10 @@ fn parse_hex(hex: &str) -> (u8, u8, u8) {
 }
 
 pub fn detect_system_palette() -> SystemColors {
-    let accent = detect_dms_accent().unwrap_or((128, 212, 215));
+    // 优先级：Noctalia 壁纸主色 > DMS colors.conf > 回退默认青蓝
+    let accent = detect_noctalia_accent()
+        .or_else(detect_dms_accent)
+        .unwrap_or((128, 212, 215));
     let is_dark = detect_system_dark_mode();
     generate_system_palette(accent, is_dark)
 }
