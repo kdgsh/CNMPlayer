@@ -104,6 +104,7 @@ pub struct HostConfigSync {
     pub eq_bands_db: [f32; crate::tmplayer::app::state::EQ_BANDS],
     pub playback_memory: bool,
     pub vip_audio_unlocked: bool,
+    pub source_is_custom: bool,
     pub show_hints: bool,
     pub home_more_recommend: bool,
     pub visualize: HostVisualizeMode,

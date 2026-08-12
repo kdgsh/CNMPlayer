@@ -88,6 +88,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
         eq_bands_db: app.config.eq_bands_db,
         playback_memory: app.config.playback_memory,
         vip_audio_unlocked: app.vip_audio_unlocked,
+        source_is_custom: app.source_is_custom,
         show_hints: app.config.show_hints,
         home_more_recommend: app.config.home_more_recommend,
         visualize: match app.config.visualize {
@@ -127,6 +128,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
     app.language = config.language;
     app.config.page_lyrics = config.page_lyrics;
     app.vip_audio_unlocked = config.vip_audio_unlocked;
+    app.source_is_custom = config.source_is_custom;
     app.config.audio_quality = match config.audio_quality {
         crate::data::config::AudioQuality::Standard => AudioQuality::Standard,
         crate::data::config::AudioQuality::Higher => AudioQuality::Higher,
@@ -138,7 +140,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
         crate::data::config::AudioQuality::Dolby => AudioQuality::Dolby,
         crate::data::config::AudioQuality::Jymaster => AudioQuality::Jymaster,
     }
-    .clamp_for_vip(app.vip_audio_unlocked);
+    .clamp_for_vip(app.vip_audio_unlocked || app.source_is_custom);
     app.config.eq_bands_db = config.eq_bands_db;
     app.eq.bands_db = config.eq_bands_db;
     app.config.playback_memory = config.playback_memory;
@@ -898,7 +900,7 @@ async fn handle_action(
                 }
                 7 => {
                     app.config.audio_quality =
-                        app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
+                        app.config.audio_quality.cycle(1, app.vip_audio_unlocked || app.source_is_custom);
                     save_and_sync_host_config(app, host_bridge).await;
                 }
                 8 => {
@@ -1060,7 +1062,7 @@ async fn handle_action(
                     }
                     7 => {
                         app.config.audio_quality =
-                            app.config.audio_quality.cycle(-1, app.vip_audio_unlocked);
+                            app.config.audio_quality.cycle(-1, app.vip_audio_unlocked || app.source_is_custom);
                         save_and_sync_host_config(app, host_bridge).await;
                     }
                     8 => {
@@ -1117,7 +1119,7 @@ async fn handle_action(
                     }
                     7 => {
                         app.config.audio_quality =
-                            app.config.audio_quality.cycle(1, app.vip_audio_unlocked);
+                        app.config.audio_quality.cycle(1, app.vip_audio_unlocked || app.source_is_custom);
                         save_and_sync_host_config(app, host_bridge).await;
                     }
                     8 => {

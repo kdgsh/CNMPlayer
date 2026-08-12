@@ -376,14 +376,14 @@ impl AudioQuality {
         }
     }
 
-    pub fn cycle(self, delta: i32, vip_unlocked: bool) -> Self {
-        let options: &[Self] = if vip_unlocked {
+    pub fn cycle(self, delta: i32, quality_unlocked: bool) -> Self {
+        let options: &[Self] = if quality_unlocked {
             &Self::ALL_LEVELS
         } else {
             &Self::FREE_LEVELS
         };
 
-        let current = self.clamp_for_vip(vip_unlocked);
+        let current = self.clamp_for_vip(quality_unlocked);
         let index = options
             .iter()
             .position(|item| *item == current)

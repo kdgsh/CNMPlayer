@@ -268,6 +268,7 @@ pub struct AppState {
     pub local_audio_settings_selected: usize,
     pub help_keybind_selected: usize,
     pub vip_audio_unlocked: bool,
+    pub source_is_custom: bool,
 
     pub eq: EqSettings,
     pub eq_selected: usize,
@@ -382,6 +383,7 @@ impl AppState {
             local_audio_settings_selected: 0,
             help_keybind_selected: 0,
             vip_audio_unlocked: false,
+            source_is_custom: false,
 
             eq: EqSettings::default(),
             eq_selected: 0,
