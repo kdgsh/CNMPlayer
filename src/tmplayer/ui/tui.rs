@@ -25,6 +25,7 @@ pub struct UiLayout {
     pub info_progress: Rect,
     pub info_volume: Rect,
     pub info_controls: Rect,
+    pub info_meta: Rect,
 
     pub info_cover_image: Rect,
 
@@ -150,6 +151,7 @@ impl Tui {
             layout_out.info_progress = info_l.progress;
             layout_out.info_volume = info_l.volume;
             layout_out.info_controls = info_l.controls;
+            layout_out.info_meta = info_l.meta;
 
             // For kitty graphics, we draw into the inner area (optional border).
             layout_out.info_cover_image = info_l.cover.inner(ratatui::layout::Margin {
@@ -1482,6 +1484,12 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
                 });
             }
         }
+    }
+
+    if contains(layout.info_meta, col, row)
+        && col == layout.info_meta.x.saturating_add(layout.info_meta.width.saturating_sub(1))
+    {
+        return Some(Action::ToggleFavorite);
     }
 
     if contains(layout.info_controls, col, row) {

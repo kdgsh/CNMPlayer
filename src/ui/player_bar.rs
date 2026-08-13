@@ -148,6 +148,15 @@ pub fn draw_collapsed_player_bar(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let mut hits = PlayerBarHitTargets::default();
 
+    if app.now_playing.is_some() && left_rect.width > 0 {
+        hits.like = Some(HitRect {
+            x: left_rect.x + left_rect.width - 1,
+            y: top.y,
+            width: 1,
+            height: 1,
+        });
+    }
+
     let controls_start = controls_rect.x + controls_rect.width.saturating_sub(controls_w) / 2;
     let prev_w = display_width(prev_label) as u16;
     let play_w = display_width(play_label) as u16;

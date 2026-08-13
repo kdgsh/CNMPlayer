@@ -1577,6 +1577,7 @@ pub struct PlayerBarHitTargets {
     pub prev: Option<HitRect>,
     pub play_pause: Option<HitRect>,
     pub next: Option<HitRect>,
+    pub like: Option<HitRect>,
     pub progress: Option<HitRect>,
 }
 
@@ -2067,6 +2068,12 @@ impl App {
                 if let Some(rect) = self.player_bar_hits.next {
                     if rect.contains(col, row) {
                         self.play_next_hotkey().await;
+                        return;
+                    }
+                }
+                if let Some(rect) = self.player_bar_hits.like {
+                    if rect.contains(col, row) {
+                        self.toggle_like_hotkey().await;
                         return;
                     }
                 }
