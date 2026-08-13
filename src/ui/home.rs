@@ -2,6 +2,7 @@ use crate::app::{App, TopBarTab};
 use crate::data::config::Language;
 use crate::ui::page_lyrics;
 use crate::ui::player_bar;
+use crate::ui::search_box;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -14,6 +15,7 @@ const TOPBAR_HEIGHT: u16 = 1;
 pub fn draw_home(frame: &mut Frame, app: &mut App) {
     app.clear_player_bar_hits();
     app.clear_content_hits();
+    app.clear_search_hits();
 
     let size = frame.area();
     frame.render_widget(Block::default().style(base_bg_style(app)), size);
@@ -66,7 +68,16 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
         (split[0], None, split[1])
     };
 
-    draw_home_topbar(frame, app, layout.0);
+    let topbar_row = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(search_box::HOME_SEARCH_BAR_WIDTH),
+        ])
+        .split(layout.0);
+
+    draw_home_topbar(frame, app, topbar_row[0]);
+    search_box::draw_home_search_bar(frame, app, topbar_row[1]);
     if let Some(categories_area) = layout.1 {
         draw_home_topbar_categories(frame, app, categories_area);
     }
@@ -79,6 +90,8 @@ pub fn draw_home(frame: &mut Frame, app: &mut App) {
     if app.config.show_hints {
         draw_home_hint(frame, app, hint_area);
     }
+
+    search_box::draw_home_suggest_dropdown(frame, app);
 
     player_bar::draw_collapsed_player_bar(frame, app, rows[1]);
 }

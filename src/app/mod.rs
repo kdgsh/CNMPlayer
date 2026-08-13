@@ -55,7 +55,7 @@ use streaming::StreamingReader;
 
 const MAX_INPUT_LEN: usize = 64;
 const SEARCH_RESULT_PAGE_SIZE: usize = 50;
-const SEARCH_BOX_TARGET_HEIGHT: u16 = 3;
+const SUGGEST_DEBOUNCE: Duration = Duration::from_millis(300);
 const TOPBAR_USER_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 11;
 const SETTINGS_PLAYBACK_ITEMS: usize = 9;
@@ -886,6 +886,7 @@ pub struct PlaylistDetailData {
 type PlaylistLoadFuture =
     Shared<Pin<Box<dyn Future<Output = Result<PlaylistDetailData, String>>>>>;
 type LikedLoadFuture = Shared<Pin<Box<dyn Future<Output = Option<HashSet<String>>>>>>;
+type SuggestLoadFuture = Shared<Pin<Box<dyn Future<Output = Option<Vec<SuggestItem>>>>>>;
 
 #[derive(Debug, Clone)]
 pub struct PlaylistTrack {
@@ -949,6 +950,12 @@ impl SearchFilter {
             Self::Playlist => "歌单",
         }
     }
+}
+
+#[derive(Clone)]
+pub struct SuggestItem {
+    pub kind: SearchFilter,
+    pub item: SearchItem,
 }
 
 pub struct SearchState {    pub query: String,
@@ -1699,6 +1706,14 @@ pub struct App {
     pub search_box_input: String,
     pub search_box_cursor: usize,
     pub search_box_anim_height: u16,
+    pub search_bar_active: bool,
+    pub search_bar_hit: Option<HitRect>,
+    pub search_suggest_hits: Vec<(HitRect, usize)>,
+    pub search_suggest: Vec<SuggestItem>,
+    pub search_suggest_focus: Option<usize>,
+    search_suggest_query: String,
+    search_suggest_deadline: Option<Instant>,
+    search_suggest_load: Option<SuggestLoadFuture>,
     pub settings_selected: usize,
     pub settings_playback_selected: usize,
     pub settings_keybind_selected: usize,
@@ -1809,6 +1824,14 @@ impl App {
             search_box_input: String::new(),
             search_box_cursor: 0,
             search_box_anim_height: 0,
+            search_bar_active: false,
+            search_bar_hit: None,
+            search_suggest_hits: Vec::new(),
+            search_suggest: Vec::new(),
+            search_suggest_focus: None,
+            search_suggest_query: String::new(),
+            search_suggest_deadline: None,
+            search_suggest_load: None,
             settings_selected: 0,
             settings_playback_selected: 0,
             settings_keybind_selected: 0,
@@ -1899,9 +1922,9 @@ impl App {
         self.apply_mpris_control_events().await;
         self.sync_mpris_exposure();
         self.tick_search_box_animation();
+        self.tick_suggest();
         self.tick_source_test();
         self.tick_startup_loading();
-        self.tick_source_test();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
             if self.login.qr_key.trim().is_empty() {
@@ -1946,6 +1969,11 @@ impl App {
             return;
         }
 
+        if self.page == Page::Home && self.search_bar_active {
+            self.handle_search_box_key(key).await;
+            return;
+        }
+
         if self.page == Page::Loading {
             return;
         }
@@ -1986,6 +2014,10 @@ impl App {
                 }
 
                 if self.overlay.is_some() {
+                    return;
+                }
+
+                if self.handle_home_search_bar_click(col, row).await {
                     return;
                 }
 
@@ -2124,6 +2156,19 @@ impl App {
         self.playlist_track_hits.clear();
         self.author_tile_hits.clear();
         self.search_item_hits.clear();
+    }
+
+    pub fn clear_search_hits(&mut self) {
+        self.search_bar_hit = None;
+        self.search_suggest_hits.clear();
+    }
+
+    pub fn set_search_bar_hit(&mut self, rect: HitRect) {
+        self.search_bar_hit = Some(rect);
+    }
+
+    pub fn push_search_suggest_hit(&mut self, rect: HitRect, index: usize) {
+        self.search_suggest_hits.push((rect, index));
     }
 
     pub fn push_topbar_tab_hit(&mut self, rect: HitRect, tab: TopBarTab) {
@@ -2618,6 +2663,7 @@ impl App {
         self.playlist_load = Some(shot_and_share(fut));
         self.playlist_return_page = Page::Home;
         self.playlist_section_return_snapshot = None;
+        self.search_bar_active = false;
         self.page = Page::Playlist;
     }
 
@@ -3707,6 +3753,7 @@ impl App {
                 .cover
                 .load(self.api.clone(), self.cover_cache_dir.clone(), x)
         });
+        self.search_bar_active = false;
         self.page = Page::Playlist;
     }
 
@@ -3920,6 +3967,7 @@ impl App {
             cover_url,
         );
         self.playlist_return_page = Page::Search;
+        self.search_bar_active = false;
         self.page = Page::Playlist;
         self.search.status_line = format!("{} {}", ok_text, title);
     }
@@ -3944,12 +3992,14 @@ impl App {
         self.settings_selected = 0;
         self.settings_keybind_rebinding = None;
         self.settings_source_edit = None;
+        self.search_bar_active = false;
         self.overlay = Some(Overlay::Settings);
     }
 
     fn open_keybind_settings(&mut self) {
         self.settings_keybind_selected = 0;
         self.settings_keybind_rebinding = None;
+        self.search_bar_active = false;
         self.overlay = Some(Overlay::SettingsKeybinds);
     }
 
@@ -3957,13 +4007,45 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
-            self.close_overlay();
+            if self.search_bar_active {
+                self.search_bar_active = false;
+            } else {
+                self.close_overlay();
+            }
             return;
         }
 
         match key.code {
-            KeyCode::Esc => self.close_overlay(),
-            KeyCode::Enter => self.execute_search_from_box().await,
+            KeyCode::Esc => {
+                if self.search_bar_active {
+                    self.search_bar_active = false;
+                } else {
+                    self.close_overlay();
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(focus) = self.search_suggest_focus {
+                    self.open_suggest_item(focus).await;
+                } else {
+                    self.execute_search_from_box().await;
+                }
+            }
+            KeyCode::Up => {
+                if !self.search_suggest.is_empty() {
+                    self.search_suggest_focus = Some(match self.search_suggest_focus {
+                        Some(focus) if focus > 0 => focus - 1,
+                        _ => self.search_suggest.len() - 1,
+                    });
+                }
+            }
+            KeyCode::Down => {
+                if !self.search_suggest.is_empty() {
+                    self.search_suggest_focus = Some(match self.search_suggest_focus {
+                        Some(focus) if focus + 1 < self.search_suggest.len() => focus + 1,
+                        _ => 0,
+                    });
+                }
+            }
             KeyCode::Backspace => {
                 if self.search_box_cursor > 0 {
                     self.search_box_cursor =
@@ -4006,6 +4088,48 @@ impl App {
             .min(char_count(&self.search_box_input));
     }
 
+    async fn handle_home_search_bar_click(&mut self, col: u16, row: u16) -> bool {
+        if self.page != Page::Home {
+            return false;
+        }
+
+        if let Some((_, idx)) = self
+            .search_suggest_hits
+            .iter()
+            .find(|(rect, _)| rect.contains(col, row))
+        {
+            self.open_suggest_item(*idx).await;
+            return true;
+        }
+
+        let in_bar = self
+            .search_bar_hit
+            .map(|rect| rect.contains(col, row))
+            .unwrap_or(false);
+        if !in_bar {
+            if self.search_bar_active {
+                self.search_bar_active = false;
+            }
+            return false;
+        }
+
+        if !self.search_bar_active {
+            self.open_search_box();
+            return true;
+        }
+
+        let rect = self.search_bar_hit.unwrap();
+        let inner_x = rect.x.saturating_add(2);
+        let inner_w = rect.width.saturating_sub(4).max(1);
+        if col < inner_x {
+            self.search_box_cursor = 0;
+        } else {
+            let rel = col.saturating_sub(inner_x).min(inner_w.saturating_sub(1));
+            self.search_box_cursor = char_index_for_display_column(&self.search_box_input, rel);
+        }
+        true
+    }
+
     fn handle_search_box_click(&mut self, col: u16, row: u16) {
         let Ok((term_w, term_h)) = crossterm::terminal::size() else {
             return;
@@ -4021,7 +4145,6 @@ impl App {
         if visible_h < crate::ui::search_box::TARGET_HEIGHT {
             return;
         }
-
         let width = (term_w / 2).max(24).min(term_w.saturating_sub(2));
         let area_x = term_w.saturating_sub(width) / 2;
         let area_y = 0_u16;
@@ -4700,12 +4823,100 @@ impl App {
     }
 
     fn tick_search_box_animation(&mut self) {
-        if matches!(self.overlay, Some(Overlay::SearchBox)) {
-            self.search_box_anim_height =
-                (self.search_box_anim_height + 1).min(SEARCH_BOX_TARGET_HEIGHT);
+        if matches!(self.overlay, Some(Overlay::SearchBox)) || self.search_bar_active {
+            let target = crate::ui::search_box::search_box_target_height(self);
+            self.search_box_anim_height = (self.search_box_anim_height + 1).min(target);
         } else {
             self.search_box_anim_height = 0;
         }
+    }
+
+    fn tick_suggest(&mut self) {
+        if !matches!(self.overlay, Some(Overlay::SearchBox)) && !self.search_bar_active {
+            return;
+        }
+
+        let (query, _) = parse_search_input(&self.search_box_input);
+
+        if query.is_empty() {
+            if !self.search_suggest.is_empty() || self.search_suggest_load.is_some() {
+                self.search_suggest.clear();
+                self.search_suggest_focus = None;
+                self.search_suggest_load = None;
+            }
+            return;
+        }
+
+        if self.search_suggest_query != query {
+            self.search_suggest_query = query.clone();
+            self.search_suggest_deadline = Some(Instant::now() + SUGGEST_DEBOUNCE);
+            return;
+        }
+
+        match self.search_suggest_deadline {
+            Some(deadline) if Instant::now() >= deadline => {
+                self.search_suggest_deadline = None;
+                if self.search_suggest_load.is_none() {
+                    self.start_suggest_load(query);
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(load) = &self.search_suggest_load
+            && let Some(result) = load.peek().cloned()
+        {
+            self.search_suggest_load = None;
+            if self.search_suggest_query == parse_search_input(&self.search_box_input).0 {
+                if let Some(items) = result {
+                    self.search_suggest = items;
+                    let Some(focus) = self.search_suggest_focus else {
+                        return;
+                    };
+                    if self.search_suggest.is_empty() {
+                        self.search_suggest_focus = None;
+                    } else {
+                        self.search_suggest_focus = Some(focus.min(self.search_suggest.len() - 1));
+                    }
+                } else {
+                    self.search_suggest.clear();
+                    self.search_suggest_focus = None;
+                }
+            }
+        }
+    }
+
+    fn start_suggest_load(&mut self, query: String) {
+        let mut api = self.api.clone();
+        let fut: Pin<Box<dyn Future<Output = Option<Vec<SuggestItem>>>>> =
+            Box::pin(async move {
+                match api.search_suggest(&query).await {
+                    Ok(response) => Some(parse_suggest_web(&response)),
+                    Err(_) => None,
+                }
+            });
+        self.search_suggest_load = Some(shot_and_share(fut));
+    }
+
+    async fn open_suggest_item(&mut self, index: usize) {
+        let Some(suggest) = self.search_suggest.get(index) else {
+            return;
+        };
+        let item = suggest.item.clone();
+        let kind = suggest.kind;
+
+        self.search.results = vec![item];
+        self.search.focused_idx = 0;
+        self.search.scroll_offset = 0;
+        self.search.filter = kind;
+        self.search.query = self.search_box_input.clone();
+
+        self.activate_focused_search_result().await;
+
+        self.search_suggest.clear();
+        self.search_suggest_focus = None;
+        self.search_bar_active = false;
+        self.close_overlay();
     }
 
     fn begin_startup_loading(&mut self) {
@@ -4889,7 +5100,16 @@ impl App {
         self.search_box_input = self.search.query.clone();
         self.search_box_cursor = char_count(&self.search_box_input);
         self.search_box_anim_height = 0;
-        self.overlay = Some(Overlay::SearchBox);
+        self.search_suggest.clear();
+        self.search_suggest_focus = None;
+        self.search_suggest_query.clear();
+        self.search_suggest_deadline = None;
+        self.search_suggest_load = None;
+        if self.page == Page::Home {
+            self.search_bar_active = true;
+        } else {
+            self.overlay = Some(Overlay::SearchBox);
+        }
     }
 
     fn close_overlay(&mut self) {
@@ -4914,6 +5134,9 @@ impl App {
         }
         self.playlist_section_return_snapshot = None;
         self.page = Page::Search;
+        self.search_suggest.clear();
+        self.search_suggest_focus = None;
+        self.search_bar_active = false;
         self.close_overlay();
     }
 
@@ -7413,6 +7636,118 @@ fn parse_search_input(raw: &str) -> (String, SearchFilter) {
 
 fn is_followed_author_query(keywords: &str, filter: SearchFilter) -> bool {
     filter == SearchFilter::Author && keywords.trim().is_empty()
+}
+
+fn suggest_str(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(Value::as_str).map(String::from)
+}
+
+fn parse_suggest_web(response: &ApiResponse) -> Vec<SuggestItem> {
+    let mut items = Vec::new();
+    let Some(result) = response.body.get("result") else {
+        return items;
+    };
+
+    if let Some(songs) = result.get("songs").and_then(Value::as_array) {
+        for song in songs.iter().take(5) {
+            let Some(id) = song.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(name) = suggest_str(song, "name") else {
+                continue;
+            };
+            let artist = song
+                .get("artists")
+                .and_then(Value::as_array)
+                .and_then(|list| list.first())
+                .and_then(|item| suggest_str(item, "name"));
+            let album = song
+                .get("album")
+                .and_then(|item| suggest_str(item, "name"));
+            let cover_url = song
+                .get("album")
+                .and_then(|item| suggest_str(item, "picUrl"));
+            items.push(SuggestItem {
+                kind: SearchFilter::Single,
+                item: SearchItem {
+                    left_label: name.clone(),
+                    right_label: artist.clone().unwrap_or_default(),
+                    type_tag: Some(SearchFilter::Single.display_name().to_string()),
+                    song_id: Some(id.to_string()),
+                    album_id: None,
+                    playlist_id: None,
+                    artist_id: None,
+                    title: Some(name),
+                    artist,
+                    album,
+                    cover_url,
+                    duration_ms: None,
+                },
+            });
+        }
+    }
+
+    if let Some(artists) = result.get("artists").and_then(Value::as_array) {
+        for artist in artists.iter().take(5) {
+            let Some(id) = artist.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(name) = suggest_str(artist, "name") else {
+                continue;
+            };
+            let cover_url = suggest_str(artist, "picUrl");
+            items.push(SuggestItem {
+                kind: SearchFilter::Author,
+                item: SearchItem {
+                    left_label: name.clone(),
+                    right_label: String::new(),
+                    type_tag: Some(SearchFilter::Author.display_name().to_string()),
+                    song_id: None,
+                    album_id: None,
+                    playlist_id: None,
+                    artist_id: Some(id.to_string()),
+                    title: Some(name),
+                    artist: None,
+                    album: None,
+                    cover_url,
+                    duration_ms: None,
+                },
+            });
+        }
+    }
+
+    if let Some(albums) = result.get("albums").and_then(Value::as_array) {
+        for album in albums.iter().take(5) {
+            let Some(id) = album.get("id").and_then(Value::as_i64) else {
+                continue;
+            };
+            let Some(name) = suggest_str(album, "name") else {
+                continue;
+            };
+            let artist = album
+                .get("artist")
+                .and_then(|item| suggest_str(item, "name"));
+            items.push(SuggestItem {
+                kind: SearchFilter::Album,
+                item: SearchItem {
+                    left_label: name.clone(),
+                    right_label: artist.clone().unwrap_or_default(),
+                    type_tag: Some(SearchFilter::Album.display_name().to_string()),
+                    song_id: None,
+                    album_id: Some(id.to_string()),
+                    playlist_id: None,
+                    artist_id: None,
+                    title: Some(name),
+                    artist,
+                    album: None,
+                    cover_url: None,
+                    duration_ms: None,
+                },
+            });
+        }
+    }
+
+    items
 }
 
 struct FollowedAuthorPage {

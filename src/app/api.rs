@@ -353,6 +353,13 @@ impl ApiState {
         Ok(response)
     }
 
+    pub async fn search_suggest(&mut self, keywords: &str) -> Result<ApiResponse> {
+        let query = self.query_with_cookie().param("keywords", keywords);
+        let response = self.client.search_suggest(&query).await?;
+        self.capture_cookie(&response);
+        Ok(response)
+    }
+
     pub async fn fetch_cover_bytes(&self, url: &str) -> Result<Vec<u8>> {
         let url = url.trim();
         if url.is_empty() {
