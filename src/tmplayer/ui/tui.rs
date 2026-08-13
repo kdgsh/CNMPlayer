@@ -119,12 +119,12 @@ impl Tui {
             layout_out.right = cols[1];
             layout_out.left_width = cols[0].width;
 
-            // right: lyrics (10%) + spectrum (rest)
-            let lyric_h = ((cols[1].height as f32) * 0.10).round() as u16;
-            let lyric_h = lyric_h.clamp(3, cols[1].height.saturating_sub(6));
+            // right: lyrics (rest) + spectrum (small block at bottom)
+            let spectrum_h = ((cols[1].height as f32) * 0.18).round() as u16;
+            let spectrum_h = spectrum_h.clamp(3, cols[1].height.saturating_sub(6));
             let rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(lyric_h), Constraint::Min(1)])
+                .constraints([Constraint::Min(1), Constraint::Length(spectrum_h)])
                 .split(cols[1]);
 
             // Mirror visual panel inner layout for auto bar count.
