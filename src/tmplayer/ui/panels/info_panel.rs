@@ -125,7 +125,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &mut AppState) {
     let b = Block::default()
         .borders(Borders::ALL)
         .border_set(SOLID_BORDER)
-        .title(" ")
         .style(Style::default().fg(app.theme.color_subtext()));
     f.render_widget(b, area);
 

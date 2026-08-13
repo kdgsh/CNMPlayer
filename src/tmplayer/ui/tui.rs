@@ -525,7 +525,7 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
                     lang_text(app, "示波器", "Oscilloscope")
                 }
                 crate::tmplayer::data::config::VisualizeMode::Braille => {
-                    lang_text(app, "盲文柱", "Braille")
+                    lang_text(app, "点阵", "Dot Matrix")
                 }
             }
         ),
