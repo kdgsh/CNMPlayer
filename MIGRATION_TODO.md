@@ -45,7 +45,7 @@
 - [x] 全屏歌词换行（wrap_text，超长歌词自动换行，随第 6 项完成）
 
 ## 8. 红心点击
-- [ ] 2845559 `feat: click heart icon on player bar to toggle like`（播放条 + 全屏 meta 行）
+- [x] 2845559 `feat: click heart icon on player bar to toggle like`（播放条 + 全屏 meta 行）
 
 ## 9. 音源设置 UI ✅
 - [x] f11a55d `feat: add custom source settings with availability test`（cd431c3，设置页填写 + 自动测试；UI 部分取自 835eabe）
