@@ -15,8 +15,8 @@
 ## 3. 顶栏导航重构 ✅
 - [x] e947f4b `feat: replace sidebar with topbar tabs for user playlists/toplists/recommend`
 - [x] 1428696 `fix: open daily recommendations from topbar recommend tab`
-- [ ] c66e3c4 `refactor: remove in-app volume control`（伴随重构，按需）
-- [ ] 90b1f97 `refactor: unify progress bar style with volume bar style`（伴随重构，按需）
+- [x] c66e3c4 `refactor: remove in-app volume control`（伴随重构，按需）
+- [x] 90b1f97 `refactor: unify progress bar style with volume bar style`（伴随重构，按需）
 
 ## 4. 后台加载 + 封面磁盘缓存（核心性能）✅
 - [x] 835eabe `feat: background topbar/playlist loads, cover disk cache, search suggest state, lyric merge, like toggle in main app`（大提交，按功能拆开迁移）
@@ -41,7 +41,7 @@
 
 ## 7. 全屏增强
 - [x] a24d756 `feat: show lyrics on top with spectrum at bottom in fullscreen panel`
-- [ ] 645cefd `refactor: remove fullscreen header theme/mode status display`（按需，跳过）
+- [x] 645cefd `refactor: remove fullscreen header theme/mode status display`（按需）
 - [x] 全屏歌词换行（wrap_text，超长歌词自动换行，随第 6 项完成）
 
 ## 8. 红心点击

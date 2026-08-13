@@ -89,7 +89,6 @@ pub struct HostPlaybackRuntimeSnapshot {
     pub state: HostPlaybackState,
     pub repeat_mode: HostRepeatMode,
     pub position: Duration,
-    pub volume: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +127,6 @@ pub trait HostPlaybackBridge {
     async fn play_next(&mut self);
     async fn play_queue_index(&mut self, index: usize);
     fn seek_to_ratio(&mut self, ratio: f32);
-    fn set_volume(&mut self, volume: f32);
     fn toggle_repeat_mode(&mut self);
     async fn toggle_like_current(&mut self);
 }

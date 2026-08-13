@@ -422,12 +422,6 @@ fn apply_host_runtime_snapshot(app: &mut AppState, runtime: HostPlaybackRuntimeS
         changed = true;
     }
 
-    let runtime_volume = runtime.volume.clamp(0.0, 1.0);
-    if (app.player.volume - runtime_volume).abs() > f32::EPSILON {
-        app.player.volume = runtime_volume;
-        changed = true;
-    }
-
     if let Some(index) = runtime.current_index {
         if !app.playlist.items.is_empty() {
             let idx = index.min(app.playlist.len().saturating_sub(1));
@@ -1223,33 +1217,6 @@ async fn handle_action(
                 switch_idle_track(app, -1);
             }
         },
-        Action::VolumeUp => match app.player.mode {
-            PlayMode::Idle => {
-                let next = (app.player.volume + 0.05).min(1.0);
-                if let Some(bridge) = host_bridge.as_mut() {
-                    (*bridge).set_volume(next);
-                }
-                app.player.volume = next;
-            }
-        },
-        Action::VolumeDown => match app.player.mode {
-            PlayMode::Idle => {
-                let next = (app.player.volume - 0.05).max(0.0);
-                if let Some(bridge) = host_bridge.as_mut() {
-                    (*bridge).set_volume(next);
-                }
-                app.player.volume = next;
-            }
-        },
-        Action::SetVolume(v) => match app.player.mode {
-            PlayMode::Idle => {
-                let next = v.clamp(0.0, 1.0);
-                if let Some(bridge) = host_bridge.as_mut() {
-                    (*bridge).set_volume(next);
-                }
-                app.player.volume = next;
-            }
-        },
         Action::ToggleRepeatMode => {
             if let Some(bridge) = host_bridge.as_mut() {
                 (*bridge).toggle_repeat_mode();
@@ -1291,7 +1258,7 @@ async fn handle_action(
             }
         }
         Action::MouseClick { col, row } => {
-            // map click to controls/progress/volume/playlist
+            // map click to controls/progress/playlist
             if let Some(a) = crate::tmplayer::ui::tui::hit_test(layout, app, col, row) {
                 Box::pin(handle_action(app, host_bridge, a, layout)).await?;
             }

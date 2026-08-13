@@ -23,7 +23,6 @@ pub struct UiLayout {
     pub left_width: u16,
 
     pub info_progress: Rect,
-    pub info_volume: Rect,
     pub info_controls: Rect,
     pub info_meta: Rect,
 
@@ -149,7 +148,6 @@ impl Tui {
 
             let info_l = info_panel::layout(cols[0]);
             layout_out.info_progress = info_l.progress;
-            layout_out.info_volume = info_l.volume;
             layout_out.info_controls = info_l.controls;
             layout_out.info_meta = info_l.meta;
 
@@ -1496,10 +1494,6 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
         return control_buttons::hit_test(layout.info_controls, app, col, row);
     }
 
-    if contains(layout.info_volume, col, row) {
-        return Some(Action::SetVolume(ratio_in_bar(layout.info_volume, col)));
-    }
-
     if contains(layout.info_progress, col, row) {
         return Some(Action::SeekToFraction(ratio_in_track(
             layout.info_progress,
@@ -1517,15 +1511,6 @@ pub fn hit_test(layout: &UiLayout, app: &AppState, col: u16, row: u16) -> Option
 
 fn contains(r: Rect, col: u16, row: u16) -> bool {
     col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
-}
-
-fn ratio_in_bar(r: Rect, col: u16) -> f32 {
-    if r.width <= 2 {
-        return 0.0;
-    }
-    let inner = (r.width - 2) as f32;
-    let x = col.saturating_sub(r.x + 1) as f32;
-    (x / inner).clamp(0.0, 1.0)
 }
 
 fn ratio_in_track(r: Rect, col: u16) -> f32 {

@@ -5,7 +5,6 @@ pub mod tui;
 pub mod components {
     pub mod control_buttons;
     pub mod progress_bar;
-    pub mod volume_bar;
 }
 
 pub mod panels {

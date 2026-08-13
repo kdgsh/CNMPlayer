@@ -170,15 +170,6 @@ impl AudioPlayer {
         self.total_duration = None;
     }
 
-    pub fn set_volume(&mut self, volume: f32) {
-        let volume = volume.clamp(0.0, 1.0);
-        self.player.set_volume(volume);
-    }
-
-    pub fn volume(&self) -> f32 {
-        self.player.volume()
-    }
-
     pub fn duration(&self) -> Option<Duration> {
         self.total_duration
     }
