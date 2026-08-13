@@ -29,8 +29,9 @@
   - 红心状态字段（like 相关状态）
 - [x] af0306a `feat: show loading and empty states for background playlist loads`（依赖上面的状态字段）
 
-## 5. 搜索联想
-- [ ] 434b419 `feat: add live search suggestions with debounce in search box`（suggest/web 接口 + 300ms 防抖）
+## 5. 搜索联想 ✅
+- [x] 434b419 `feat: add live search suggestions with debounce in search box`（suggest/web 接口 + 300ms 防抖）
+- 附加：Home 顶栏右侧常驻搜索栏（main 之外的自定义功能，搜索框常驻右上角，激活后联想下拉）
 
 ## 6. 歌词翻译与过滤
 - [ ] b9cb186 `feat: request netease tlyric translation with lrc in one call`
