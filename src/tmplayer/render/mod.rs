@@ -1,3 +1,4 @@
+pub mod braille_bars_renderer;
 pub mod cover_cache;
 pub mod cover_renderer;
 pub mod dominant_color;

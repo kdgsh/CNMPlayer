@@ -96,6 +96,7 @@ fn host_config_sync_from_app(app: &AppState) -> HostConfigSync {
             VisualizeMode::Off => crate::data::config::VisualizeMode::Off,
             VisualizeMode::Bars => crate::data::config::VisualizeMode::Bars,
             VisualizeMode::Oscilloscope => crate::data::config::VisualizeMode::Oscilloscope,
+            VisualizeMode::Braille => crate::data::config::VisualizeMode::Braille,
         },
         super_smooth_bar: app.config.super_smooth_bar,
         bars_gap: app.config.bars_gap,
@@ -152,6 +153,7 @@ fn apply_host_config_sync(app: &mut AppState, config: HostConfigSync) {
         crate::data::config::VisualizeMode::Off => VisualizeMode::Off,
         crate::data::config::VisualizeMode::Bars => VisualizeMode::Bars,
         crate::data::config::VisualizeMode::Oscilloscope => VisualizeMode::Oscilloscope,
+        crate::data::config::VisualizeMode::Braille => VisualizeMode::Braille,
     };
     app.config.super_smooth_bar = config.super_smooth_bar;
     app.config.bars_gap = config.bars_gap;
@@ -554,8 +556,11 @@ pub async fn run(
             desired_cava_config(app, &last_layout),
         );
 
-        if app.config.visualize == VisualizeMode::Bars {
-            let bars = desired_bar_count(app, &last_layout);
+        if matches!(app.config.visualize, VisualizeMode::Bars | VisualizeMode::Braille) {
+            let bars = match app.config.visualize {
+                VisualizeMode::Braille => braille_bar_count(&last_layout),
+                _ => desired_bar_count(app, &last_layout),
+            };
             ensure_bar_buffers(app, bars);
         }
 
@@ -573,7 +578,7 @@ pub async fn run(
 
             match app.config.visualize {
                 VisualizeMode::Off => clear_spectrum(app),
-                VisualizeMode::Bars => {
+                VisualizeMode::Bars | VisualizeMode::Braille => {
                     if let Some(c) = cava.as_ref() {
                         let (l, r) = c.latest_stereo_bars();
                         app.spectrum.bars_left = l;
@@ -1477,6 +1482,15 @@ fn desired_cava_config(app: &AppState, layout: &UiLayout) -> Option<CavaConfig> 
                 reverse: app.config.bar_channel_reverse,
             }
         }),
+        VisualizeMode::Braille => Some({
+            let bars = braille_bar_count(layout);
+            CavaConfig {
+                framerate_hz: app.config.spectrum_hz,
+                bars,
+                channels: CavaChannels::Mono,
+                reverse: app.config.bar_channel_reverse,
+            }
+        }),
         VisualizeMode::Oscilloscope => Some(CavaConfig {
             framerate_hz: app.config.spectrum_hz,
             bars: 64,
@@ -1484,6 +1498,10 @@ fn desired_cava_config(app: &AppState, layout: &UiLayout) -> Option<CavaConfig> 
             reverse: app.config.bar_channel_reverse,
         }),
     }
+}
+
+fn braille_bar_count(layout: &UiLayout) -> usize {
+    (layout.spectrum_rect.width as usize * 2).clamp(2, 128)
 }
 
 fn ensure_cava(

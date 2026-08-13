@@ -166,6 +166,7 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
                 VisualizeMode::Off => l(app, "关闭", "Off"),
                 VisualizeMode::Bars => l(app, "频谱", "Bars"),
                 VisualizeMode::Oscilloscope => l(app, "示波器", "Oscilloscope"),
+                VisualizeMode::Braille => l(app, "盲文柱", "Braille"),
             }
         ),
         format!(

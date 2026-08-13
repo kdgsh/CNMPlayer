@@ -163,6 +163,7 @@ fn tm_config_from_host(host: &HostConfig) -> data::config::Config {
             HostVisualizeMode::Off => data::config::VisualizeMode::Off,
             HostVisualizeMode::Bars => data::config::VisualizeMode::Bars,
             HostVisualizeMode::Oscilloscope => data::config::VisualizeMode::Oscilloscope,
+            HostVisualizeMode::Braille => data::config::VisualizeMode::Braille,
         },
         eq_bands_db: host.eq_bands_db,
         transparent_background: host.transparent_background,

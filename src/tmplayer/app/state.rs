@@ -524,7 +524,8 @@ impl AppState {
             match self.config.visualize {
                 crate::tmplayer::data::config::VisualizeMode::Off => {}
                 crate::tmplayer::data::config::VisualizeMode::Bars
-                | crate::tmplayer::data::config::VisualizeMode::Oscilloscope => {
+                | crate::tmplayer::data::config::VisualizeMode::Oscilloscope
+                | crate::tmplayer::data::config::VisualizeMode::Braille => {
                     return self.config.spectrum_hz.clamp(base, 60);
                 }
             }
@@ -534,7 +535,8 @@ impl AppState {
             match self.config.visualize {
                 crate::tmplayer::data::config::VisualizeMode::Off => {}
                 crate::tmplayer::data::config::VisualizeMode::Bars
-                | crate::tmplayer::data::config::VisualizeMode::Oscilloscope => {
+                | crate::tmplayer::data::config::VisualizeMode::Oscilloscope
+                | crate::tmplayer::data::config::VisualizeMode::Braille => {
                     return self.config.spectrum_hz.clamp(base, 60);
                 }
             }
