@@ -34,10 +34,10 @@
 - 附加：Home 顶栏右侧常驻搜索栏（main 之外的自定义功能，搜索框常驻右上角，激活后联想下拉）
 
 ## 6. 歌词翻译与过滤
-- [ ] b9cb186 `feat: request netease tlyric translation with lrc in one call`
-- [ ] 263bfec `feat: show lyric translations and filter credit lines in fullscreen player`
-- [ ] 7d9fc04 `feat: add lyric translation setting and page rendering in main app`
-- [ ] 后续修复：所有音源统一走 api.lyric()（含翻译），自定义源不再跳过
+- [x] b9cb186 `feat: request netease tlyric translation with lrc in one call`
+- [x] 263bfec `feat: show lyric translations and filter credit lines in fullscreen player`
+- [x] 7d9fc04 `feat: add lyric translation setting and page rendering in main app`
+- [x] 后续修复：所有音源统一走 api.lyric()（含翻译），自定义源不再跳过
 
 ## 7. 全屏增强
 - [ ] a24d756 `feat: show lyrics on top with spectrum at bottom in fullscreen panel`
