@@ -1763,6 +1763,7 @@ pub struct App {
     last_global_hotkey_at: Option<Instant>,
     last_content_click: Option<(Instant, Page, usize)>,
     pub cava: Option<MiniCavaState>,
+    cava_resume_deadline: Option<Instant>,
     cover_cache_dir: PathBuf,
     cover_fetch_tx: UnboundedSender<CoverFetchRequest>,
     cover_fetch_rx: Receiver<CoverFetchResult>,
@@ -1881,6 +1882,7 @@ impl App {
             last_global_hotkey_at: None,
             last_content_click: None,
             cava: None,
+            cava_resume_deadline: None,
             cover_cache_dir,
             cover_fetch_tx,
             cover_fetch_rx,
@@ -1952,6 +1954,7 @@ impl App {
         self.tick_suggest();
         self.tick_source_test();
         self.tick_startup_loading();
+        self.tick_cava_resume();
 
         if self.page == Page::Login && self.login.method == LoginMethod::Qr {
             if self.login.qr_key.trim().is_empty() {
@@ -2275,6 +2278,7 @@ impl App {
     }
 
     pub fn sync_on_change(&mut self) {
+        self.cava_resume_deadline = None;
         self.sync_cava();
     }
 
@@ -2300,10 +2304,22 @@ impl App {
 
     pub fn suspend_main_cava_for_fullscreen(&mut self) {
         self.cava = None;
+        self.cava_resume_deadline = None;
     }
 
     pub fn resume_main_cava_after_fullscreen(&mut self) {
-        self.sync_cava();
+        // Restarting cava right after killing the fullscreen instance churns the
+        // audio monitor connection and glitches playback; defer to let it settle.
+        self.cava_resume_deadline = Some(Instant::now() + Duration::from_millis(1200));
+    }
+
+    fn tick_cava_resume(&mut self) {
+        if let Some(deadline) = self.cava_resume_deadline {
+            if Instant::now() >= deadline {
+                self.cava_resume_deadline = None;
+                self.sync_cava();
+            }
+        }
     }
 
     fn seek_to_ratio(&mut self, ratio: f32) {
