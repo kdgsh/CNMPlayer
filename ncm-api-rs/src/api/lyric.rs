@@ -15,6 +15,7 @@ impl ApiClient {
             "lv": -1,
             "rv": -1,
             "kv": -1,
+            "os": "pc",
             "_nmclfl": 1
         });
         self.request(

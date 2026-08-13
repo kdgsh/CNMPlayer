@@ -192,6 +192,11 @@ fn draw_playback_settings(frame: &mut Frame, app: &App, inner: Rect) {
         ),
         format!(
             "{}: {}",
+            l(app, "歌词翻译", "Lyric Translation"),
+            on_off(app, app.config.show_lyric_translation)
+        ),
+        format!(
+            "{}: {}",
             l(app, "音质", "Audio Quality"),
             audio_quality_label(app, app.config.audio_quality)
         ),

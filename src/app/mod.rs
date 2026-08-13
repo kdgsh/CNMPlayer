@@ -58,7 +58,7 @@ const SEARCH_RESULT_PAGE_SIZE: usize = 50;
 const SUGGEST_DEBOUNCE: Duration = Duration::from_millis(300);
 const TOPBAR_USER_PLAYLIST_LIMIT: usize = 100;
 const SETTINGS_ROOT_ITEMS: usize = 11;
-const SETTINGS_PLAYBACK_ITEMS: usize = 9;
+const SETTINGS_PLAYBACK_ITEMS: usize = 10;
 pub(crate) const SETTINGS_KEYBIND_ITEMS: usize = 19;
 const SETTINGS_SOURCE_ITEMS: usize = 4;
 const CONTENT_DOUBLE_CLICK_MS: u64 = 400;
@@ -1660,13 +1660,29 @@ async fn loop_lyric_fetch(
             api.set_cookie(cookie.to_string());
         }
 
+        // Song ids are Netease ids regardless of source; one request returns
+        // both lrc and tlyric. Custom sources only resolve playback URLs.
+        if let Ok(lyric) = api.lyric(&req.song_id).await
+            && let Some(lrc) = lyric.body.pointer("/lrc/lyric").and_then(|v| v.as_str())
+        {
+            let mut lines = parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc));
+            if let Some(lines) = lines.as_mut()
+                && let Some(tlyric) = lyric
+                    .body
+                    .pointer("/tlyric/lyric")
+                    .and_then(|v| v.as_str())
+                && let Some(translations) = parse_lrc(tlyric)
+            {
+                merge_lyric_translations(lines, &translations);
+            }
+            return lines;
+        }
+
         if let Ok(Some(raw_lrc)) = api.fetch_lyric_raw(&req.song_id).await {
             return parse_lrc(&raw_lrc).or_else(|| parse_plain_lyrics(&raw_lrc));
         }
 
-        let lyric = api.lyric(&req.song_id).await.ok()?;
-        let lrc = lyric.body.pointer("/lrc/lyric")?.as_str()?;
-        parse_lrc(lrc).or_else(|| parse_plain_lyrics(lrc))
+        None
     };
     while let Ok(req) = rx.recv().await {
         let lyrics = process_fn(&req).await;
@@ -1674,6 +1690,17 @@ async fn loop_lyric_fetch(
             song_id: req.song_id,
             lyrics,
         });
+    }
+}
+
+fn merge_lyric_translations(lines: &mut [LyricLine], translations: &[LyricLine]) {
+    for translation in translations {
+        if let Some(line) = lines
+            .iter_mut()
+            .find(|line| line.start_ms == translation.start_ms && line.translation.is_none())
+        {
+            line.translation = Some(translation.text.clone());
+        }
     }
 }
 
@@ -4624,6 +4651,10 @@ impl App {
                 let _ = self.config.save();
             }
             7 => {
+                self.config.show_lyric_translation = !self.config.show_lyric_translation;
+                let _ = self.config.save();
+            }
+            8 => {
                 let next = self
                     .config
                     .audio_quality
@@ -5158,6 +5189,7 @@ impl App {
             language: self.config.language,
             graphics_protocol: self.config.graphics_protocol,
             page_lyrics: self.config.page_lyrics,
+            show_lyric_translation: self.config.show_lyric_translation,
             audio_quality: self.config.audio_quality,
             eq_bands_db: self.config.eq_bands_db,
             playback_memory: self.config.playback_memory,
@@ -5208,6 +5240,11 @@ impl App {
 
         if self.config.page_lyrics != sync.page_lyrics {
             self.config.page_lyrics = sync.page_lyrics;
+            changed = true;
+        }
+
+        if self.config.show_lyric_translation != sync.show_lyric_translation {
+            self.config.show_lyric_translation = sync.show_lyric_translation;
             changed = true;
         }
 
@@ -5632,15 +5669,15 @@ impl App {
         self.vip_audio_unlocked || self.api.source_is_custom()
     }
 
-    pub fn current_page_lyric_lines(&self) -> (String, String) {
+    pub fn current_page_lyric_lines(&self) -> (String, String, String) {
         let Some(track) = self.now_playing.as_ref() else {
-            return (String::new(), String::new());
+            return (String::new(), String::new(), String::new());
         };
         let Some(lines) = track.lyrics.as_ref() else {
-            return (String::new(), String::new());
+            return (String::new(), String::new(), String::new());
         };
         if lines.is_empty() {
-            return (String::new(), String::new());
+            return (String::new(), String::new(), String::new());
         }
 
         let pos_ms = self.playback_position().as_millis() as u64;
@@ -5657,11 +5694,15 @@ impl App {
             .get(idx)
             .map(|line| line.text.clone())
             .unwrap_or_default();
+        let translation = lines
+            .get(idx)
+            .and_then(|line| line.translation.clone())
+            .unwrap_or_default();
         let next = lines
             .get(idx + 1)
             .map(|line| line.text.clone())
             .unwrap_or_default();
-        (current, next)
+        (current, translation, next)
     }
 
     async fn logout_to_login(&mut self) {

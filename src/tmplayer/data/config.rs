@@ -35,6 +35,9 @@ pub struct Config {
     #[serde(default)]
     pub page_lyrics: bool,
 
+    #[serde(default = "default_show_lyric_translation")]
+    pub show_lyric_translation: bool,
+
     #[serde(default = "default_kitty_cover_scale_percent")]
     pub kitty_cover_scale_percent: u8,
 
@@ -282,6 +285,10 @@ fn default_show_hints() -> bool {
     true
 }
 
+fn default_show_lyric_translation() -> bool {
+    true
+}
+
 fn default_keybind_search_box() -> String {
     "Ctrl+S".to_string()
 }
@@ -373,6 +380,7 @@ impl Default for Config {
             album_border: default_album_border(),
             graphics_protocol: GraphicsProtocol::default(),
             page_lyrics: false,
+            show_lyric_translation: default_show_lyric_translation(),
             kitty_cover_scale_percent: default_kitty_cover_scale_percent(),
             super_smooth_bar: false,
             bars_gap: false,

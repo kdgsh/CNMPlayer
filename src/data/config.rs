@@ -116,6 +116,9 @@ pub struct Config {
     #[serde(default = "default_page_lyrics")]
     pub page_lyrics: bool,
 
+    #[serde(default = "default_show_lyric_translation")]
+    pub show_lyric_translation: bool,
+
     #[serde(default = "default_audio_quality")]
     pub audio_quality: AudioQuality,
 
@@ -429,6 +432,10 @@ fn default_page_lyrics() -> bool {
     false
 }
 
+fn default_show_lyric_translation() -> bool {
+    true
+}
+
 fn default_audio_quality() -> AudioQuality {
     AudioQuality::Exhigh
 }
@@ -556,6 +563,7 @@ impl Default for Config {
             default_opening_title: String::new(),
             language: default_language(),
             page_lyrics: default_page_lyrics(),
+            show_lyric_translation: default_show_lyric_translation(),
             audio_quality: default_audio_quality(),
             playback_memory: false,
             show_hints: default_show_hints(),

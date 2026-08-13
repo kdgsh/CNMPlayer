@@ -554,6 +554,11 @@ fn render_bar_settings_modal(f: &mut ratatui::Frame, size: Rect, app: &mut AppSt
         ),
         format!(
             "{}: {}",
+            lang_text(app, "歌词翻译", "Lyric Translation"),
+            lang_on_off(app, app.config.show_lyric_translation)
+        ),
+        format!(
+            "{}: {}",
             lang_text(app, "音质", "Audio Quality"),
             match app.config.audio_quality {
                 crate::tmplayer::data::config::AudioQuality::Standard =>

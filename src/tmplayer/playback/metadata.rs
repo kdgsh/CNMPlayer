@@ -72,10 +72,14 @@ pub fn parse_lrc(content: &str) -> Option<Vec<LyricLine>> {
         }
 
         let text = s.trim().to_string();
+        if is_lyric_credit_line(&text) {
+            continue;
+        }
         for t in times {
             out.push(LyricLine {
                 start_ms: t,
                 text: text.clone(),
+                translation: None,
             });
         }
     }
@@ -96,11 +100,13 @@ pub fn parse_plain_lyrics(content: &str) -> Option<Vec<LyricLine>> {
     out.push(LyricLine {
         start_ms: 0,
         text: first,
+        translation: None,
     });
     if let Some(s2) = second {
         out.push(LyricLine {
             start_ms: u64::MAX,
             text: s2,
+            translation: None,
         });
     }
     Some(out)
@@ -150,4 +156,73 @@ fn hash_bytes(bytes: &[u8]) -> u64 {
     let mut h = DefaultHasher::new();
     bytes.hash(&mut h);
     h.finish()
+}
+
+const LYRIC_CREDIT_PREFIXES: &[&str] = &[
+    // 简体/繁体中文
+    "作词", "作詞", "填词", "填詞", "作曲", "编曲", "編曲", "制作人", "製作人", "制作", "製作",
+    "词曲", "詞曲", "演唱", "歌手", "原唱", "翻唱", "混音", "混音师", "混音師", "母带", "母帶",
+    "母带工程师", "母帶工程師", "录音", "錄音", "录音师", "錄音師", "和声", "和聲", "和音",
+    "配唱", "配唱制作人", "监制", "監製", "音乐监制", "音乐总监", "出品", "出品人", "发行",
+    "發行", "策划", "策劃", "企划", "企劃", "统筹", "統籌", "版权", "版權", "鸣谢", "鳴謝",
+    "特别鸣谢", "特別鳴謝", "翻译", "翻譯", "封面", "设计", "经纪", "文案", "企宣",
+    "吉他", "贝斯", "貝斯", "鼓", "键盘", "鍵盤", "弦乐", "弦樂", "钢琴", "大提琴", "小提琴",
+    "中提琴", "词", "詞", "曲",
+    // 英文
+    "Lyrics by", "Written by", "Composed by", "Arranged by", "Produced by", "Performed by",
+    "Music by", "Words by", "Vocals by", "Mastered by", "Mixed by", "Recorded by",
+    "Published by", "Lyricist", "Composer", "Arranger", "Producer", "Mixing Engineer",
+    "Mastering Engineer", "Recording Engineer", "Vocal Producer", "Executive Producer",
+    "Background Vocals", "Backing Vocals", "Guitar", "Bass", "Drums", "Keyboard", "Strings",
+    "Piano", "Cello", "Violin", "Viola", "OP", "SP",
+];
+
+pub fn is_lyric_credit_line(text: &str) -> bool {
+    let plain = text.trim_start();
+    LYRIC_CREDIT_PREFIXES.iter().any(|prefix| {
+        let Some(head) = plain.get(..prefix.len()) else {
+            return false;
+        };
+        if !head.eq_ignore_ascii_case(prefix) {
+            return false;
+        }
+        let rest = plain[prefix.len()..].trim_start_matches(' ');
+        rest.is_empty()
+            || rest.starts_with([':', '：', '/', '／', '-'])
+            || prefix.ends_with(" by")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credit_lines_are_detected() {
+        for line in [
+            "作词 : 林夕",
+            "作曲：泽日生",
+            "编曲 / 陈辉阳",
+            "制作人: 陈辉阳",
+            "OP/SP：某某",
+            "Lyrics by John",
+            "Composer: Smith",
+            "混音师 - 张三",
+        ] {
+            assert!(is_lyric_credit_line(line), "should filter: {line}");
+        }
+    }
+
+    #[test]
+    fn normal_lyrics_are_kept() {
+        for line in [
+            "作词人的寂寞",
+            "海边",
+            "OP 到底是什么",
+            "Bass 低音响起",
+            "Normal lyric line",
+        ] {
+            assert!(!is_lyric_credit_line(line), "should keep: {line}");
+        }
+    }
 }
