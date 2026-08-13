@@ -40,9 +40,9 @@
 - [x] 后续修复：所有音源统一走 api.lyric()（含翻译），自定义源不再跳过
 
 ## 7. 全屏增强
-- [ ] a24d756 `feat: show lyrics on top with spectrum at bottom in fullscreen panel`
-- [ ] 645cefd `refactor: remove fullscreen header theme/mode status display`（按需）
-- [ ] 全屏歌词换行（wrap_text，超长歌词自动换行）
+- [x] a24d756 `feat: show lyrics on top with spectrum at bottom in fullscreen panel`
+- [ ] 645cefd `refactor: remove fullscreen header theme/mode status display`（按需，跳过）
+- [x] 全屏歌词换行（wrap_text，超长歌词自动换行，随第 6 项完成）
 
 ## 8. 红心点击
 - [ ] 2845559 `feat: click heart icon on player bar to toggle like`（播放条 + 全屏 meta 行）
